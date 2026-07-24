@@ -1,0 +1,21 @@
+spring:
+  profiles:
+    active: dev
+  application:
+    name: learning-agent
+
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:learning_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    #接口文档访问路径
+    #Swagger UI:  http://localhost:8080/swagger-ui/index.html
+    #OpenAPI JSON: http://localhost:8080/v3/api-docs
+    #OpenAPI YAML: http://localhost:8080/v3/api-docs.yaml
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: false
+  api-docs:
+    enabled: false
