@@ -7,6 +7,7 @@ import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.service.LearningSessionService;
 import com.yjjoker.learningagent.vo.LearningSessionVO;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
@@ -14,6 +15,7 @@ import java.util.Optional;
 
 @Service
 @AllArgsConstructor
+@Slf4j
 public class LearningSessionServiceImpl implements LearningSessionService {
     private final LearningSessionRepository learningSessionRepository;
     @Override
@@ -29,6 +31,7 @@ public class LearningSessionServiceImpl implements LearningSessionService {
         LearningSession learningSession=session.get();
         LearningSessionVO learningSessionVO=new LearningSessionVO();
         BeanUtils.copyProperties(learningSession,learningSessionVO);
+        log.info("创建学习会话成功");
         return learningSessionVO;
     }
 }
