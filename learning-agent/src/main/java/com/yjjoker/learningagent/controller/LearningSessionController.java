@@ -8,10 +8,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/learning-agent/learning")
@@ -24,5 +21,11 @@ public class LearningSessionController {
     public Result<LearningSessionVO> createSession(@Valid@RequestBody LearningSessionDTO learningSessionDTO){
         LearningSessionVO LearningSessionVO = LearningSessionService.createSession(learningSessionDTO);
         return Result.success(LearningSessionVO);
+    }
+    @PutMapping("/session/completed/{learningSessionId}")
+    @Operation(summary = "完成学习会话")
+    public Result<LearningSessionVO> completeSession(@Valid@PathVariable Long learningSessionId){
+        LearningSessionVO learningSessionVO = LearningSessionService.changeSessionStatus(learningSessionId);
+        return Result.success(learningSessionVO);
     }
 }

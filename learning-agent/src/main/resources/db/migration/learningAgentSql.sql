@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
                                                  KEY idx_learning_sessions_user_id (user_id),
 
                                                  CONSTRAINT chk_learning_sessions_status
-                                                     CHECK (status IN ('PLANNED', 'IN_PROGRESS', 'COMPLETED'))
+                                                     CHECK (status IN ('ACTIVE', 'COMPLETED'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci

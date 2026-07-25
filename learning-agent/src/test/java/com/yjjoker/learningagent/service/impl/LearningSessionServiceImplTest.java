@@ -1,40 +1,47 @@
 package com.yjjoker.learningagent.service.impl;
 
 import com.yjjoker.learningagent.dto.LearningSessionDTO;
-import com.yjjoker.learningagent.exception.CourseNotFountException;
+import com.yjjoker.learningagent.entity.Courses;
+import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.exception.CreateErrorException;
+import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.exception.LearningSessionStatusException;
+import com.yjjoker.learningagent.exception.NotFountException;
 import com.yjjoker.learningagent.projectenum.CoursesTypeEnum;
+import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.CoursesRepository;
-import com.yjjoker.learningagent.repository.test.impl.CoursesRepositoryTestImpl;
-import com.yjjoker.learningagent.repository.test.impl.LearningSessionRepositoryTestImpl;
-import com.yjjoker.learningagent.service.LearningSessionService;
-import org.junit.jupiter.api.BeforeEach;
+import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.utils.BaseContext;
+import com.yjjoker.learningagent.vo.LearningSessionVO;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.util.List;
+import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
 
 @DisplayName("学习会话服务测试")
+@ExtendWith(MockitoExtension.class)
 class LearningSessionServiceImplTest {
+    @Mock
+    private CoursesRepository coursesRepository;
+    @Mock
+    private LearningSessionRepository learningSessionRepository;
+    @InjectMocks
+    private LearningSessionServiceImpl learningSessionServiceImpl;
 
-    private LearningSessionService learningSessionService;
-
-    @BeforeEach
-    void setUp() {
-        CoursesRepository coursesRepository = new CoursesRepositoryTestImpl(
-                List.of(1001L, 1002L, 1003L),
-                List.of(1001L, 1002L, 1003L),
-                List.of(CoursesTypeEnum.PRIVATE, CoursesTypeEnum.PUBLIC, CoursesTypeEnum.PUBLIC)
-        );
-        learningSessionService = new LearningSessionServiceImpl(
-                new LearningSessionRepositoryTestImpl(),
-                coursesRepository
-        );
+    @AfterEach
+    void tearDown() {
+        BaseContext.removeCurrentId();
     }
 
     @Nested
@@ -44,42 +51,119 @@ class LearningSessionServiceImplTest {
         @Test
         @DisplayName("课程不存在时，应抛出课程不存在异常")
         void shouldThrowCourseNotFoundExceptionWhenCourseDoesNotExist() {
-            LearningSessionDTO request = createRequest(1004L, 1001L);
-
-            CourseNotFountException exception = assertThrows(
-                    CourseNotFountException.class,
-                    () -> learningSessionService.createSession(request)
-            );
-
-            assertEquals("课程不存在", exception.getMessage());
+            when(coursesRepository.findCourseById(1111L)).thenReturn(null);
+            LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
+            learningSessionDTO.setCourseId(1111L);
+            assertThrows(NotFountException.class, () ->
+                    learningSessionServiceImpl.createSession(learningSessionDTO));
+            verify(coursesRepository, times(1)).findCourseById(1111L);
+            verify(learningSessionRepository, never()).createSession(any());
         }
 
         @Test
         @DisplayName("用户无权访问私有课程时，应抛出非法创建异常")
         void shouldThrowCreateErrorExceptionWhenPrivateCourseIsNotOwnedByUser() {
-            LearningSessionDTO request = createRequest(1001L, 1002L);
-
-            CreateErrorException exception = assertThrows(
-                    CreateErrorException.class,
-                    () -> learningSessionService.createSession(request)
-            );
-
-            assertEquals("非法创建", exception.getMessage());
+            Courses courses = new Courses();
+            courses.setCourseType(CoursesTypeEnum.PRIVATE);
+            courses.setUserId(2222L);
+            when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
+            LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
+            learningSessionDTO.setCourseId(2222L);
+            learningSessionDTO.setUserId(2222L);
+            assertThrows(CreateErrorException.class, () ->
+                    learningSessionServiceImpl.createSession(learningSessionDTO));
+            verify(learningSessionRepository, never()).createSession(any());
         }
 
         @Test
         @DisplayName("用户访问自己的私有课程时，应成功创建学习会话")
         void shouldCreateSessionWhenPrivateCourseIsOwnedByUser() {
-            LearningSessionDTO request = createRequest(1001L, 1001L);
+            Courses courses = new Courses();
+            courses.setCourseType(CoursesTypeEnum.PRIVATE);
+            courses.setUserId(2222L);
+            courses.setPublisherId(2222L);
+            when(learningSessionRepository.createSession(any())).thenReturn(1);
+            when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
+            LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
+            learningSessionDTO.setCourseId(2222L);
+            learningSessionDTO.setUserId(2222L);
+            learningSessionDTO.setSessionTitle("Java学习会话");
 
-            assertDoesNotThrow(() -> learningSessionService.createSession(request));
+            LearningSessionVO result = assertDoesNotThrow(() ->
+                    learningSessionServiceImpl.createSession(learningSessionDTO));
+
+            ArgumentCaptor<LearningSession> captor = ArgumentCaptor.forClass(LearningSession.class);
+            verify(learningSessionRepository, times(1)).createSession(captor.capture());
+            assertEquals("Java学习会话", captor.getValue().getSessionTitle());
+            assertEquals(LearningSessionStatusEnum.ACTIVE, captor.getValue().getStatus());
+            assertEquals("Java学习会话", result.getSessionTitle());
+            assertEquals(LearningSessionStatusEnum.ACTIVE, result.getSessionStatus());
+        }
+
+        @Test
+        @DisplayName("保存学习会话失败时，应抛出服务异常")
+        void shouldThrowServiceExceptionWhenSessionCannotBeSaved() {
+            Courses courses = new Courses();
+            courses.setCourseType(CoursesTypeEnum.PUBLIC);
+            when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
+            when(learningSessionRepository.createSession(any())).thenReturn(0);
+            LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
+            learningSessionDTO.setCourseId(2222L);
+            learningSessionDTO.setUserId(2222L);
+            learningSessionDTO.setSessionTitle("保存失败的学习会话");
+
+            assertThrows(LearningAgentServiceException.class, () ->
+                    learningSessionServiceImpl.createSession(learningSessionDTO));
         }
     }
 
-    private LearningSessionDTO createRequest(Long courseId, Long userId) {
-        LearningSessionDTO request = new LearningSessionDTO();
-        request.setCourseId(courseId);
-        request.setUserId(userId);
-        return request;
+    @Test
+    @DisplayName("用户访问公共课程时，应成功创建学习会话")
+    void shouldCreateSessionWhenPublicCourseIsAccessible() {
+        Courses courses = new Courses();
+        courses.setCourseType(CoursesTypeEnum.PUBLIC);
+        courses.setUserId(3333L);
+        courses.setPublisherId(3333L);
+        when(learningSessionRepository.createSession(any())).thenReturn(1);
+        when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
+        LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
+        learningSessionDTO.setCourseId(2222L);
+        learningSessionDTO.setUserId(2222L);
+        learningSessionDTO.setSessionTitle("公共课程学习会话");
+        assertDoesNotThrow(() -> learningSessionServiceImpl.createSession(learningSessionDTO));
+        verify(learningSessionRepository, times(1)).createSession(any());
     }
+
+    @Test
+    @DisplayName("完成学习会话，会话状态正确流转")
+    void shouldTransitionSessionStatusCorrectly() {
+        LearningSession learningSession = new LearningSession();
+        learningSession.setId(2222L);
+        learningSession.setUserId(2222L);
+        learningSession.setStatus(LearningSessionStatusEnum.ACTIVE);
+        when(learningSessionRepository.findSessionById(2222L)).
+                thenReturn(Optional.of(learningSession));
+        when(learningSessionRepository.updateSession(any())).thenReturn(1);
+        BaseContext.setCurrentId(2222L);
+        assertDoesNotThrow(() -> learningSessionServiceImpl.changeSessionStatus(2222L));
+        verify(learningSessionRepository, times(1)).updateSession(any());
+
+    }
+
+    @Test
+    @DisplayName("非法完成学习会话，已完成的会话不能再次完成")
+    void shouldThrowLearningSessionStatusExceptionWhenInvalid() {
+        LearningSession learningSession = new LearningSession();
+        learningSession.setId(2222L);
+        learningSession.setUserId(2222L);
+        learningSession.setStatus(LearningSessionStatusEnum.COMPLETED);
+        when(learningSessionRepository.findSessionById(2222L)).
+                thenReturn(Optional.of(learningSession));
+        BaseContext.setCurrentId(2222L);
+        assertThrows(LearningSessionStatusException.class,
+                () ->learningSessionServiceImpl.changeSessionStatus(2222L));
+        verify(learningSessionRepository,never()).updateSession(any());
+    }
+
+
 }

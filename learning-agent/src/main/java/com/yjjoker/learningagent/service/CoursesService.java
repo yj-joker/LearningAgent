@@ -1,10 +1,15 @@
 package com.yjjoker.learningagent.service;
 
-import com.yjjoker.learningagent.entity.Courses;
+import com.yjjoker.learningagent.dto.CoursesDTO;
 import com.yjjoker.learningagent.vo.CoursesVO;
+import jakarta.validation.Valid;
 
-import java.util.Optional;
 
 public interface CoursesService {
-    Optional<CoursesVO> findCourseById(Long courseId);
+
+    CoursesVO findCourse(Long courseId);
+
+    CoursesVO createCourse(CoursesDTO coursesDTO);
+
+    CoursesVO publishCourse(@Valid Long courseId);
 }

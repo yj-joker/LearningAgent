@@ -5,4 +5,5 @@ import com.yjjoker.learningagent.vo.LearningSessionVO;
 
 public interface LearningSessionService {
     LearningSessionVO createSession(LearningSessionDTO learningSessionDTO);
+    LearningSessionVO changeSessionStatus(Long sessionId);
 }
