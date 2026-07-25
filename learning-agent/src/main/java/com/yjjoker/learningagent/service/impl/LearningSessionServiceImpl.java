@@ -1,8 +1,12 @@
 package com.yjjoker.learningagent.service.impl;
 
 import com.yjjoker.learningagent.dto.LearningSessionDTO;
+import com.yjjoker.learningagent.entity.Courses;
 import com.yjjoker.learningagent.entity.LearningSession;
+import com.yjjoker.learningagent.exception.CourseNotFountException;
+import com.yjjoker.learningagent.exception.CreateErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.repository.CoursesRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.service.LearningSessionService;
 import com.yjjoker.learningagent.vo.LearningSessionVO;
@@ -18,11 +22,21 @@ import java.util.Optional;
 @Slf4j
 public class LearningSessionServiceImpl implements LearningSessionService {
     private final LearningSessionRepository learningSessionRepository;
+    private final CoursesRepository coursesRepository;
     @Override
     public LearningSessionVO createSession(LearningSessionDTO learningSessionDTO) {
-        //判断对应的用户课程是否存在
-        //1.根据id获取对应的用户
-        //2.根据用户id获取对应的课程
+        //判断对应的课程是否存在
+        Optional<Courses> course = coursesRepository.findCourseById(learningSessionDTO.getCourseId());
+        //不存在
+        if(course.isEmpty()){
+            throw new CourseNotFountException("课程不存在");
+        }
+        //存在
+        //该课程是否属于该用户或者是公共课程
+        Boolean userCoursesOrPublic = course.get().isUserCoursesOrPublic(learningSessionDTO.getUserId(), learningSessionDTO.getCourseId());
+        if(!userCoursesOrPublic){
+            throw new CreateErrorException("非法创建");
+        }
         //创建一个学习会话
         Optional<LearningSession> session = learningSessionRepository.createSession(learningSessionDTO);
         if(session.isEmpty()){

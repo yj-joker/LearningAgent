@@ -13,17 +13,10 @@ import java.util.*;
 @Slf4j
 @Repository
 public class LearningSessionRepositoryTestImpl implements LearningSessionRepository {
-private static List<Long> courseIdList=new ArrayList<>();
 private static final Map<Long,LearningSession> learningSessionMap=new HashMap<>();
-public LearningSessionRepositoryTestImpl(List<Long> courseIds){
-    courseIdList=courseIds;
-}
     @Override
     public Optional<LearningSession> createSession(LearningSessionDTO learningSessionDTO) {
-        boolean contains = courseIdList.contains(learningSessionDTO.getCourseId());
-        if(!contains){
-            throw new LearningAgentServiceException("课程不存在");
-        }
+
         LearningSession learningSession = new LearningSession();
         learningSession.setCourseId(learningSessionDTO.getCourseId());
         learningSession.setUserId(learningSessionDTO.getUserId());

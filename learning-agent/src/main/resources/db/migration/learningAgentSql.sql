@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS courses (
                                        difficulty_level TINYINT UNSIGNED NOT NULL COMMENT '学习难度，取值 1~5',
                                        publisher_id BIGINT UNSIGNED NOT NULL COMMENT '发布人 ID，逻辑外键',
                                        learning_outline JSON DEFAULT NULL COMMENT '学习大纲，可由用户设置或由 AI 生成',
+
                                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                                        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                            ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -40,6 +41,13 @@ CREATE TABLE IF NOT EXISTS courses (
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '课程表';
+
+ALTER TABLE courses
+    ADD COLUMN course_type VARCHAR(20) NOT NULL DEFAULT 'PRIVATE'
+    COMMENT '课程类型：PUBLIC-公共课程，PRIVATE-用户专有课程'
+        AFTER publisher_id,
+    ADD CONSTRAINT chk_courses_course_type
+        CHECK (course_type IN ('PUBLIC', 'PRIVATE'));
 
 
 -- 学习会话表
