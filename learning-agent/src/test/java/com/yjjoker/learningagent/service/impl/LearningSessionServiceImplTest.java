@@ -69,7 +69,7 @@ class LearningSessionServiceImplTest {
             when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
             LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
             learningSessionDTO.setCourseId(2222L);
-            learningSessionDTO.setUserId(2222L);
+            BaseContext.setCurrentId(2222L);
             assertThrows(CreateErrorException.class, () ->
                     learningSessionServiceImpl.createSession(learningSessionDTO));
             verify(learningSessionRepository, never()).createSession(any());
@@ -86,7 +86,7 @@ class LearningSessionServiceImplTest {
             when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
             LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
             learningSessionDTO.setCourseId(2222L);
-            learningSessionDTO.setUserId(2222L);
+            BaseContext.setCurrentId(2222L);
             learningSessionDTO.setSessionTitle("Java学习会话");
 
             LearningSessionVO result = assertDoesNotThrow(() ->
@@ -109,7 +109,7 @@ class LearningSessionServiceImplTest {
             when(learningSessionRepository.createSession(any())).thenReturn(0);
             LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
             learningSessionDTO.setCourseId(2222L);
-            learningSessionDTO.setUserId(2222L);
+            BaseContext.setCurrentId(2222L);
             learningSessionDTO.setSessionTitle("保存失败的学习会话");
 
             assertThrows(LearningAgentServiceException.class, () ->
@@ -128,7 +128,7 @@ class LearningSessionServiceImplTest {
         when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
         LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
         learningSessionDTO.setCourseId(2222L);
-        learningSessionDTO.setUserId(2222L);
+        BaseContext.setCurrentId(2222L);
         learningSessionDTO.setSessionTitle("公共课程学习会话");
         assertDoesNotThrow(() -> learningSessionServiceImpl.createSession(learningSessionDTO));
         verify(learningSessionRepository, times(1)).createSession(any());

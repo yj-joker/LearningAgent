@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import lombok.NonNull;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -24,7 +25,7 @@ public class LearningSessionController {
     }
     @PutMapping("/session/completed/{learningSessionId}")
     @Operation(summary = "完成学习会话")
-    public Result<LearningSessionVO> completeSession(@Valid@PathVariable Long learningSessionId){
+    public Result<LearningSessionVO> completeSession(@NonNull @PathVariable Long learningSessionId){
         LearningSessionVO learningSessionVO = LearningSessionService.changeSessionStatus(learningSessionId);
         return Result.success(learningSessionVO);
     }

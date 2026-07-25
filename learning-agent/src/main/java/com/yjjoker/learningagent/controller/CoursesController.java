@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.service.CoursesService;
 import com.yjjoker.learningagent.vo.CoursesVO;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -25,7 +26,7 @@ public class CoursesController {
     }
     //发布课程
     @PutMapping("/publishCourse/{courseId}")
-    public Result<CoursesVO> publishCourse(@Valid@PathVariable Long courseId){
+    public Result<CoursesVO> publishCourse(@NotNull @PathVariable Long courseId){
         CoursesVO coursesVO = coursesService.publishCourse(courseId);
         return Result.success(coursesVO);
     }

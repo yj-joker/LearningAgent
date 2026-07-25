@@ -4,7 +4,7 @@ services:
     image: mysql:8
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: mtdssq541yf
+      MYSQL_DATABASE: learning_agent
     ports:
       - "3306:3306"
     volumes:

@@ -22,16 +22,16 @@ public class Result <T>{
         result.setMessage(MessageConstant.SUCCESS_MESSAGE);
         return result;
     }
-    public  static<T>  Result<T>   error(String code){
+    public  static<T>  Result<T>   error(String message){
         Result<T> result=new Result<>();
-        result.setCode(code);
-        result.setMessage(MessageConstant.ERROR_MESSAGE);
+        result.setCode(MessageConstant.ERROR_CODE);
+        result.setMessage(message);
         return result;
     }
     public  static<T>  Result<T>   error(){
         Result<T> result=new Result<>();
         result.setCode(MessageConstant.ERROR_CODE);
-        result.setMessage(MessageConstant.SUCCESS_MESSAGE);
+        result.setMessage(MessageConstant.ERROR_MESSAGE);
         return result;
     }
 }

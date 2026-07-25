@@ -39,7 +39,7 @@ public class LearningSessionServiceImpl implements LearningSessionService {
         }
         //存在
         //该课程是否属于该用户或者是公共课程
-        Boolean userCoursesOrPublic = course.isUserCoursesOrPublic(learningSessionDTO.getUserId(), learningSessionDTO.getCourseId());
+        Boolean userCoursesOrPublic = course.isUserCoursesOrPublic(BaseContext.getCurrentId(), learningSessionDTO.getCourseId());
         if (!userCoursesOrPublic) {
             throw new CreateErrorException("非法创建");
         }
@@ -88,7 +88,7 @@ public class LearningSessionServiceImpl implements LearningSessionService {
     private LearningSession getLearningSession(LearningSessionDTO learningSessionDTO) {
         LearningSession learningSession = new LearningSession();
         learningSession.setCourseId(learningSessionDTO.getCourseId());
-        learningSession.setUserId(learningSessionDTO.getUserId());
+        learningSession.setUserId(BaseContext.getCurrentId());
         learningSession.setSessionTitle(learningSessionDTO.getSessionTitle());
         learningSession.setStatus(LearningSessionStatusEnum.ACTIVE);
         learningSession.setCreatedAt(LocalDateTime.now());

@@ -11,7 +11,6 @@ public class LearningSessionDTO {
     @NotNull(message = "课程id不能为空")
     @Valid
     private Long courseId;
-    private Long userId;
     @NotNull(message = "学习会话标题不能为空")
     @Valid
     private String sessionTitle;
