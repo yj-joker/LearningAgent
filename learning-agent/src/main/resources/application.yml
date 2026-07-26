@@ -1,6 +1,5 @@
 spring:
-  profiles:
-    active: dev
+
   application:
     name: learning-agent
 

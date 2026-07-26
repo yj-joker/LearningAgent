@@ -4,6 +4,7 @@ import com.yjjoker.learningagent.dto.CoursesDTO;
 import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.service.CoursesService;
 import com.yjjoker.learningagent.vo.CoursesVO;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -20,12 +21,14 @@ public class CoursesController {
     private final CoursesService coursesService;
     //创建课程
     @PostMapping("/createCourse")
+    @Operation(summary = "创建课程")
     public Result<CoursesVO> createCourse(@Valid@RequestBody CoursesDTO coursesDTO){
         CoursesVO coursesVO = coursesService.createCourse(coursesDTO);
         return Result.success(coursesVO);
     }
     //发布课程
     @PutMapping("/publishCourse/{courseId}")
+    @Operation(summary = "发布课程")
     public Result<CoursesVO> publishCourse(@NotNull @PathVariable Long courseId){
         CoursesVO coursesVO = coursesService.publishCourse(courseId);
         return Result.success(coursesVO);
