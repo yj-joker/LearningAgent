@@ -1,10 +1,10 @@
 CREATE DATABASE IF NOT EXISTS `learning_agent`;
 
 -- 用户表
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS user (
                                      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户主键',
                                      username VARCHAR(64) NOT NULL COMMENT '用户名',
-                                     password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',
+                                     password VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',
                                      avatar_url VARCHAR(512) DEFAULT NULL COMMENT '头像 URL',
                                      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                                      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -16,7 +16,12 @@ CREATE TABLE IF NOT EXISTS users (
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '用户表';
-
+ALTER TABLE user
+    ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'user'
+        COMMENT '用户角色：user-普通用户，admin-管理员'
+        AFTER avatar_url,
+    ADD CONSTRAINT chk_users_role
+        CHECK (`role` IN ('user', 'admin'));
 
 -- 课程表
 CREATE TABLE IF NOT EXISTS courses (
