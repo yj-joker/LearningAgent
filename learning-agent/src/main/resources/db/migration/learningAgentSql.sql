@@ -17,11 +17,11 @@ CREATE TABLE IF NOT EXISTS user (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '用户表';
 ALTER TABLE user
-    ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'user'
+    ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'USER'
         COMMENT '用户角色：user-普通用户，admin-管理员'
         AFTER avatar_url,
     ADD CONSTRAINT chk_users_role
-        CHECK (`role` IN ('user', 'admin'));
+        CHECK (`role` IN ('USER', 'ADMIN'));
 
 -- 课程表
 CREATE TABLE IF NOT EXISTS courses (

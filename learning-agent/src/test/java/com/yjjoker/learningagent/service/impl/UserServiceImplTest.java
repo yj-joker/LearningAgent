@@ -50,7 +50,7 @@ public class UserServiceImplTest {
         User user = new User();
         user.setPassword("1234567890");
         user.setUsername("yj");
-        user.setUserType(UserRoleEnum.USER);
+        user.setRole(UserRoleEnum.USER);
         when(userRepository.findUserByUsername(userDTO.getUsername())).thenReturn(user);
         assertThrows(PasswordErrorException.class, () -> userServiceImpl.login(userDTO));
     }
@@ -61,9 +61,9 @@ public class UserServiceImplTest {
         User user = new User();
         user.setUsername("yj");
         user.setPassword(BCrypt.hashpw(userDTO.getPassword(), BCrypt.gensalt()));
-        user.setUserType(UserRoleEnum.USER);
+        user.setRole(UserRoleEnum.USER);
         when(userRepository.findUserByUsername(userDTO.getUsername())).thenReturn(user);
-        when((jwtService.createToken(user.getId(), user.getUserType().name()))).thenReturn("token");
+        when((jwtService.createToken(user.getId(), user.getRole().name()))).thenReturn("token");
         assertDoesNotThrow(() -> userServiceImpl.login(userDTO));
     }
 }

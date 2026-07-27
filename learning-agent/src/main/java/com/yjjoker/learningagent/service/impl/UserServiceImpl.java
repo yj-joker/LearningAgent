@@ -81,12 +81,10 @@ public class UserServiceImpl implements UserService {
             throw new NotFountException("用户名或密码错误");
         }
         //验证密码
-        try {
-            BCrypt.checkpw(userDTO.getPassword(), user.getPassword());
-        } catch (Exception e) {
+        if (!BCrypt.checkpw(userDTO.getPassword(), user.getPassword())){
+            log.error("用户名或密码错误");
             throw new PasswordErrorException("用户名或密码错误");
         }
-
         //生成JWT
         String jwt = jwtService.createToken(user.getId(), user.getRole().name());
 
