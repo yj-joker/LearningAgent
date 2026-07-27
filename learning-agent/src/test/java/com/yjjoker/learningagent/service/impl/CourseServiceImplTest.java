@@ -24,6 +24,7 @@ import static org.mockito.Mockito.when;
 public class CourseServiceImplTest {
     @Mock
     private CoursesRepository coursesRepository;
+
     @InjectMocks
     private CoursesServiceImpl coursesServiceImpl;
     @Test

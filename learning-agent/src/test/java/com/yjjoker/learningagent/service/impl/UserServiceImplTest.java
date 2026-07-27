@@ -7,6 +7,7 @@ import com.yjjoker.learningagent.exception.PasswordErrorException;
 import com.yjjoker.learningagent.projectenum.UserRoleEnum;
 import com.yjjoker.learningagent.repository.UserRepository;
 import com.yjjoker.learningagent.utils.JwtService;
+import com.yjjoker.learningagent.utils.SnowflakeIdGenerator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,6 +28,8 @@ public class UserServiceImplTest {
     private UserRepository userRepository;
     @Mock
     private JwtService jwtService;
+    @Mock
+    private SnowflakeIdGenerator snowflakeIdGenerator;
     @InjectMocks
     private UserServiceImpl userServiceImpl;
     @Test
@@ -34,6 +37,7 @@ public class UserServiceImplTest {
     void shouldRegisterUserSuccess() {
         UserDTO userDTO = new UserDTO("yj","123456");
         when(userRepository.save(any())).thenReturn(1);
+        when(snowflakeIdGenerator.nextId()).thenReturn(10001L);
         assertDoesNotThrow(() -> userServiceImpl.register(userDTO));
     }
     @Test
@@ -49,7 +53,7 @@ public class UserServiceImplTest {
         UserDTO userDTO = new UserDTO("yj","123456");
         User user = new User();
         user.setPassword("1234567890");
-        user.setUsername("yj");
+        user.setUsername("yjjoker");
         user.setRole(UserRoleEnum.USER);
         when(userRepository.findUserByUsername(userDTO.getUsername())).thenReturn(user);
         assertThrows(PasswordErrorException.class, () -> userServiceImpl.login(userDTO));

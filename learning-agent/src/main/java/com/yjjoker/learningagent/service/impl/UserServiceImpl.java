@@ -81,7 +81,13 @@ public class UserServiceImpl implements UserService {
             throw new NotFountException("用户名或密码错误");
         }
         //验证密码
-        if (!BCrypt.checkpw(userDTO.getPassword(), user.getPassword())){
+        boolean isMatch;
+        try {
+           isMatch= BCrypt.checkpw(userDTO.getPassword(), user.getPassword());
+        } catch (Exception e) {
+            throw new PasswordErrorException("用户名或密码错误");
+        }
+        if (!isMatch){
             log.error("用户名或密码错误");
             throw new PasswordErrorException("用户名或密码错误");
         }
