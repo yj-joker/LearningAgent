@@ -28,8 +28,11 @@ services:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USERNAME: ${MYSQL_USER}
+      MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MILLIS: ${JWT_EXPIRATION_MILLIS}
+      SNOWFLAKE_WORKER_ID: ${SNOWFLAKE_WORKER_ID:-0}
     depends_on:
       mysql:
         condition: service_healthy

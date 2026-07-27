@@ -1,12 +1,13 @@
 spring:
-
+  config:
+    import: "optional:file:./.env[.properties]"
   application:
     name: learning-agent
 
   datasource:
-    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:learning_agent}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: ${MYSQL_USERNAME:root}
-    password: ${MYSQL_PASSWORD:}
+    url: jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     #接口文档访问路径
     #Swagger UI:  http://localhost:8080/swagger-ui/index.html
@@ -18,3 +19,10 @@ springdoc:
     enabled: false
   api-docs:
     enabled: false
+jwt:
+  secret: ${JWT_SECRET}
+  expiration-millis: ${JWT_EXPIRATION_MILLIS}
+
+snowflake:
+  # 本地单实例可以使用 0；多实例部署时，每个同时运行的实例必须配置不同的值。
+  worker-id: ${SNOWFLAKE_WORKER_ID:0}

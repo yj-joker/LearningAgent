@@ -1,6 +1,6 @@
 package com.yjjoker.learningagent.entity;
 
-import com.yjjoker.learningagent.projectenum.UserTypeEnum;
+import com.yjjoker.learningagent.projectenum.UserRoleEnum;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -11,7 +11,7 @@ public class User {
     private String username;
     private String password;
     private String avatarUrl;
-    private UserTypeEnum userType;
-    private LocalDateTime createAt;
-    private LocalDateTime updateAt;
+    private UserRoleEnum role;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }

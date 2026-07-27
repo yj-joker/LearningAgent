@@ -22,9 +22,9 @@ public class Result <T>{
         result.setMessage(MessageConstant.SUCCESS_MESSAGE);
         return result;
     }
-    public  static<T>  Result<T>   error(String message){
+    public  static<T>  Result<T>   error(String message,String code){
         Result<T> result=new Result<>();
-        result.setCode(MessageConstant.ERROR_CODE);
+        result.setCode(code);
         result.setMessage(message);
         return result;
     }

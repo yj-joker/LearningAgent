@@ -5,4 +5,5 @@ import com.yjjoker.learningagent.vo.UserVO;
 
 public interface UserService {
     UserVO register(UserDTO userDTO);
+    UserVO login(UserDTO userDTO);
 }
