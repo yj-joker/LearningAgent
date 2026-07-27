@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.utils;
 
 import com.yjjoker.learningagent.config.JwtProperties;
+import com.yjjoker.learningagent.projectenum.UserRoleEnum;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
@@ -22,12 +23,12 @@ public class JwtService {
         this.expirationMillis = properties.expirationMillis();
     }
 
-    public String createToken(Long userId, String userType) {
+    public String createToken(Long userId, UserRoleEnum role) {
         Instant now = Instant.now();
 
         return Jwts.builder()
                 .subject(userId.toString())
-                .claim("userType", userType)
+                .claim("role", role)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plusMillis(expirationMillis)))
                 .signWith(secretKey, Jwts.SIG.HS256)
@@ -42,5 +43,13 @@ public class JwtService {
                 .getPayload();
 
         return Long.valueOf(claims.getSubject());
+    }
+    public UserRoleEnum parseUserRole(String token) {
+        Claims claims = Jwts.parser()
+                .verifyWith(secretKey)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+        return UserRoleEnum.valueOf(claims.get("role").toString());
     }
 }

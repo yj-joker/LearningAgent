@@ -92,7 +92,7 @@ public class UserServiceImpl implements UserService {
             throw new PasswordErrorException("用户名或密码错误");
         }
         //生成JWT
-        String jwt = jwtService.createToken(user.getId(), user.getRole().name());
+        String jwt = jwtService.createToken(user.getId(), user.getRole());
 
         log.info("用户JWT生成成功");
         UserVO userVO = new UserVO();
