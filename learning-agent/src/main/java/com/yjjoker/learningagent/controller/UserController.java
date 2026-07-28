@@ -9,6 +9,7 @@ import com.yjjoker.learningagent.service.UserService;
 import com.yjjoker.learningagent.vo.UserPageItemVO;
 import com.yjjoker.learningagent.vo.UserVO;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/learning-agent/user")
 @AllArgsConstructor
+@Tag(name = "用户模块接口")
 public class UserController {
     private final UserService userService;
     //用户注册

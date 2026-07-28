@@ -69,7 +69,7 @@ class LearningSessionServiceImplTest {
             when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
             LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
             learningSessionDTO.setCourseId(2222L);
-            BaseContext.setCurrentId(2222L);
+            BaseContext.setCurrentId(3333L);
             assertThrows(CreateErrorException.class, () ->
                     learningSessionServiceImpl.createSession(learningSessionDTO));
             verify(learningSessionRepository, never()).createSession(any());
@@ -104,7 +104,7 @@ class LearningSessionServiceImplTest {
         @DisplayName("保存学习会话失败时，应抛出服务异常")
         void shouldThrowServiceExceptionWhenSessionCannotBeSaved() {
             Courses courses = new Courses();
-            courses.setCourseType(CoursesTypeEnum.PUBLIC);
+            courses.setCourseType(CoursesTypeEnum.PUBLISHED);
             when(coursesRepository.findCourseById(2222L)).thenReturn(courses);
             when(learningSessionRepository.createSession(any())).thenReturn(0);
             LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
@@ -118,10 +118,10 @@ class LearningSessionServiceImplTest {
     }
 
     @Test
-    @DisplayName("用户访问公共课程时，应成功创建学习会话")
-    void shouldCreateSessionWhenPublicCourseIsAccessible() {
+    @DisplayName("用户访问已发布课程时，应成功创建学习会话")
+    void shouldCreateSessionWhenPublishedCourseIsAccessible() {
         Courses courses = new Courses();
-        courses.setCourseType(CoursesTypeEnum.PUBLIC);
+        courses.setCourseType(CoursesTypeEnum.PUBLISHED);
         courses.setUserId(3333L);
         courses.setPublisherId(3333L);
         when(learningSessionRepository.createSession(any())).thenReturn(1);
@@ -129,7 +129,7 @@ class LearningSessionServiceImplTest {
         LearningSessionDTO learningSessionDTO = new LearningSessionDTO();
         learningSessionDTO.setCourseId(2222L);
         BaseContext.setCurrentId(2222L);
-        learningSessionDTO.setSessionTitle("公共课程学习会话");
+        learningSessionDTO.setSessionTitle("已发布课程学习会话");
         assertDoesNotThrow(() -> learningSessionServiceImpl.createSession(learningSessionDTO));
         verify(learningSessionRepository, times(1)).createSession(any());
     }

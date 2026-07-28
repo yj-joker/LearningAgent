@@ -4,6 +4,7 @@ import com.yjjoker.learningagent.projectenum.CoursesTypeEnum;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
 @Data
 public class Courses {
@@ -16,10 +17,4 @@ public class Courses {
     private CoursesTypeEnum courseType;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
-    public Boolean isUserCoursesOrPublic(Long userId, Long courseId){
-        if(userId==null||courseId==null){
-            return false;
-        }
-        return userId.equals(publisherId) || courseType == CoursesTypeEnum.PUBLIC;
-    }
 }

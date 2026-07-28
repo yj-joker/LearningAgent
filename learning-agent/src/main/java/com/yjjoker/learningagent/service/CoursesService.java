@@ -2,8 +2,6 @@ package com.yjjoker.learningagent.service;
 
 import com.yjjoker.learningagent.dto.CoursesDTO;
 import com.yjjoker.learningagent.vo.CoursesVO;
-import jakarta.validation.Valid;
-
 
 public interface CoursesService {
 
@@ -11,5 +9,9 @@ public interface CoursesService {
 
     CoursesVO createCourse(CoursesDTO coursesDTO);
 
-    CoursesVO publishCourse(@Valid Long courseId);
+    CoursesVO publishCourse(Long courseId);
+
+    CoursesVO passCourse(Long courseId);
+
+    CoursesVO rejectCourse(Long courseId);
 }

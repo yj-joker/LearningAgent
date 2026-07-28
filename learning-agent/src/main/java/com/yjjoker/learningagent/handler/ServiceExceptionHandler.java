@@ -14,8 +14,8 @@ public class ServiceExceptionHandler {
         log.info(e.getMessage());
         return Result.error(e.getMessage(),"400");
     }
-    @ExceptionHandler(CreateStatusException.class)
-    public Result<String> handleCreateStatusException(CreateStatusException e) {
+    @ExceptionHandler(CourseStatusException.class)
+    public Result<String> handleCreateStatusException(CourseStatusException e) {
         log.info(e.getMessage());
         return Result.error(e.getMessage(),"400");
     }

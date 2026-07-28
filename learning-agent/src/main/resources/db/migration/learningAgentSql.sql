@@ -49,10 +49,10 @@ CREATE TABLE IF NOT EXISTS courses (
 
 ALTER TABLE courses
     ADD COLUMN course_type VARCHAR(20) NOT NULL DEFAULT 'PRIVATE'
-    COMMENT '课程类型：PUBLIC-公共课程，PRIVATE-用户专有课程'
+    COMMENT '课程审核状态：PRIVATE-私有，PENDING-待审核，PUBLISHED-已发布'
         AFTER publisher_id,
     ADD CONSTRAINT chk_courses_course_type
-        CHECK (course_type IN ('PUBLIC', 'PRIVATE'));
+        CHECK (course_type IN ('PRIVATE', 'PENDING', 'PUBLISHED'));
 
 
 -- 学习会话表

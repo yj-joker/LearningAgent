@@ -1,11 +1,11 @@
 package com.yjjoker.learningagent.service.impl;
 
+import com.yjjoker.learningagent.domain.CoursesDO;
 import com.yjjoker.learningagent.dto.LearningSessionDTO;
 import com.yjjoker.learningagent.entity.Courses;
 import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.exception.LearningSessionStatusException;
 import com.yjjoker.learningagent.exception.NotFountException;
-import com.yjjoker.learningagent.exception.CreateErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.CoursesRepository;
@@ -39,10 +39,7 @@ public class LearningSessionServiceImpl implements LearningSessionService {
         }
         //存在
         //该课程是否属于该用户或者是公共课程
-        Boolean userCoursesOrPublic = course.isUserCoursesOrPublic(BaseContext.getCurrentId(), learningSessionDTO.getCourseId());
-        if (!userCoursesOrPublic) {
-            throw new CreateErrorException("非法创建");
-        }
+       new CoursesDO().userCoursesOrPublished(course, BaseContext.getCurrentId());
         //创建一个学习会话
         LearningSession learningSession = getLearningSession(learningSessionDTO);
         int affectedRows = learningSessionRepository.createSession(learningSession);
