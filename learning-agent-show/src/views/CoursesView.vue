@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowRight, BookOpenText, Globe2, LockKeyhole, Plus, Send, Sparkles } from 'lucide-vue-next'
+import { ArrowRight, BookOpenText, LockKeyhole, Plus, Send, Sparkles } from 'lucide-vue-next'
 import ModalDialog from '@/components/ModalDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -9,7 +9,6 @@ import { createCourse, publishCourse } from '@/api/courses'
 import { ApiError } from '@/api/client'
 import { useActivity } from '@/composables/useActivity'
 import { useToast } from '@/composables/useToast'
-import type { CourseType } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,7 +25,6 @@ const form = reactive({
   courseName: '',
   difficultyLevel: 3,
   learningOutline: '',
-  courseType: 'PRIVATE' as CourseType,
 })
 
 const courseActivities = computed(() => activities.value.filter((item) => item.kind.includes('course')))
@@ -48,7 +46,6 @@ function resetForm() {
   form.courseName = ''
   form.difficultyLevel = 3
   form.learningOutline = ''
-  form.courseType = 'PRIVATE'
   Object.keys(errors).forEach((key) => { errors[key] = '' })
 }
 
@@ -62,15 +59,15 @@ async function submitCreate() {
       learningOutline: form.learningOutline.trim()
         ? JSON.stringify({ content: form.learningOutline.trim() })
         : null,
-      courseType: form.courseType,
     })
     addActivity({
       kind: 'course-created',
       title: result.courseName,
-      description: `难度 ${result.difficultyLevel}/5 · ${result.courseType === 'PUBLIC' ? '公开课程' : '私有课程'}`,
+      description: `难度 ${result.difficultyLevel}/5 · 新建课程为私有状态`,
       status: result.courseType,
     })
-    showToast('success', '课程创建成功', `${result.courseName} 已加入你的学习空间`)
+    publishId.value = String(result.courseId)
+    showToast('success', '课程创建成功', `${result.courseName} 的课程 ID 是 ${result.courseId}，已自动填入审核区`)
     createOpen.value = false
     resetForm()
   } catch (error) {
@@ -81,8 +78,8 @@ async function submitCreate() {
 }
 
 async function submitPublish() {
-  const id = Number(publishId.value)
-  if (!Number.isInteger(id) || id <= 0) {
+  const id = publishId.value.trim()
+  if (!/^[1-9]\d*$/.test(id)) {
     publishError.value = '请输入有效的正整数课程 ID'
     return
   }
@@ -93,13 +90,13 @@ async function submitPublish() {
     addActivity({
       kind: 'course-published',
       title: result.courseName || `课程 #${id}`,
-      description: `课程 #${id} 已发布为公共课程`,
-      status: 'PUBLIC',
+      description: `课程 #${id} 已提交审核`,
+      status: result.courseType,
     })
-    showToast('success', '发布成功', `${result.courseName || `课程 #${id}`} 现在所有学习者可见`)
+    showToast('success', '提交审核成功', `${result.courseName || `课程 #${id}`} 正在等待管理员审核`)
     publishId.value = ''
   } catch (error) {
-    showToast('error', '发布失败', error instanceof ApiError ? error.message : '发生未知错误')
+    showToast('error', '提交审核失败', error instanceof ApiError ? error.message : '发生未知错误')
   } finally {
     publishing.value = false
   }
@@ -130,7 +127,7 @@ async function submitPublish() {
           <article v-for="(item, index) in courseActivities" :key="item.id" class="course-record">
             <div class="course-cover" :class="`cover-${index % 4}`">
               <BookOpenText :size="28" />
-              <span>{{ item.kind === 'course-published' ? '已发布' : '新课程' }}</span>
+              <span>{{ item.kind === 'course-published' ? '待审核' : '新课程' }}</span>
             </div>
             <div class="course-record-copy">
               <StatusBadge :status="item.status" />
@@ -150,15 +147,15 @@ async function submitPublish() {
       <aside class="side-stack">
         <section class="panel publish-panel">
           <span class="side-icon"><Send :size="21" /></span>
-          <span class="section-kicker">PUBLISH</span>
-          <h3>发布已有课程</h3>
-          <p>将私有课程切换为公开课程。发布后不可通过当前接口恢复为私有。</p>
+          <span class="section-kicker">SUBMIT FOR REVIEW</span>
+          <h3>提交课程审核</h3>
+          <p>私有课程提交后会进入待审核状态；审核通过后才会向其他学习者公开。</p>
           <form @submit.prevent="submitPublish">
             <label class="field-label" for="publish-course-id">课程 ID</label>
             <div class="inline-field">
               <input id="publish-course-id" v-model="publishId" inputmode="numeric" placeholder="例如：1001" @input="publishError = ''">
               <button class="button button-dark" :disabled="publishing">
-                {{ publishing ? '发布中…' : '立即发布' }} <ArrowRight v-if="!publishing" :size="16" />
+                {{ publishing ? '提交中…' : '提交审核' }} <ArrowRight v-if="!publishing" :size="16" />
               </button>
             </div>
             <span v-if="publishError" class="field-error">{{ publishError }}</span>
@@ -168,7 +165,7 @@ async function submitPublish() {
           <Sparkles :size="20" />
           <div>
             <strong>为什么需要手动输入 ID？</strong>
-            <p>现有创建课程接口的响应 VO 没有返回 <code>id</code>，后端也没有课程列表接口，因此前端无法自动获知数据库 ID。</p>
+            <p>创建课程后，响应中的 <code>courseId</code> 会自动填入上方。页面刷新后仍需手动输入，因为后端暂未提供课程列表接口。</p>
           </div>
         </section>
       </aside>
@@ -189,18 +186,12 @@ async function submitPublish() {
         </div>
 
         <div class="form-section">
-          <span class="field-label">课程可见性 <b>*</b></span>
+          <span class="field-label">初始状态</span>
           <div class="choice-grid">
-            <label class="choice-card" :class="{ selected: form.courseType === 'PRIVATE' }">
-              <input v-model="form.courseType" type="radio" value="PRIVATE">
+            <div class="choice-card selected">
               <span><LockKeyhole :size="20" /></span>
-              <div><strong>私有课程</strong><small>仅自己可学习和管理</small></div>
-            </label>
-            <label class="choice-card" :class="{ selected: form.courseType === 'PUBLIC' }">
-              <input v-model="form.courseType" type="radio" value="PUBLIC">
-              <span><Globe2 :size="20" /></span>
-              <div><strong>公开课程</strong><small>其他学习者也可访问</small></div>
-            </label>
+              <div><strong>私有课程</strong><small>创建后仅自己可学习和管理；提交审核后由管理员决定是否发布。</small></div>
+            </div>
           </div>
         </div>
 

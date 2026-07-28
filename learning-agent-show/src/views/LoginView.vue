@@ -27,9 +27,9 @@ function validate() {
   return !errors.username && !errors.password
 }
 
-function redirectPath() {
+function userRedirectPath() {
   const value = route.query.redirect
-  return typeof value === 'string' && value.startsWith('/') ? value : '/'
+  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('/admin') ? value : '/'
 }
 
 async function submit() {
@@ -37,8 +37,13 @@ async function submit() {
   submitting.value = true
   try {
     const user = await login({ username: form.username.trim(), password: form.password })
-    showToast('success', '欢迎回来', `${user.username}，准备好继续学习了吗？`)
-    await router.replace(redirectPath())
+    if (user.role === 'ADMIN') {
+      showToast('success', '管理员登录成功', `欢迎回来，${user.username}`)
+      await router.replace({ name: 'admin-users' })
+    } else {
+      showToast('success', '欢迎回来', `${user.username}，准备好继续学习了吗？`)
+      await router.replace(userRedirectPath())
+    }
   } catch (error) {
     const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '发生未知错误'
     showToast('error', message.includes('未登录') ? '后端登录白名单未同步' : '登录失败', message.includes('未登录') ? '请将 /learning-agent/user/login 加入 LoginInterceptor 的排除路径。' : message)

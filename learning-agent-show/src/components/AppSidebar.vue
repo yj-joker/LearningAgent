@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { BookOpenText, Braces, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, X } from 'lucide-vue-next'
+import { BookOpenText, Braces, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, ShieldCheck, X } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
@@ -15,7 +15,7 @@ const navItems = [
 ]
 
 const router = useRouter()
-const { currentUser, logout } = useAuth()
+const { currentUser, isAdmin, logout } = useAuth()
 
 function signOut() {
   logout()
@@ -52,6 +52,10 @@ function signOut() {
       >
         <component :is="item.icon" :size="19" />
         <span>{{ item.label }}</span>
+      </RouterLink>
+      <RouterLink v-if="isAdmin" to="/admin/users" @click="$emit('close')">
+        <ShieldCheck :size="19" />
+        <span>管理控制台</span>
       </RouterLink>
     </nav>
 

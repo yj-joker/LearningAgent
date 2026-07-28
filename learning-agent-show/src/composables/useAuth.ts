@@ -1,19 +1,33 @@
 import { computed, ref } from 'vue'
 import { loginUser } from '@/api/auth'
 import type { UserCredentials, UserVO } from '@/types/api'
-import { clearStoredUser, readStoredUser, storeUser } from '@/utils/authStorage'
+import { clearStoredUser, readRoleFromToken, readStoredUser, storeUser } from '@/utils/authStorage'
 
 const currentUser = ref<UserVO | null>(readStoredUser())
 
 export function useAuth() {
   const isAuthenticated = computed(() => Boolean(currentUser.value?.token))
+  const isAdmin = computed(() => currentUser.value?.role === 'ADMIN')
+
+  function saveAuthenticatedUser(user: UserVO) {
+    const normalized = { ...user, role: readRoleFromToken(user.token) ?? user.role ?? null }
+    currentUser.value = normalized
+    storeUser(normalized)
+    return normalized
+  }
 
   async function login(credentials: UserCredentials) {
     const user = await loginUser(credentials)
     if (!user.token) throw new Error('登录响应中没有返回 token，请检查后端配置')
-    currentUser.value = user
-    storeUser(user)
-    return user
+    return saveAuthenticatedUser(user)
+  }
+
+  async function loginAdmin(credentials: UserCredentials) {
+    const user = await loginUser(credentials)
+    if (!user.token) throw new Error('登录响应中没有返回 token，请检查后端配置')
+    const role = readRoleFromToken(user.token)
+    if (role !== 'ADMIN') throw new Error('该账号不是管理员账号')
+    return saveAuthenticatedUser(user)
   }
 
   function logout() {
@@ -21,5 +35,5 @@ export function useAuth() {
     clearStoredUser()
   }
 
-  return { currentUser, isAuthenticated, login, logout }
+  return { currentUser, isAuthenticated, isAdmin, login, loginAdmin, logout }
 }

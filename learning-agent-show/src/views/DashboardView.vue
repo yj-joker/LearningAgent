@@ -22,11 +22,14 @@ import StatusBadge from '@/components/StatusBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import { checkBackend, type BackendState } from '@/api/client'
 import { useActivity } from '@/composables/useActivity'
+import { useAuth } from '@/composables/useAuth'
 
 const { recentActivities, courseCount, activeSessionCount } = useActivity()
+const { isAdmin } = useAuth()
 const connection = ref<BackendState | 'checking'>('checking')
 
 const completionCount = computed(() => recentActivities.value.filter((item) => item.kind === 'session-completed').length)
+const endpointCount = computed(() => isAdmin.value ? 9 : 6)
 
 async function testConnection() {
   connection.value = 'checking'
@@ -92,7 +95,7 @@ onMounted(testConnection)
       </article>
       <article class="metric-card metric-cream">
         <span class="metric-icon"><Braces :size="21" /></span>
-        <div><strong>6</strong><span>已接入接口</span></div>
+        <div><strong>{{ endpointCount }}</strong><span>当前可用接口</span></div>
         <RouterLink to="/api-docs" aria-label="查看接口"><ArrowRight :size="18" /></RouterLink>
       </article>
     </section>

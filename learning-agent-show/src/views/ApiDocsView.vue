@@ -1,23 +1,52 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Braces, Check, ChevronDown, Copy, ExternalLink, Info, ServerCog } from 'lucide-vue-next'
+import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 
 interface Endpoint {
-  method: 'POST' | 'PUT'
+  method: 'GET' | 'POST' | 'PUT'
   path: string
   title: string
   description: string
   body?: string
   response: string
   notes: string[]
+  adminOnly?: boolean
 }
 
 const { showToast } = useToast()
-const openIndex = ref(0)
-const filter = ref<'ALL' | 'POST' | 'PUT'>('ALL')
+const { isAdmin } = useAuth()
+const openPath = ref<string | null>('/learning-agent/user/register')
+const filter = ref<'ALL' | 'GET' | 'POST' | 'PUT'>('ALL')
 
 const endpoints: Endpoint[] = [
+  {
+    method: 'GET',
+    path: '/learning-agent/user/pageQuery',
+    title: '管理员分页查询用户',
+    description: '管理员查看全部用户，并按用户名、角色和创建时间范围筛选。',
+    adminOnly: true,
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": {
+    "page": 1,
+    "size": 20,
+    "totalElements": 42,
+    "totalPages": 3,
+    "hasPrevious": false,
+    "hasNext": true,
+    "items": [{
+      "id": "1987654321098765432",
+      "username": "demo-learner",
+      "role": "USER",
+      "createdAt": "2026-07-28T10:00:00"
+    }]
+  }
+}`,
+    notes: ['需要 ADMIN 角色和 Bearer Token', 'username 使用模糊匹配', 'page 从 1 开始，size 最大为 100', '用户 ID 必须作为字符串处理'],
+  },
   {
     method: 'POST',
     path: '/learning-agent/user/register',
@@ -62,46 +91,80 @@ const endpoints: Endpoint[] = [
     method: 'POST',
     path: '/learning-agent/courses/createCourse',
     title: '创建课程',
-    description: '创建一门私有或公开课程，并返回课程展示信息。',
+    description: '创建一门私有课程。课程必须先提交管理员审核，审核通过后才会公开。',
     body: `{
   "courseName": "Java 并发编程",
   "difficultyLevel": 4,
-  "learningOutline": "{\\"content\\":\\"线程与锁\\"}",
-  "courseType": "PRIVATE"
+  "learningOutline": "{\\"content\\":\\"线程与锁\\"}"
 }`,
     response: `{
   "code": "200",
   "message": "OK",
   "data": {
+    "courseId": 1001,
     "courseName": "Java 并发编程",
-    "publisherName": null,
+    "publisherId": 2001,
     "difficultyLevel": 4,
     "learningOutline": "{...}",
-    "courseType": "PRIVATE"
+    "courseType": "PRIVATE",
+    "createdAt": "2026-07-28T16:00:00",
+    "updatedAt": "2026-07-28T16:00:00"
   }
 }`,
-    notes: ['courseType 只能是 PUBLIC 或 PRIVATE', 'difficultyLevel 的数据库约束为 1～5', '当前响应不包含课程 ID'],
+    notes: ['新课程的 courseType 固定为 PRIVATE，客户端不能指定', 'difficultyLevel 的数据库约束为 1～5', '响应包含后续提交审核需要的 courseId'],
   },
   {
     method: 'PUT',
     path: '/learning-agent/courses/publishCourse/{courseId}',
-    title: '发布课程',
-    description: '将当前用户拥有的私有课程发布为公共课程。',
+    title: '提交课程审核',
+    description: '将当前用户拥有的 PRIVATE 课程提交为 PENDING，等待管理员审核。',
     response: `{
   "code": "200",
   "message": "OK",
   "data": {
     "courseName": "Java 并发编程",
-    "courseType": "PUBLIC"
+    "courseType": "PENDING"
   }
 }`,
-    notes: ['courseId 通过路径参数传递', '课程必须存在且属于当前用户', '已经公开的课程不能重复发布'],
+    notes: ['courseId 通过路径参数传递', '课程必须存在且属于当前用户', '只有 PRIVATE 状态可以提交审核'],
+  },
+  {
+    method: 'PUT',
+    path: '/learning-agent/courses/passCourse/{courseId}',
+    title: '管理员审核通过课程',
+    description: '管理员将 PENDING 课程更新为 PUBLISHED；只有 PUBLISHED 课程可被其他学习者访问。',
+    adminOnly: true,
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": {
+    "courseId": 1001,
+    "courseType": "PUBLISHED"
+  }
+}`,
+    notes: ['需要 ADMIN 角色', '只有 PENDING 状态可以审核通过'],
+  },
+  {
+    method: 'PUT',
+    path: '/learning-agent/courses/rejectCourse/{courseId}',
+    title: '管理员驳回或下架课程',
+    description: '管理员可将 PENDING 课程驳回，或将 PUBLISHED 课程下架，目标状态均为 PRIVATE。',
+    adminOnly: true,
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": {
+    "courseId": 1001,
+    "courseType": "PRIVATE"
+  }
+}`,
+    notes: ['需要 ADMIN 角色', '只允许 PENDING → PRIVATE 或 PUBLISHED → PRIVATE'],
   },
   {
     method: 'POST',
     path: '/learning-agent/learning/session',
     title: '创建学习会话',
-    description: '为自己拥有的课程或公共课程创建一个 ACTIVE 学习会话。',
+    description: '为自己拥有的课程或已发布课程创建一个 ACTIVE 学习会话。',
     body: `{
   "courseId": 1001,
   "sessionTitle": "理解线程池核心参数"
@@ -133,7 +196,10 @@ const endpoints: Endpoint[] = [
   },
 ]
 
-const visibleEndpoints = computed(() => filter.value === 'ALL' ? endpoints : endpoints.filter((item) => item.method === filter.value))
+const availableEndpoints = computed(() => endpoints.filter((item) => !item.adminOnly || isAdmin.value))
+const visibleEndpoints = computed(() => filter.value === 'ALL'
+  ? availableEndpoints.value
+  : availableEndpoints.value.filter((item) => item.method === filter.value))
 
 async function copyText(value: string) {
   await navigator.clipboard.writeText(value)
@@ -147,7 +213,7 @@ async function copyText(value: string) {
       <div>
         <span class="section-kicker">API REFERENCE</span>
         <h2>前后端接口契约</h2>
-        <p>根据当前 Spring Boot 控制器、DTO 与 VO 整理，共接入 6 个业务接口。</p>
+        <p>根据当前登录角色展示可调用的接口，你现在可以使用 {{ availableEndpoints.length }} 个业务接口。</p>
       </div>
       <a class="button button-secondary" href="http://localhost:8080/swagger-ui/index.html" target="_blank" rel="noreferrer">
         打开 Swagger <ExternalLink :size="16" />
@@ -163,21 +229,21 @@ async function copyText(value: string) {
     <div class="api-layout">
       <section class="panel endpoints-panel">
         <div class="panel-header api-panel-header">
-          <div><span class="section-kicker">ENDPOINTS</span><h3>业务接口</h3></div>
+          <div><span class="section-kicker">ENDPOINTS</span><h3>当前角色可用接口</h3></div>
           <div class="filter-tabs">
-            <button v-for="value in ['ALL', 'POST', 'PUT'] as const" :key="value" :class="{ active: filter === value }" @click="filter = value">
+            <button v-for="value in ['ALL', 'GET', 'POST', 'PUT'] as const" :key="value" :class="{ active: filter === value }" @click="filter = value">
               {{ value === 'ALL' ? '全部' : value }}
             </button>
           </div>
         </div>
         <div class="endpoint-list">
-          <article v-for="endpoint in visibleEndpoints" :key="endpoint.path" class="endpoint-item" :class="{ open: openIndex === endpoints.indexOf(endpoint) }">
-            <button class="endpoint-trigger" @click="openIndex = openIndex === endpoints.indexOf(endpoint) ? -1 : endpoints.indexOf(endpoint)">
+          <article v-for="endpoint in visibleEndpoints" :key="endpoint.path" class="endpoint-item" :class="{ open: openPath === endpoint.path }">
+            <button class="endpoint-trigger" @click="openPath = openPath === endpoint.path ? null : endpoint.path">
               <span class="method-tag" :class="`method-${endpoint.method.toLowerCase()}`">{{ endpoint.method }}</span>
               <span class="endpoint-main"><strong>{{ endpoint.title }}</strong><code>{{ endpoint.path }}</code></span>
               <ChevronDown :size="19" />
             </button>
-            <div v-if="openIndex === endpoints.indexOf(endpoint)" class="endpoint-content">
+            <div v-if="openPath === endpoint.path" class="endpoint-content">
               <p>{{ endpoint.description }}</p>
               <div v-if="endpoint.body" class="code-section">
                 <div><strong>请求体</strong><button @click="copyText(endpoint.body!)"><Copy :size="14" /> 复制</button></div>
@@ -208,7 +274,7 @@ async function copyText(value: string) {
         </section>
         <section class="insight-card warning-card">
           <Info :size="20" />
-          <div><strong>接口限制</strong><p>当前没有课程/会话查询接口，也没有认证接口。工作台仅展示本浏览器记录的成功操作，不代表完整数据库数据。</p></div>
+          <div><strong>接口限制</strong><p>当前没有课程/会话查询接口。工作台仅展示本浏览器记录的成功操作，不代表完整数据库数据。</p></div>
         </section>
       </aside>
     </div>

@@ -5,8 +5,9 @@ import type { CourseType, SessionStatus } from '@/types/api'
 const props = defineProps<{ status: CourseType | SessionStatus }>()
 
 const labels: Record<CourseType | SessionStatus, string> = {
-  PUBLIC: '已公开',
   PRIVATE: '私有',
+  PENDING: '待审核',
+  PUBLISHED: '已发布',
   ACTIVE: '进行中',
   COMPLETED: '已完成',
   CANCELED: '已取消',
