@@ -137,6 +137,7 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    //格式化查询条件，去除空格
     private void normalizeQueryCondition(UserPageRequest request) {
         if (request.getUsername() == null) {
             return;
@@ -146,6 +147,7 @@ public class UserServiceImpl implements UserService {
         request.setUsername(username.isEmpty() ? null : username);
     }
 
+    //将User转换为UserPageItemVO
     private UserPageItemVO toUserPageItem(User user) {
         return new UserPageItemVO(
                 user.getId().toString(),

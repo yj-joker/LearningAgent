@@ -22,21 +22,21 @@
             </if>
         </where>
     </sql>
-
+    <!--     查询条数-->
     <select id="countByCondition" resultType="long">
         select count(*)
         from `user`
         <include refid="userConditions"/>
     </select>
-
+    <!--分页查询用户-->
     <select id="findPageByCondition"
             resultType="com.yjjoker.learningagent.entity.User">
         select id,
-               username,
-               role,
-               avatar_url as avatarUrl,
-               created_at as createdAt,
-               updated_at as updatedAt
+        username,
+        role,
+        avatar_url as avatarUrl,
+        created_at as createdAt,
+        updated_at as updatedAt
         from `user`
         <include refid="userConditions"/>
         order by id desc

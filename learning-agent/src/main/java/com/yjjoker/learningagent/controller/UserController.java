@@ -36,7 +36,7 @@ public class UserController {
         UserVO userVO = userService.login(userDTO);
         return Result.success(userVO);
     }
-    //管理员分页查询用户，查询条件均为可选参数
+    //管理员分页查询用户
     @GetMapping("/pageQuery")
     @AdminAnnotation
     @Operation(summary = "分页查询用户")
