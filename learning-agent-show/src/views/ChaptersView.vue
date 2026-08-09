@@ -2,9 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  ArrowDown,
   ArrowRight,
-  ArrowUp,
   BookOpenText,
   CircleAlert,
   GripVertical,
@@ -46,6 +44,13 @@ const deleting = ref(false)
 const ordering = ref(false)
 const dragFromIndex = ref<number | null>(null)
 const dragPlacement = ref<{ index: number; after: boolean } | null>(null)
+const pointerDrag = ref<{
+  pointerId: number
+  fromIndex: number
+  startX: number
+  startY: number
+  active: boolean
+} | null>(null)
 const editorForm = reactive({ title: '' })
 const editorError = ref('')
 
@@ -252,6 +257,10 @@ function onDragStart(event: DragEvent, index: number) {
     event.preventDefault()
     return
   }
+  if ((event.target as HTMLElement | null)?.closest('.chapter-row-actions')) {
+    event.preventDefault()
+    return
+  }
   dragFromIndex.value = index
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move'
@@ -275,6 +284,53 @@ async function onDrop(event: DragEvent, index: number) {
   clearDrag()
   if (fromIndex === null) return
   await reorderChapter(fromIndex, placement.index + (placement.after ? 1 : 0))
+}
+
+function onPointerDragStart(event: PointerEvent, index: number) {
+  if (!canReorder.value || (event.pointerType === 'mouse' && event.button !== 0)) return
+  event.preventDefault()
+  const handle = event.currentTarget as HTMLElement
+  handle.setPointerCapture?.(event.pointerId)
+  pointerDrag.value = {
+    pointerId: event.pointerId,
+    fromIndex: index,
+    startX: event.clientX,
+    startY: event.clientY,
+    active: false,
+  }
+}
+
+function onPointerDragMove(event: PointerEvent) {
+  const state = pointerDrag.value
+  if (!state || state.pointerId !== event.pointerId || !canReorder.value) return
+
+  if (!state.active) {
+    const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY)
+    if (distance < 6) return
+    state.active = true
+    dragFromIndex.value = state.fromIndex
+  }
+
+  event.preventDefault()
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('.chapter-row')
+  if (!target) return
+  const index = Number(target.dataset.chapterIndex)
+  if (!Number.isInteger(index)) return
+  const rect = target.getBoundingClientRect()
+  dragPlacement.value = { index, after: event.clientY > rect.top + rect.height / 2 }
+}
+
+async function onPointerDragEnd(event: PointerEvent) {
+  const state = pointerDrag.value
+  if (!state || state.pointerId !== event.pointerId) return
+  const handle = event.currentTarget as HTMLElement
+  if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+
+  const placement = dragPlacement.value
+  pointerDrag.value = null
+  clearDrag()
+  if (!state.active || !placement) return
+  await reorderChapter(state.fromIndex, placement.index + (placement.after ? 1 : 0))
 }
 
 function clearDrag() {
@@ -361,7 +417,7 @@ watch(() => route.params.courseId, (value) => {
         <div class="chapter-order-notice" :class="{ locked: !canReorder }">
           <GripVertical v-if="canReorder" :size="18" />
           <LockKeyhole v-else :size="18" />
-          <p v-if="canReorder">拖动章节卡片可调整顺序，也可以使用每行右侧的上移、下移按钮。</p>
+          <p v-if="canReorder">按住章节卡片拖到目标位置，松开后会自动计算并保存新的排序值。</p>
           <p v-else-if="courseStatus">当前课程是 {{ courseStatus }} 状态，章节拖拽已锁定。</p>
           <p v-else>后端没有返回课程状态，无法确认是 PRIVATE，章节拖拽暂时锁定。</p>
         </div>
@@ -371,22 +427,28 @@ watch(() => route.params.courseId, (value) => {
             v-for="(chapter, index) in sortedChapters"
             :key="chapter.id"
             class="chapter-row"
+            :data-chapter-index="index"
             :class="{
+              'is-dragging': dragFromIndex === index,
               'drop-before': dragPlacement?.index === index && !dragPlacement.after,
               'drop-after': dragPlacement?.index === index && dragPlacement.after,
             }"
+            :draggable="canReorder"
+            :aria-label="canReorder ? `拖动第 ${index + 1} 章调整顺序` : undefined"
+            @dragstart="onDragStart($event, index)"
+            @dragend="clearDrag"
             @dragover="onDragOver($event, index)"
             @drop="onDrop($event, index)"
           >
-            <button
+            <span
               class="chapter-drag-handle"
               :class="{ disabled: !canReorder }"
-              :draggable="canReorder"
-              :aria-label="canReorder ? `拖动第 ${index + 1} 章` : '当前课程不可拖动排序'"
-              :title="canReorder ? '拖动调整顺序' : '仅 PRIVATE 课程可以拖动'"
-              @dragstart="onDragStart($event, index)"
-              @dragend="clearDrag"
-            ><GripVertical :size="19" /></button>
+              aria-hidden="true"
+              @pointerdown.stop="onPointerDragStart($event, index)"
+              @pointermove.stop="onPointerDragMove"
+              @pointerup.stop="onPointerDragEnd"
+              @pointercancel.stop="onPointerDragEnd"
+            ><GripVertical :size="19" /></span>
             <span class="chapter-index">{{ String(index + 1).padStart(2, '0') }}</span>
             <div class="chapter-row-copy">
               <small>CHAPTER {{ index + 1 }}</small>
@@ -394,10 +456,8 @@ watch(() => route.params.courseId, (value) => {
               <p>排序值 <code>{{ chapter.sortOrder }}</code></p>
             </div>
             <div class="chapter-row-actions">
-              <button :disabled="!canReorder || index === 0" :aria-label="`上移 ${chapter.title}`" title="上移" @click="reorderChapter(index, index - 1)"><ArrowUp :size="16" /></button>
-              <button :disabled="!canReorder || index === sortedChapters.length - 1" :aria-label="`下移 ${chapter.title}`" title="下移" @click="reorderChapter(index, index + 2)"><ArrowDown :size="16" /></button>
-              <button :aria-label="`修改 ${chapter.title}`" title="修改章节" @click="openEditEditor(chapter)"><Pencil :size="16" /></button>
-              <button class="danger" :aria-label="`删除 ${chapter.title}`" title="删除章节" @click="deletingChapter = chapter"><Trash2 :size="16" /></button>
+              <button :draggable="false" :aria-label="`修改 ${chapter.title}`" title="修改章节" @click="openEditEditor(chapter)"><Pencil :size="16" /></button>
+              <button :draggable="false" class="danger" :aria-label="`删除 ${chapter.title}`" title="删除章节" @click="deletingChapter = chapter"><Trash2 :size="16" /></button>
             </div>
           </article>
         </div>

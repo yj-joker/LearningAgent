@@ -1014,17 +1014,19 @@ textarea:focus-visible {
 
 .chapter-list { display: grid; padding: 18px 0 0; gap: 9px; }
 .chapter-list.is-ordering { pointer-events: none; opacity: 0.78; }
-.chapter-row { position: relative; display: grid; min-height: 88px; padding: 13px 14px 13px 9px; gap: 13px; align-items: center; grid-template-columns: 35px 43px minmax(0, 1fr) auto; background: #fff; border: 1px solid #e0e6e0; border-radius: 12px; box-shadow: 0 7px 20px rgba(28, 59, 54, 0.035); transition: border-color 150ms ease, transform 150ms ease; }
+.chapter-row { position: relative; display: grid; min-height: 88px; padding: 13px 14px 13px 9px; gap: 13px; align-items: center; grid-template-columns: 35px 43px minmax(0, 1fr) auto; background: #fff; border: 1px solid #e0e6e0; border-radius: 12px; box-shadow: 0 7px 20px rgba(28, 59, 54, 0.035); transition: border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease, transform 150ms ease; }
 .chapter-row:hover { border-color: #c9d6cc; }
+.chapter-row[draggable='true'] { cursor: grab; }
+.chapter-row[draggable='true']:active { cursor: grabbing; }
+.chapter-row.is-dragging { opacity: 0.48; transform: scale(0.995); }
 .chapter-row.drop-before::before,
 .chapter-row.drop-after::after { position: absolute; right: 8px; left: 8px; height: 3px; content: ''; background: #4e8b75; border-radius: 3px; }
 .chapter-row.drop-before::before { top: -6px; }
 .chapter-row.drop-after::after { bottom: -6px; }
-.chapter-drag-handle { display: grid; width: 34px; height: 42px; padding: 0; place-items: center; color: #789088; background: transparent; border: 0; border-radius: 8px; cursor: grab; }
-.chapter-drag-handle:hover { color: #315e53; background: #edf4ef; }
+.chapter-drag-handle { display: grid; width: 34px; height: 42px; place-items: center; color: #789088; background: transparent; border-radius: 8px; cursor: grab; touch-action: none; user-select: none; }
 .chapter-drag-handle:active { cursor: grabbing; }
+.chapter-row[draggable='true']:hover .chapter-drag-handle { color: #315e53; background: #edf4ef; }
 .chapter-drag-handle.disabled { color: #bdc4bf; cursor: not-allowed; }
-.chapter-drag-handle.disabled:hover { background: transparent; }
 .chapter-index { display: grid; width: 43px; height: 43px; place-items: center; color: #315e53; background: #e5f0e7; border-radius: 11px; font-size: 11px; font-weight: 800; }
 .chapter-row-copy { min-width: 0; }
 .chapter-row-copy small { color: #9aa59f; font-size: 7px; font-weight: 800; letter-spacing: 1px; }
