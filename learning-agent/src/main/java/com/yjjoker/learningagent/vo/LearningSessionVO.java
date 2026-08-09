@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class LearningSessionVO {
+      private Long id;
       private String sessionTitle;
       private LearningSessionStatusEnum sessionStatus;
 }

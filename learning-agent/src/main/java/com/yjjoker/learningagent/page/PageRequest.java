@@ -13,6 +13,7 @@ public  class PageRequest {
     @Min(value = 1, message = "每页数量不能小于 1")
     @Max(value = 100, message = "每页数量不能超过 100")
     private int size = 20;
+    // 计算当前页的起始位置
     public long offset() {
         return (long) (page - 1) * size;
     }

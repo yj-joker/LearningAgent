@@ -106,7 +106,7 @@ public class CoursesServiceImpl implements CoursesService {
     private CoursesVO toCoursesVO(Courses courses) {
         CoursesVO coursesVO = new CoursesVO();
         BeanUtils.copyProperties(courses, coursesVO);
-        coursesVO.setCourseId(courses.getId());
+        coursesVO.setId(courses.getId());
         return coursesVO;
     }
 }

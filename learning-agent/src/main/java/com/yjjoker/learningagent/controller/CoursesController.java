@@ -31,14 +31,14 @@ public class CoursesController {
         return Result.success(coursesVO);
     }
     //用户发布课程
-    @PutMapping("/publishCourse/{courseId}")
+    @PatchMapping("/publishCourse/{courseId}")
     @Operation(summary = "发布课程")
     public Result<CoursesVO> publishCourse(@NotNull @Positive @PathVariable Long courseId){
         CoursesVO coursesVO = coursesService.publishCourse(courseId);
         return Result.success(coursesVO);
     }
     //审核通过
-    @PutMapping("/passCourse/{courseId}")
+    @PatchMapping("/passCourse/{courseId}")
     @Operation(summary = "审核通过课程")
     @AdminAnnotation
     public Result<CoursesVO> passCourse(@NotNull @Positive @PathVariable Long courseId){
@@ -46,7 +46,7 @@ public class CoursesController {
         return Result.success(coursesVO);
     }
     //审核未通过或者下架课程
-    @PutMapping("/rejectCourse/{courseId}")
+    @PatchMapping("/rejectCourse/{courseId}")
     @Operation(summary = "审核未通过或下架课程")
     @AdminAnnotation
     public Result<CoursesVO> rejectCourse(@NotNull @Positive @PathVariable Long courseId){

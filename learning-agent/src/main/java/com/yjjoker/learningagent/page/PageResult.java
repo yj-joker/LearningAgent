@@ -10,10 +10,10 @@ public  class PageResult<T> {
 
     private final int page;
     private final int size;
-    private final long totalElements;
-    private final long totalPages;
-    private final boolean hasPrevious;
-    private final boolean hasNext;
+    private final long totalElements;// 总元素数
+    private final long totalPages;// 总页数
+    private final boolean hasPrevious;// 是否有上一页
+    private final boolean hasNext;// 是否有下一页
     private final List<T> items;
 
     private PageResult(
@@ -33,17 +33,18 @@ public  class PageResult<T> {
         this.hasNext = hasNext;
         this.items = List.copyOf(items);
     }
-
+    // 构建分页结果
     public static <T> PageResult<T> of(
             PageRequest request,
             long totalElements,
             List<T> items
     ) {
+        // 计算总页数，如果有余数则加一
         long totalPages = totalElements / request.getSize();
         if (totalElements % request.getSize() != 0) {
             totalPages++;
         }
-
+        //返回构建结果
         return new PageResult<>(
                 request.getPage(),
                 request.getSize(),

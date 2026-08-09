@@ -7,7 +7,7 @@ import java.time.LocalDateTime;
 
 @Data
 public class CoursesVO {
-    private Long courseId;
+    private Long id;
     private String courseName;
     private Long publisherId;
     private Long difficultyLevel;

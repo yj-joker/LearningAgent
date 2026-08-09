@@ -1,5 +1,7 @@
 mybatis:
   mapper-locations: classpath*:/Mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
 spring:
   config:
     import: "optional:file:./.env[.properties]"

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.ChaptersRepository">
+
+
+    <insert id="saveAll">
+        INSERT INTO chapters (
+        id,
+        course_id,
+        title,
+        sort_order,
+        created_at,
+        updated_at
+        )
+        VALUES
+        <foreach collection="chaptersList" item="chapter" separator=",">
+            ( #{chapter.id}, #{chapter.courseId}, #{chapter.title}, #{chapter.sortOrder}, #{chapter.createdAt}, #{chapter.updatedAt} )
+        </foreach>
+    </insert>
+    <update id="updateAll">
+        UPDATE chapters
+        SET
+
+        title = CASE
+        <foreach collection="chaptersList" item="chapter">
+            WHEN id = #{chapter.id} AND course_id = #{chapter.courseId}
+            THEN COALESCE(#{chapter.title}, title)
+        </foreach>
+        ELSE title
+        END,
+
+        sort_order = CASE
+        <foreach collection="chaptersList" item="chapter">
+            WHEN id = #{chapter.id} AND course_id = #{chapter.courseId}
+            THEN COALESCE(#{chapter.sortOrder}, sort_order)
+        </foreach>
+        ELSE sort_order
+        END,
+
+        updated_at = CASE
+        <foreach collection="chaptersList" item="chapter">
+            WHEN id = #{chapter.id} AND course_id = #{chapter.courseId}
+            THEN #{chapter.updatedAt}
+        </foreach>
+        ELSE updated_at
+        END
+
+        WHERE
+        <foreach collection="chaptersList" item="chapter" separator=" OR ">
+            (id = #{chapter.id} AND course_id = #{chapter.courseId})
+        </foreach>
+    </update>
+    <delete id="deleteChaptersByIds">
+        DELETE FROM chapters
+        WHERE id IN
+        <foreach collection="ids"
+                 item="id"
+                 open="("
+                 separator=","
+                 close=")">
+            #{id}
+        </foreach>
+    </delete>
+    <select id="getChaptersByIds" resultType="com.yjjoker.learningagent.entity.Chapters"
+            parameterType="list">
+        SELECT * FROM chapters WHERE id IN
+        <foreach collection="ids"
+                 item="id"
+                 open="("
+                 separator=","
+                 close=")">
+            #{id}
+        </foreach>
+    </select>
+</mapper>
