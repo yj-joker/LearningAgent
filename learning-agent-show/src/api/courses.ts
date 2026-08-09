@@ -1,29 +1,43 @@
 import { request } from './client'
-import type { CourseCreatePayload, CourseVO } from '@/types/api'
+import type { ApiId, CourseCreatePayload, CourseVO } from '@/types/api'
 
 const COURSE_BASE = '/learning-agent/courses'
 
-export function createCourse(payload: CourseCreatePayload) {
-  return request<CourseVO>(`${COURSE_BASE}/createCourse`, {
+type CourseApiResponse = Omit<CourseVO, 'id' | 'courseId'> & { id?: ApiId; courseId?: ApiId }
+
+function normalizeCourse(course: CourseApiResponse): CourseVO {
+  return {
+    ...course,
+    id: course.id ?? course.courseId ?? '',
+    courseId: course.courseId,
+  }
+}
+
+export async function createCourse(payload: CourseCreatePayload) {
+  const course = await request<CourseApiResponse>(`${COURSE_BASE}/createCourse`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+  return normalizeCourse(course)
 }
 
-export function publishCourse(courseId: string | number) {
-  return request<CourseVO>(`${COURSE_BASE}/publishCourse/${encodeURIComponent(String(courseId))}`, {
-    method: 'PUT',
+export async function publishCourse(courseId: string | number) {
+  const course = await request<CourseApiResponse>(`${COURSE_BASE}/publishCourse/${encodeURIComponent(String(courseId))}`, {
+    method: 'PATCH',
   })
+  return normalizeCourse(course)
 }
 
-export function passCourse(courseId: string | number) {
-  return request<CourseVO>(`${COURSE_BASE}/passCourse/${encodeURIComponent(String(courseId))}`, {
-    method: 'PUT',
+export async function passCourse(courseId: string | number) {
+  const course = await request<CourseApiResponse>(`${COURSE_BASE}/passCourse/${encodeURIComponent(String(courseId))}`, {
+    method: 'PATCH',
   })
+  return normalizeCourse(course)
 }
 
-export function rejectCourse(courseId: string | number) {
-  return request<CourseVO>(`${COURSE_BASE}/rejectCourse/${encodeURIComponent(String(courseId))}`, {
-    method: 'PUT',
+export async function rejectCourse(courseId: string | number) {
+  const course = await request<CourseApiResponse>(`${COURSE_BASE}/rejectCourse/${encodeURIComponent(String(courseId))}`, {
+    method: 'PATCH',
   })
+  return normalizeCourse(course)
 }

@@ -133,8 +133,8 @@ async function changeStatus(action: ReviewAction) {
       <span><BookCheck :size="21" /></span>
       <div>
         <small>最近一次操作结果</small>
-        <strong>{{ lastResult.courseName || `课程 #${lastResult.courseId}` }}</strong>
-        <p>课程 ID：{{ lastResult.courseId }}</p>
+        <strong>{{ lastResult.courseName || `课程 #${lastResult.id}` }}</strong>
+        <p>课程 ID：{{ lastResult.id }}</p>
       </div>
       <StatusBadge :status="lastResult.courseType" />
     </section>

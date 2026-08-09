@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue'
-import type { ActivityRecord } from '@/types/api'
+import type { ActivityRecord, KnownCourse } from '@/types/api'
 
 const STORAGE_KEY = 'learning-agent.activities.v1'
 
@@ -26,6 +26,20 @@ export function useActivity() {
     const completed = activities.value.filter((item) => item.kind === 'session-completed').length
     return Math.max(0, created - completed)
   })
+  const knownCourses = computed<KnownCourse[]>(() => {
+    const courses = new Map<string, KnownCourse>()
+    for (const activity of activities.value) {
+      if (!activity.kind.includes('course') || !activity.resourceId || courses.has(activity.resourceId)) continue
+      if (activity.status !== 'PRIVATE' && activity.status !== 'PENDING' && activity.status !== 'PUBLISHED') continue
+      courses.set(activity.resourceId, {
+        courseId: activity.resourceId,
+        courseName: activity.title,
+        courseType: activity.status,
+        updatedAt: activity.createdAt,
+      })
+    }
+    return [...courses.values()]
+  })
 
   function addActivity(record: Omit<ActivityRecord, 'id' | 'createdAt'>) {
     activities.value.unshift({
@@ -41,5 +55,5 @@ export function useActivity() {
     persist()
   }
 
-  return { activities, recentActivities, courseCount, activeSessionCount, addActivity, clearActivities }
+  return { activities, recentActivities, courseCount, activeSessionCount, knownCourses, addActivity, clearActivities }
 }

@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-浏览器访问 `http://localhost:5173`。开发环境会把 `/learning-agent` 和 `/v3` 请求代理到后端的 8080 端口。
+浏览器访问 `http://localhost:5173`。开发环境会把 `/learning-agent`、`/v3` 和后端当前使用的章节根路径请求代理到 8080 端口。
 
 ## 生产构建
 
@@ -38,18 +38,23 @@ npm run preview
 | 用户登录 | POST | `/learning-agent/user/login` |
 | 管理员分页查询用户 | GET | `/learning-agent/user/pageQuery` |
 | 创建课程 | POST | `/learning-agent/courses/createCourse` |
-| 提交课程审核 | PUT | `/learning-agent/courses/publishCourse/{courseId}` |
-| 管理员审核通过课程 | PUT | `/learning-agent/courses/passCourse/{courseId}` |
-| 管理员驳回或下架课程 | PUT | `/learning-agent/courses/rejectCourse/{courseId}` |
+| 提交课程审核 | PATCH | `/learning-agent/courses/publishCourse/{courseId}` |
+| 管理员审核通过课程 | PATCH | `/learning-agent/courses/passCourse/{courseId}` |
+| 管理员驳回或下架课程 | PATCH | `/learning-agent/courses/rejectCourse/{courseId}` |
+| 批量添加章节 | POST | `/createChapters` |
+| 查询课程章节 | GET | `/getChaptersByCourseId/{courseId}` |
+| 批量修改章节 | PUT | `/updateChapters` |
+| 批量删除章节 | DELETE | `/deleteChaptersByIds/{ids}` |
 | 创建学习会话 | POST | `/learning-agent/learning/session` |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
 
 ## 当前后端接口限制
 
-1. 没有课程列表和学习会话列表接口，因此页面不能读取数据库中的完整列表。
-2. 创建课程响应现在包含 `courseId`，前端会自动填入提交审核区域；创建学习会话响应仍没有会话 ID。
+1. 没有课程列表、课程详情和学习会话列表接口，因此页面不能读取数据库中的完整课程列表，也不能通过课程 ID 查询课程状态。
+2. 创建课程响应现在包含 `id`，前端会自动填入提交审核区域；创建学习会话响应仍没有会话 ID。
 3. 登录响应和 JWT 均包含角色信息；前端据此分流界面，后端仍通过管理员切面执行最终权限校验。
 4. 页面上的“操作记录”只保存在当前浏览器的 `localStorage`，用于反馈已成功完成的接口调用，不等同于数据库数据。
+5. 章节查询会返回排序后的章节，但不返回课程状态。前端只有在本地课程记录可以确认状态为 `PRIVATE` 时才启用拖拽。
 
 ## 认证接入说明
 
@@ -62,6 +67,7 @@ npm run preview
 - 统一登录入口：`/login`。`USER` 登录后进入用户端，`ADMIN` 登录后自动进入管理端。
 - 管理员也可直接访问 `/admin/login`；只有 `ADMIN` 账号可以进入 `/admin/users` 和 `/admin/courses`。
 - 普通用户界面不会显示管理入口、管理员接口说明或课程审核操作。
+- 用户端章节编排入口为 `/chapters`，支持按课程 ID 查询、添加、修改、删除和排序章节。
 - 管理端支持分页查看全部用户、用户名模糊搜索、角色筛选、注册时间范围筛选和每页数量切换。
 - 管理端支持按课程 ID 执行审核通过、驳回和下架。由于后端没有课程查询接口，暂不展示待审核课程列表。
 
@@ -73,3 +79,11 @@ npm run preview
 管理员审核通过：PENDING → PUBLISHED
 管理员驳回或下架：PENDING / PUBLISHED → PRIVATE
 ```
+
+## 章节排序
+
+- 新章节默认追加到末尾，`sortOrder` 从 `1000` 开始并按 `1000` 递增。
+- PRIVATE 课程支持拖拽、上移和下移。
+- 移动到两个章节之间时，新排序值为前后 `sortOrder` 的中间整数。
+- 排序空间不足、唯一索引冲突或请求失败时，前端不会保留错误顺序。
+- 章节 ID 使用雪花算法生成，前端通过无精度损失 JSON 解析并始终按字符串传递。

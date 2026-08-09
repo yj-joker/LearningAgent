@@ -57,7 +57,9 @@ export interface CourseCreatePayload {
 }
 
 export interface CourseVO {
-  courseId: ApiId
+  id: ApiId
+  /** 兼容早期后端响应，当前后端使用 id。 */
+  courseId?: ApiId
   courseName: string
   publisherId: ApiId
   difficultyLevel: number
@@ -65,6 +67,19 @@ export interface CourseVO {
   courseType: CourseType
   createdAt: string
   updatedAt: string
+}
+
+export interface ChapterPayload {
+  id?: ApiId
+  title: string
+  courseId: ApiId
+  sortOrder: number
+}
+
+export interface ChapterVO {
+  id: string
+  title: string
+  sortOrder: number
 }
 
 export interface SessionCreatePayload {
@@ -86,4 +101,12 @@ export interface ActivityRecord {
   description: string
   createdAt: string
   status: CourseType | SessionStatus
+  resourceId?: string
+}
+
+export interface KnownCourse {
+  courseId: string
+  courseName: string
+  courseType: CourseType
+  updatedAt: string
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, BookOpenText, LockKeyhole, Plus, Send, Sparkles } from 'lucide-vue-next'
 import ModalDialog from '@/components/ModalDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -65,9 +65,10 @@ async function submitCreate() {
       title: result.courseName,
       description: `难度 ${result.difficultyLevel}/5 · 新建课程为私有状态`,
       status: result.courseType,
+      resourceId: String(result.id),
     })
-    publishId.value = String(result.courseId)
-    showToast('success', '课程创建成功', `${result.courseName} 的课程 ID 是 ${result.courseId}，已自动填入审核区`)
+    publishId.value = String(result.id)
+    showToast('success', '课程创建成功', `${result.courseName} 的课程 ID 是 ${result.id}，已自动填入审核区`)
     createOpen.value = false
     resetForm()
   } catch (error) {
@@ -92,6 +93,7 @@ async function submitPublish() {
       title: result.courseName || `课程 #${id}`,
       description: `课程 #${id} 已提交审核`,
       status: result.courseType,
+      resourceId: id,
     })
     showToast('success', '提交审核成功', `${result.courseName || `课程 #${id}`} 正在等待管理员审核`)
     publishId.value = ''
@@ -134,6 +136,9 @@ async function submitPublish() {
               <h4>{{ item.title }}</h4>
               <p>{{ item.description }}</p>
               <time>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time>
+              <RouterLink v-if="item.resourceId" class="course-chapter-link" :to="`/chapters/${item.resourceId}`">
+                编辑章节 <ArrowRight :size="14" />
+              </RouterLink>
             </div>
           </article>
         </div>
@@ -165,7 +170,7 @@ async function submitPublish() {
           <Sparkles :size="20" />
           <div>
             <strong>为什么需要手动输入 ID？</strong>
-            <p>创建课程后，响应中的 <code>courseId</code> 会自动填入上方。页面刷新后仍需手动输入，因为后端暂未提供课程列表接口。</p>
+            <p>创建课程后，响应中的 <code>id</code> 会自动填入上方。页面刷新后仍需手动输入，因为后端暂未提供课程列表接口。</p>
           </div>
         </section>
       </aside>

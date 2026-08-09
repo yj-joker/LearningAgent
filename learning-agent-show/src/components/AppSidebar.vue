@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { BookOpenText, Braces, GraduationCap, LayoutDashboard, LogOut, MessageSquareText, ShieldCheck, X } from 'lucide-vue-next'
+import { BookOpenText, Braces, GraduationCap, LayoutDashboard, ListTree, LogOut, MessageSquareText, ShieldCheck, X } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
@@ -10,6 +10,7 @@ defineEmits<{ close: [] }>()
 const navItems = [
   { label: '学习概览', to: '/', icon: LayoutDashboard },
   { label: '课程管理', to: '/courses', icon: BookOpenText },
+  { label: '章节编排', to: '/chapters', icon: ListTree },
   { label: '学习会话', to: '/sessions', icon: MessageSquareText },
   { label: '接口说明', to: '/api-docs', icon: Braces },
 ]

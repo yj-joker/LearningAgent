@@ -29,7 +29,7 @@ const { isAdmin } = useAuth()
 const connection = ref<BackendState | 'checking'>('checking')
 
 const completionCount = computed(() => recentActivities.value.filter((item) => item.kind === 'session-completed').length)
-const endpointCount = computed(() => isAdmin.value ? 9 : 6)
+const endpointCount = computed(() => isAdmin.value ? 13 : 10)
 
 async function testConnection() {
   connection.value = 'checking'

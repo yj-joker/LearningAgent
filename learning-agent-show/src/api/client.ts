@@ -1,7 +1,9 @@
 import type { ApiResult } from '@/types/api'
 import { getStoredToken } from '@/utils/authStorage'
+import JSONbigFactory from 'json-bigint'
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+const JSONbig = JSONbigFactory({ storeAsString: true })
 
 export class ApiError extends Error {
   constructor(
@@ -34,9 +36,16 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const contentType = response.headers.get('content-type') ?? ''
+  const rawBody = await response.text().catch(() => '')
   const body = contentType.includes('application/json')
-    ? await response.json().catch(() => null)
-    : await response.text().catch(() => '')
+    ? (() => {
+        try {
+          return JSONbig.parse(rawBody)
+        } catch {
+          return null
+        }
+      })()
+    : rawBody
 
   if (!response.ok) {
     const message = typeof body === 'object' && body

@@ -20,6 +20,22 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/createChapters': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/getChaptersByCourseId': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/updateChapters': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/deleteChaptersByIds': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
     },
   },
 })

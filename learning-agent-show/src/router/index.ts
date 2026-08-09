@@ -17,6 +17,12 @@ const router = createRouter({
       meta: { title: '课程管理', requiresAuth: true },
     },
     {
+      path: '/chapters/:courseId?',
+      name: 'chapters',
+      component: () => import('@/views/ChaptersView.vue'),
+      meta: { title: '章节编排', requiresAuth: true },
+    },
+    {
       path: '/sessions',
       name: 'sessions',
       component: () => import('@/views/SessionsView.vue'),

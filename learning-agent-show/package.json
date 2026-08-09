@@ -11,13 +11,15 @@
   },
   "dependencies": {
     "@vueuse/core": "^13.5.0",
+    "json-bigint": "^1.0.0",
     "lucide-vue-next": "^0.525.0",
     "vue": "^3.5.17",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
-    "@vue/tsconfig": "^0.8.1",
+    "@types/json-bigint": "^1.0.4",
     "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/tsconfig": "^0.8.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.5",
     "vue-tsc": "^3.0.3"

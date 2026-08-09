@@ -969,6 +969,83 @@ textarea:focus-visible {
 .session-record p { margin: 0; color: #899590; font-size: 9px; line-height: 1.55; }
 .course-record-copy time,
 .session-record time { margin-top: 10px; color: #a2aaa7; font-size: 8px; }
+.course-chapter-link { display: inline-flex; width: fit-content; margin-top: 10px; gap: 5px; align-items: center; color: #315f55; font-size: 9px; font-weight: 700; }
+.course-chapter-link:hover { color: #193e36; }
+
+/* Chapter workspace */
+.chapter-page-heading { align-items: center; }
+.chapter-course-picker { width: min(430px, 100%); padding: 15px 17px; background: #fff; border: 1px solid #dfe6df; border-radius: 13px; box-shadow: 0 8px 24px rgba(28, 59, 54, 0.04); }
+.chapter-course-picker label { display: block; margin-bottom: 7px; color: #687873; font-size: 9px; font-weight: 700; }
+.chapter-course-picker > div { display: flex; gap: 8px; }
+.chapter-course-picker input { min-width: 0; flex: 1; padding: 0 12px; color: #263b37; background: #f9fbf8; border: 1px solid #dce4dc; border-radius: 9px; outline: none; font-size: 10px; }
+.chapter-course-picker input:focus { background: #fff; border-color: #93ad9e; box-shadow: 0 0 0 3px rgba(69, 115, 97, 0.08); }
+.chapter-course-picker .button { min-height: 41px; padding-inline: 14px; white-space: nowrap; }
+
+.known-course-strip { display: flex; margin: 2px 0 20px; padding: 0 2px; gap: 8px; align-items: center; overflow-x: auto; }
+.known-course-strip > span { margin-right: 3px; color: #89958f; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.known-course-strip > button { display: flex; min-height: 36px; padding: 6px 9px 6px 12px; gap: 9px; align-items: center; color: #5f706a; background: rgba(255, 255, 255, 0.68); border: 1px solid #dfe5df; border-radius: 9px; cursor: pointer; font-size: 9px; font-weight: 650; white-space: nowrap; }
+.known-course-strip > button:hover,
+.known-course-strip > button.active { color: #234a40; background: #fff; border-color: #bfcfc4; }
+.known-course-strip .status-badge { padding: 3px 6px; font-size: 7px; }
+
+.chapter-workspace { min-height: 420px; }
+.chapter-workspace > .empty-state { min-height: 390px; border-top: 1px solid #dfe5df; border-bottom: 1px solid #dfe5df; }
+.chapter-loading { display: flex; min-height: 360px; gap: 10px; align-items: center; justify-content: center; color: #7e8e88; font-size: 10px; }
+.chapter-load-error { display: flex; min-height: 230px; padding: 35px; gap: 14px; align-items: center; justify-content: center; background: #fff9f6; border-top: 1px solid #eddcd5; border-bottom: 1px solid #eddcd5; }
+.chapter-load-error > span { display: grid; width: 46px; height: 46px; flex: 0 0 auto; place-items: center; color: #aa6657; background: #f6e5df; border-radius: 12px; }
+.chapter-load-error > div { max-width: 440px; }
+.chapter-load-error strong { color: #704a42; font-size: 11px; }
+.chapter-load-error p { margin: 5px 0 0; color: #a0776e; font-size: 9px; line-height: 1.6; }
+.chapter-load-error .button { margin-left: 15px; }
+
+.chapter-workspace-header { display: flex; min-height: 94px; padding: 17px 20px; gap: 20px; align-items: center; justify-content: space-between; background: #fff; border-top: 1px solid #dfe5df; border-bottom: 1px solid #dfe5df; }
+.chapter-course-identity { display: flex; min-width: 0; gap: 12px; align-items: center; }
+.chapter-course-identity > span { display: grid; width: 48px; height: 48px; flex: 0 0 auto; place-items: center; color: #315e53; background: #e5f1e8; border-radius: 12px; }
+.chapter-course-identity > div { display: grid; min-width: 0; }
+.chapter-course-identity small { color: #92a09a; font-size: 8px; font-weight: 700; }
+.chapter-course-identity h3 { overflow: hidden; margin: 3px 0; color: #243c36; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-course-identity code { color: #84918c; font-size: 8px; }
+.chapter-workspace-actions { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
+.chapter-status-unknown { padding: 6px 9px; color: #77746e; background: #f2f0ea; border: 1px solid #e4e0d8; border-radius: 999px; font-size: 8px; font-weight: 700; }
+
+.chapter-order-notice { display: flex; min-height: 43px; padding: 10px 18px; gap: 8px; align-items: center; color: #3c6b5e; background: #ecf5ef; border-bottom: 1px solid #dce8df; }
+.chapter-order-notice.locked { color: #7d7568; background: #f5f1e9; border-color: #e7e0d4; }
+.chapter-order-notice p { margin: 0; font-size: 9px; line-height: 1.5; }
+
+.chapter-list { display: grid; padding: 18px 0 0; gap: 9px; }
+.chapter-list.is-ordering { pointer-events: none; opacity: 0.78; }
+.chapter-row { position: relative; display: grid; min-height: 88px; padding: 13px 14px 13px 9px; gap: 13px; align-items: center; grid-template-columns: 35px 43px minmax(0, 1fr) auto; background: #fff; border: 1px solid #e0e6e0; border-radius: 12px; box-shadow: 0 7px 20px rgba(28, 59, 54, 0.035); transition: border-color 150ms ease, transform 150ms ease; }
+.chapter-row:hover { border-color: #c9d6cc; }
+.chapter-row.drop-before::before,
+.chapter-row.drop-after::after { position: absolute; right: 8px; left: 8px; height: 3px; content: ''; background: #4e8b75; border-radius: 3px; }
+.chapter-row.drop-before::before { top: -6px; }
+.chapter-row.drop-after::after { bottom: -6px; }
+.chapter-drag-handle { display: grid; width: 34px; height: 42px; padding: 0; place-items: center; color: #789088; background: transparent; border: 0; border-radius: 8px; cursor: grab; }
+.chapter-drag-handle:hover { color: #315e53; background: #edf4ef; }
+.chapter-drag-handle:active { cursor: grabbing; }
+.chapter-drag-handle.disabled { color: #bdc4bf; cursor: not-allowed; }
+.chapter-drag-handle.disabled:hover { background: transparent; }
+.chapter-index { display: grid; width: 43px; height: 43px; place-items: center; color: #315e53; background: #e5f0e7; border-radius: 11px; font-size: 11px; font-weight: 800; }
+.chapter-row-copy { min-width: 0; }
+.chapter-row-copy small { color: #9aa59f; font-size: 7px; font-weight: 800; letter-spacing: 1px; }
+.chapter-row-copy h4 { overflow: hidden; margin: 4px 0; color: #2a403a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-row-copy p { margin: 0; color: #8b9792; font-size: 8px; }
+.chapter-row-copy code { color: #687b74; }
+.chapter-row-actions { display: flex; gap: 5px; align-items: center; }
+.chapter-row-actions button { display: grid; width: 33px; height: 33px; padding: 0; place-items: center; color: #63766f; background: #f8faf8; border: 1px solid #e1e7e1; border-radius: 8px; cursor: pointer; }
+.chapter-row-actions button:hover:not(:disabled) { color: #2e5b50; background: #fff; border-color: #bdcec2; }
+.chapter-row-actions button.danger:hover:not(:disabled) { color: #a45549; background: #fff6f3; border-color: #ebcbc4; }
+.chapter-row-actions button:disabled { cursor: not-allowed; opacity: 0.32; }
+
+.chapter-sort-preview { display: flex; padding: 13px 14px; gap: 10px; align-items: center; color: #4c6d63; background: #f1f6f2; border: 1px solid #e0e9e1; border-radius: 10px; }
+.chapter-sort-preview > div { display: grid; }
+.chapter-sort-preview small { color: #8b9993; font-size: 8px; }
+.chapter-sort-preview strong { margin-top: 2px; color: #38594f; font-size: 11px; }
+.delete-chapter-confirm { display: flex; padding: 15px; gap: 12px; align-items: flex-start; color: #83574f; background: #fff5f2; border: 1px solid #efd9d3; border-radius: 10px; }
+.delete-chapter-confirm > span { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; background: #f5dfda; border-radius: 10px; }
+.delete-chapter-confirm p { margin: 0; font-size: 9px; line-height: 1.7; }
+.chapter-delete-button { color: #fff; background: #a85e52; border: 1px solid #a85e52; }
+.chapter-delete-button:hover:not(:disabled) { background: #954e44; }
 
 .side-stack { display: grid; height: fit-content; gap: 14px; }
 
@@ -1282,6 +1359,7 @@ textarea::placeholder { color: #aeb6b3; }
   display: flex;
   padding: 3px;
   gap: 2px;
+  flex-wrap: wrap;
   background: #f2f5f1;
   border-radius: 9px;
 }
@@ -1337,6 +1415,8 @@ textarea::placeholder { color: #aeb6b3; }
 .method-post { color: #277151; background: #def1e4; }
 .method-put { color: #7d682e; background: #f7edc8; }
 .method-get { color: #2f6686; background: #deedf6; }
+.method-patch { color: #76589a; background: #ece4f7; }
+.method-delete { color: #98564d; background: #f7e2dd; }
 
 .endpoint-main { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .endpoint-main strong { color: #3d514c; font-size: 11px; }
@@ -1941,6 +2021,14 @@ textarea::placeholder { color: #aeb6b3; }
 }
 
 @media (max-width: 720px) {
+  .chapter-course-picker { width: 100%; }
+  .chapter-workspace-header { align-items: flex-start; flex-direction: column; }
+  .chapter-workspace-actions { width: 100%; flex-wrap: wrap; }
+  .chapter-workspace-actions .button-primary { margin-left: auto; }
+  .chapter-row { grid-template-columns: 30px 39px minmax(0, 1fr); }
+  .chapter-row-actions { grid-column: 2 / -1; justify-content: flex-end; }
+  .chapter-load-error { align-items: flex-start; flex-direction: column; }
+  .chapter-load-error .button { width: 100%; margin-left: 0; }
   .admin-content { padding: 23px 15px 40px; }
   .admin-page-heading { align-items: flex-start; flex-direction: column; }
   .admin-refresh-button { width: 100%; }
@@ -1970,6 +2058,17 @@ textarea::placeholder { color: #aeb6b3; }
 }
 
 @media (max-width: 480px) {
+  .chapter-course-picker > div { align-items: stretch; flex-direction: column; }
+  .chapter-course-picker input { min-height: 42px; }
+  .chapter-workspace-header { padding-inline: 14px; }
+  .chapter-course-identity > span { width: 42px; height: 42px; }
+  .chapter-workspace-actions .status-badge,
+  .chapter-status-unknown { order: 3; }
+  .chapter-workspace-actions .button-primary { flex: 1; margin-left: 0; }
+  .chapter-order-notice { align-items: flex-start; }
+  .chapter-list { padding-top: 12px; }
+  .chapter-row { padding-right: 9px; gap: 9px; }
+  .chapter-row-actions button { width: 36px; height: 36px; }
   .admin-filter-form { grid-template-columns: 1fr; }
   .admin-search-field { grid-column: auto; }
   .admin-search-button,

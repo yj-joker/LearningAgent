@@ -5,7 +5,7 @@ import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 
 interface Endpoint {
-  method: 'GET' | 'POST' | 'PUT'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path: string
   title: string
   description: string
@@ -18,7 +18,7 @@ interface Endpoint {
 const { showToast } = useToast()
 const { isAdmin } = useAuth()
 const openPath = ref<string | null>('/learning-agent/user/register')
-const filter = ref<'ALL' | 'GET' | 'POST' | 'PUT'>('ALL')
+const filter = ref<'ALL' | 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>('ALL')
 
 const endpoints: Endpoint[] = [
   {
@@ -101,7 +101,7 @@ const endpoints: Endpoint[] = [
   "code": "200",
   "message": "OK",
   "data": {
-    "courseId": 1001,
+    "id": 1001,
     "courseName": "Java 并发编程",
     "publisherId": 2001,
     "difficultyLevel": 4,
@@ -111,10 +111,10 @@ const endpoints: Endpoint[] = [
     "updatedAt": "2026-07-28T16:00:00"
   }
 }`,
-    notes: ['新课程的 courseType 固定为 PRIVATE，客户端不能指定', 'difficultyLevel 的数据库约束为 1～5', '响应包含后续提交审核需要的 courseId'],
+    notes: ['新课程的 courseType 固定为 PRIVATE，客户端不能指定', 'difficultyLevel 的数据库约束为 1～5', '响应包含后续提交审核需要的 id'],
   },
   {
-    method: 'PUT',
+    method: 'PATCH',
     path: '/learning-agent/courses/publishCourse/{courseId}',
     title: '提交课程审核',
     description: '将当前用户拥有的 PRIVATE 课程提交为 PENDING，等待管理员审核。',
@@ -129,7 +129,81 @@ const endpoints: Endpoint[] = [
     notes: ['courseId 通过路径参数传递', '课程必须存在且属于当前用户', '只有 PRIVATE 状态可以提交审核'],
   },
   {
+    method: 'POST',
+    path: '/createChapters',
+    title: '批量添加章节',
+    description: '向同一门课程添加一个或多个章节，标题和排序值在课程内必须唯一。',
+    body: `[
+  {
+    "title": "线程与并发基础",
+    "courseId": 1001,
+    "sortOrder": 1000
+  }
+]`,
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": [{
+    "id": 1990000000000000001,
+    "title": "线程与并发基础",
+    "sortOrder": 1000
+  }]
+}`,
+    notes: ['请求体必须是数组', '同一批章节必须属于同一课程', '章节 ID 是雪花 ID，前端按字符串保存', '课程所有者才可以添加章节'],
+  },
+  {
+    method: 'GET',
+    path: '/getChaptersByCourseId/{courseId}',
+    title: '查询课程章节',
+    description: '获取指定课程的章节列表，后端按照 sort_order 升序返回。',
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": [
+    { "id": 1990000000000000001, "title": "基础", "sortOrder": 1000 },
+    { "id": 1990000000000000002, "title": "进阶", "sortOrder": 2000 }
+  ]
+}`,
+    notes: ['课程所有者才可以查询', '返回数据不包含 courseId 和课程状态', '前端不能据此判断课程是否为 PRIVATE'],
+  },
+  {
     method: 'PUT',
+    path: '/updateChapters',
+    title: '批量修改章节',
+    description: '修改同一门课程中的章节标题或 sortOrder，拖拽排序也使用该接口。',
+    body: `[
+  {
+    "id": 1990000000000000002,
+    "title": "进阶",
+    "id": 1001,
+    "sortOrder": 1500
+  }
+]`,
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": [{
+    "id": 1990000000000000002,
+    "title": "进阶",
+    "sortOrder": 1500
+  }]
+}`,
+    notes: ['请求体必须是数组', 'id、title、courseId、sortOrder 都需要传递', '排序位置冲突时应刷新列表后重试'],
+  },
+  {
+    method: 'DELETE',
+    path: '/deleteChaptersByIds/{ids}',
+    title: '批量删除章节',
+    description: '根据逗号分隔的章节 ID 删除同一课程中的一个或多个章节。',
+    response: `{
+  "code": "200",
+  "message": "OK",
+  "data": null
+}`,
+    notes: ['示例路径：/deleteChaptersByIds/101,102', '章节必须存在且属于当前用户的同一课程', '当前后端尚未实现章节下知识点的级联删除'],
+  },
+  {
+    method: 'PATCH',
     path: '/learning-agent/courses/passCourse/{courseId}',
     title: '管理员审核通过课程',
     description: '管理员将 PENDING 课程更新为 PUBLISHED；只有 PUBLISHED 课程可被其他学习者访问。',
@@ -138,14 +212,14 @@ const endpoints: Endpoint[] = [
   "code": "200",
   "message": "OK",
   "data": {
-    "courseId": 1001,
+    "id": 1001,
     "courseType": "PUBLISHED"
   }
 }`,
     notes: ['需要 ADMIN 角色', '只有 PENDING 状态可以审核通过'],
   },
   {
-    method: 'PUT',
+    method: 'PATCH',
     path: '/learning-agent/courses/rejectCourse/{courseId}',
     title: '管理员驳回或下架课程',
     description: '管理员可将 PENDING 课程驳回，或将 PUBLISHED 课程下架，目标状态均为 PRIVATE。',
@@ -154,7 +228,7 @@ const endpoints: Endpoint[] = [
   "code": "200",
   "message": "OK",
   "data": {
-    "courseId": 1001,
+    "id": 1001,
     "courseType": "PRIVATE"
   }
 }`,
@@ -231,7 +305,7 @@ async function copyText(value: string) {
         <div class="panel-header api-panel-header">
           <div><span class="section-kicker">ENDPOINTS</span><h3>当前角色可用接口</h3></div>
           <div class="filter-tabs">
-            <button v-for="value in ['ALL', 'GET', 'POST', 'PUT'] as const" :key="value" :class="{ active: filter === value }" @click="filter = value">
+            <button v-for="value in ['ALL', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const" :key="value" :class="{ active: filter === value }" @click="filter = value">
               {{ value === 'ALL' ? '全部' : value }}
             </button>
           </div>
@@ -274,7 +348,7 @@ async function copyText(value: string) {
         </section>
         <section class="insight-card warning-card">
           <Info :size="20" />
-          <div><strong>接口限制</strong><p>当前没有课程/会话查询接口。工作台仅展示本浏览器记录的成功操作，不代表完整数据库数据。</p></div>
+          <div><strong>接口限制</strong><p>当前没有课程详情和会话查询接口；章节接口也不返回课程状态。课程状态只能根据本浏览器已完成的课程操作判断。</p></div>
         </section>
       </aside>
     </div>
