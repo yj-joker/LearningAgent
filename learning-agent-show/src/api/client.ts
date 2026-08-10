@@ -32,7 +32,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     })
   } catch {
-    throw new ApiError('无法连接后端服务，请确认 Spring Boot 已在 8080 端口启动')
+    throw new ApiError('服务暂时不可用，请稍后重试')
   }
 
   const contentType = response.headers.get('content-type') ?? ''
@@ -48,32 +48,18 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     : rawBody
 
   if (!response.ok) {
-    const message = typeof body === 'object' && body
-      ? body.message ?? body.detail ?? `请求失败（HTTP ${response.status}）`
-      : `请求失败（HTTP ${response.status}）`
+    const message = response.status >= 500
+      ? '服务暂时不可用，请稍后重试'
+      : typeof body === 'object' && body
+        ? body.message ?? body.detail ?? '请求未完成，请检查后重试'
+        : '请求未完成，请检查后重试'
     throw new ApiError(message, response.status)
   }
 
   const result = body as ApiResult<T>
   if (!result || result.code !== '200') {
-    throw new ApiError(result?.message || '后端返回了未知错误', response.status, result?.code)
+    throw new ApiError(result?.message || '服务返回了未知错误', response.status, result?.code)
   }
 
   return result.data
-}
-
-export type BackendState = 'online' | 'degraded' | 'offline'
-
-export async function checkBackend(): Promise<BackendState> {
-  try {
-    const response = await fetch(`${API_BASE_URL}/v3/api-docs`, {
-      headers: {
-        Accept: 'application/json',
-        ...(getStoredToken() ? { Authorization: `Bearer ${getStoredToken()}` } : {}),
-      },
-    })
-    return response.ok ? 'online' : 'degraded'
-  } catch {
-    return 'offline'
-  }
 }

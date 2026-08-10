@@ -5,6 +5,7 @@ import { ArrowRight, Eye, EyeOff, LockKeyhole, UserRound } from 'lucide-vue-next
 import AuthShell from '@/components/AuthShell.vue'
 import { ApiError } from '@/api/client'
 import { useAuth } from '@/composables/useAuth'
+import { usePasswordVisibility } from '@/composables/usePasswordVisibility'
 import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
@@ -18,7 +19,7 @@ const form = reactive({
 })
 const errors = reactive({ username: '', password: '' })
 const submitting = ref(false)
-const passwordVisible = ref(false)
+const { passwordVisible, togglePasswordVisibility } = usePasswordVisibility()
 const registeredNotice = ref(route.query.registered === '1')
 
 function validate() {
@@ -46,7 +47,7 @@ async function submit() {
     }
   } catch (error) {
     const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '发生未知错误'
-    showToast('error', message.includes('未登录') ? '后端登录白名单未同步' : '登录失败', message.includes('未登录') ? '请将 /learning-agent/user/login 加入 LoginInterceptor 的排除路径。' : message)
+    showToast('error', '登录失败', message)
   } finally {
     submitting.value = false
   }
@@ -72,7 +73,7 @@ async function submit() {
         <div class="auth-input-wrap">
           <LockKeyhole :size="18" />
           <input id="login-password" v-model="form.password" :type="passwordVisible ? 'text' : 'password'" autocomplete="current-password" placeholder="输入密码" @input="errors.password = ''">
-          <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" @click="passwordVisible = !passwordVisible">
+          <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏输入内容' : '显示输入内容'" :aria-pressed="passwordVisible" @mousedown.prevent @click.stop="togglePasswordVisibility">
             <EyeOff v-if="passwordVisible" :size="17" /><Eye v-else :size="17" />
           </button>
         </div>
@@ -83,6 +84,6 @@ async function submit() {
       </button>
     </form>
     <p class="auth-switch">还没有账号？ <RouterLink to="/register">创建一个新账号 <ArrowRight :size="14" /></RouterLink></p>
-    <p class="auth-footnote">登录后，课程和学习会话接口会自动携带 JWT 身份凭证。</p>
+    <p class="auth-footnote">请勿在公共设备上保存登录信息。</p>
   </AuthShell>
 </template>

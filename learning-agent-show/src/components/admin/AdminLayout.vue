@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { ArrowUpRight, BookCheck, GraduationCap, LogOut, PanelLeftClose, ShieldCheck, UsersRound } from 'lucide-vue-next'
+import { GraduationCap, LogOut, PanelLeftClose, ShieldCheck, UsersRound } from 'lucide-vue-next'
 import { ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 
@@ -30,16 +30,9 @@ function signOut() {
         <RouterLink to="/admin/users" @click="menuOpen = false">
           <UsersRound :size="18" /><span>用户管理</span><i v-if="route.path === '/admin/users'" />
         </RouterLink>
-        <RouterLink to="/admin/courses" @click="menuOpen = false">
-          <BookCheck :size="18" /><span>课程审核</span><i v-if="route.path === '/admin/courses'" />
-        </RouterLink>
       </nav>
 
       <div class="admin-sidebar-spacer" />
-      <RouterLink class="admin-user-app-link" to="/">
-        <span><ArrowUpRight :size="17" /></span>
-        <div><strong>进入用户端</strong><small>查看学习工作台</small></div>
-      </RouterLink>
       <div class="admin-profile">
         <span class="admin-avatar"><ShieldCheck :size="18" /></span>
         <div><strong>{{ currentUser?.username || '管理员' }}</strong><small>系统管理员</small></div>

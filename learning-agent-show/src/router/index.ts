@@ -8,31 +8,25 @@ const router = createRouter({
       path: '/',
       name: 'dashboard',
       component: () => import('@/views/DashboardView.vue'),
-      meta: { title: '概览', requiresAuth: true },
+      meta: { title: '概览', requiresUser: true },
     },
     {
       path: '/courses',
       name: 'courses',
       component: () => import('@/views/CoursesView.vue'),
-      meta: { title: '课程管理', requiresAuth: true },
+      meta: { title: '课程管理', requiresUser: true },
     },
     {
       path: '/chapters/:courseId?',
       name: 'chapters',
       component: () => import('@/views/ChaptersView.vue'),
-      meta: { title: '章节编排', requiresAuth: true },
+      meta: { title: '章节编排', requiresUser: true },
     },
     {
       path: '/sessions',
       name: 'sessions',
       component: () => import('@/views/SessionsView.vue'),
-      meta: { title: '学习会话', requiresAuth: true },
-    },
-    {
-      path: '/api-docs',
-      name: 'api-docs',
-      component: () => import('@/views/ApiDocsView.vue'),
-      meta: { title: '接口说明', requiresAuth: true },
+      meta: { title: '学习会话', requiresUser: true },
     },
     {
       path: '/login',
@@ -63,12 +57,6 @@ const router = createRouter({
       component: () => import('@/views/admin/AdminUsersView.vue'),
       meta: { title: '用户管理', requiresAdmin: true },
     },
-    {
-      path: '/admin/courses',
-      name: 'admin-courses',
-      component: () => import('@/views/admin/AdminCoursesView.vue'),
-      meta: { title: '课程审核', requiresAdmin: true },
-    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),
@@ -88,8 +76,13 @@ router.beforeEach((to) => {
       return { name: 'admin-login', query: { denied: '1', redirect: to.fullPath } }
     }
   }
-  if (to.meta.requiresAuth && !isAuthenticated.value) {
-    return { name: 'login', query: { redirect: to.fullPath } }
+  if (to.meta.requiresUser) {
+    if (!isAuthenticated.value) {
+      return { name: 'login', query: { redirect: to.fullPath } }
+    }
+    if (isAdmin.value) {
+      return { name: 'admin-users' }
+    }
   }
   if (to.name === 'admin-login' && isAdmin.value) {
     return { name: 'admin-users' }

@@ -1,24 +1,49 @@
 import { computed, ref } from 'vue'
 import type { ActivityRecord, KnownCourse } from '@/types/api'
+import { readStoredUser } from '@/utils/authStorage'
 
-const STORAGE_KEY = 'learning-agent.activities.v1'
+const LEGACY_STORAGE_KEY = 'learning-agent.activities.v1'
+const STORAGE_PREFIX = 'learning-agent.activities.v2'
 
-function loadActivities(): ActivityRecord[] {
+function currentOwner() {
+  return readStoredUser()?.username || 'guest'
+}
+
+function storageKey(owner: string) {
+  return `${STORAGE_PREFIX}.${encodeURIComponent(owner)}`
+}
+
+function loadActivities(owner: string): ActivityRecord[] {
   try {
-    const value = localStorage.getItem(STORAGE_KEY)
+    let value = localStorage.getItem(storageKey(owner))
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (!value && legacy && owner !== 'guest') {
+      value = legacy
+      localStorage.setItem(storageKey(owner), legacy)
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
+    }
     return value ? JSON.parse(value) as ActivityRecord[] : []
   } catch {
     return []
   }
 }
 
-const activities = ref<ActivityRecord[]>(loadActivities())
+let activityOwner = currentOwner()
+const activities = ref<ActivityRecord[]>(loadActivities(activityOwner))
+
+function syncOwner() {
+  const owner = currentOwner()
+  if (owner === activityOwner) return
+  activityOwner = owner
+  activities.value = loadActivities(activityOwner)
+}
 
 function persist() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(activities.value.slice(0, 30)))
+  localStorage.setItem(storageKey(activityOwner), JSON.stringify(activities.value.slice(0, 30)))
 }
 
 export function useActivity() {
+  syncOwner()
   const recentActivities = computed(() => activities.value.slice(0, 6))
   const courseCount = computed(() => activities.value.filter((item) => item.kind === 'course-created').length)
   const activeSessionCount = computed(() => {

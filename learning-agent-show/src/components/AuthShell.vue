@@ -1,37 +1,22 @@
 <script setup lang="ts">
-import { BookOpenText, Check, GraduationCap, Lightbulb, Sparkles } from 'lucide-vue-next'
+import { GraduationCap, ShieldCheck } from 'lucide-vue-next'
 
-defineProps<{
-  title: string
-  eyebrow: string
-  description: string
-}>()
+defineProps<{ title: string; eyebrow: string; description: string }>()
 </script>
 
 <template>
   <div class="auth-page">
     <section class="auth-brand-panel">
-      <div class="auth-brand-top">
-        <RouterLink class="brand auth-brand" to="/">
-          <span class="brand-mark"><GraduationCap :size="25" :stroke-width="2.2" /></span>
-          <span><strong>Learning</strong><small>AGENT</small></span>
-        </RouterLink>
-        <span class="auth-version">WORKSPACE 1.0</span>
-      </div>
+      <RouterLink class="brand auth-brand" to="/">
+        <span class="brand-mark"><GraduationCap :size="24" :stroke-width="2.2" /></span>
+        <span><strong>Learning Agent</strong><small>LEARNING WORKSPACE</small></span>
+      </RouterLink>
       <div class="auth-brand-copy">
-        <span class="hero-kicker"><Sparkles :size="14" /> LEARN WITH INTENTION</span>
-        <h1>把好奇心，<br><em>变成看得见的进步。</em></h1>
-        <p>为每个学习目标建立一条清晰路径，从今天开始持续构建你的知识地图。</p>
+        <span>学习工作台</span>
+        <h1>整理课程，<br>保持学习节奏。</h1>
+        <p>在同一个空间管理课程、章节和学习记录。</p>
       </div>
-      <div class="auth-brand-art" aria-hidden="true">
-        <div class="auth-orbit auth-orbit-one" />
-        <div class="auth-orbit auth-orbit-two" />
-        <div class="auth-art-card"><BookOpenText :size="43" /><span>持续学习</span></div>
-        <span class="auth-art-spark spark-a">✦</span>
-        <span class="auth-art-spark spark-b">✦</span>
-        <div class="auth-art-note"><Check :size="13" /> 今天也有进步</div>
-      </div>
-      <div class="auth-tip"><Lightbulb :size="15" /><span>每一次专注，都会让下一个问题变得更容易。</span></div>
+      <div class="auth-tip"><ShieldCheck :size="16" /><span>账号凭证仅用于登录和身份验证</span></div>
     </section>
 
     <section class="auth-form-panel">

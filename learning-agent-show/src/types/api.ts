@@ -83,7 +83,7 @@ export interface ChapterVO {
 }
 
 export interface SessionCreatePayload {
-  courseId: number
+  courseId: ApiId
   sessionTitle: string
 }
 

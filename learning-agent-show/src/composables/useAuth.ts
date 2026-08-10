@@ -18,13 +18,13 @@ export function useAuth() {
 
   async function login(credentials: UserCredentials) {
     const user = await loginUser(credentials)
-    if (!user.token) throw new Error('登录响应中没有返回 token，请检查后端配置')
+    if (!user.token) throw new Error('登录暂时无法完成，请稍后重试')
     return saveAuthenticatedUser(user)
   }
 
   async function loginAdmin(credentials: UserCredentials) {
     const user = await loginUser(credentials)
-    if (!user.token) throw new Error('登录响应中没有返回 token，请检查后端配置')
+    if (!user.token) throw new Error('登录暂时无法完成，请稍后重试')
     const role = readRoleFromToken(user.token)
     if (role !== 'ADMIN') throw new Error('该账号不是管理员账号')
     return saveAuthenticatedUser(user)

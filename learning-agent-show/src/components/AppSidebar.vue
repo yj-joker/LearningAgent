@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { BookOpenText, Braces, GraduationCap, LayoutDashboard, ListTree, LogOut, MessageSquareText, ShieldCheck, X } from 'lucide-vue-next'
+import { BookOpenText, GraduationCap, LayoutDashboard, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
@@ -12,11 +12,10 @@ const navItems = [
   { label: '课程管理', to: '/courses', icon: BookOpenText },
   { label: '章节编排', to: '/chapters', icon: ListTree },
   { label: '学习会话', to: '/sessions', icon: MessageSquareText },
-  { label: '接口说明', to: '/api-docs', icon: Braces },
 ]
 
 const router = useRouter()
-const { currentUser, isAdmin, logout } = useAuth()
+const { currentUser, logout } = useAuth()
 
 function signOut() {
   logout()
@@ -54,23 +53,10 @@ function signOut() {
         <component :is="item.icon" :size="19" />
         <span>{{ item.label }}</span>
       </RouterLink>
-      <RouterLink v-if="isAdmin" to="/admin/users" @click="$emit('close')">
-        <ShieldCheck :size="19" />
-        <span>管理控制台</span>
-      </RouterLink>
     </nav>
 
     <div class="sidebar-spacer" />
-    <div class="sidebar-tip">
-      <div class="tip-illustration">
-        <span class="tip-dot dot-one" />
-        <span class="tip-dot dot-two" />
-        <BookOpenText :size="31" />
-      </div>
-      <strong>循序渐进</strong>
-      <p>把每一次学习，都变成看得见的进步。</p>
-      <RouterLink to="/courses" @click="$emit('close')">创建新课程</RouterLink>
-    </div>
+    <RouterLink class="sidebar-create-link" to="/courses?create=1" @click="$emit('close')"><Plus :size="17" /> 创建课程</RouterLink>
 
     <div class="sidebar-footer">
       <span class="avatar">{{ currentUser?.username?.slice(0, 2).toUpperCase() || 'LA' }}</span>

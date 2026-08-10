@@ -16,10 +16,6 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
-      '/v3': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-      },
       '/createChapters': {
         target: 'http://localhost:8080',
         changeOrigin: true,

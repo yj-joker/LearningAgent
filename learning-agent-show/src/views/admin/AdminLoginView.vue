@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { ArrowLeft, ArrowRight, Eye, EyeOff, GraduationCap, KeyRound, LockKeyhole, ShieldCheck, UserRound } from 'lucide-vue-next'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowRight, Eye, EyeOff, GraduationCap, KeyRound, LockKeyhole, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
 import { useAuth } from '@/composables/useAuth'
+import { usePasswordVisibility } from '@/composables/usePasswordVisibility'
 import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
@@ -13,7 +14,7 @@ const { showToast } = useToast()
 const form = reactive({ username: '', password: '' })
 const errors = reactive({ username: '', password: '' })
 const submitting = ref(false)
-const passwordVisible = ref(false)
+const { passwordVisible, togglePasswordVisibility } = usePasswordVisibility()
 
 function validate() {
   errors.username = form.username.trim() ? '' : '请输入管理员用户名'
@@ -50,8 +51,6 @@ async function submit() {
         <h1>专注管理，<br><em>让学习平台稳定生长。</em></h1>
         <p>统一查看用户、筛选账号并掌握平台用户构成。</p>
       </div>
-      <div class="admin-login-grid" aria-hidden="true"><span /><span /><span /><span /><span /><span /></div>
-      <RouterLink class="admin-back-link" to="/login"><ArrowLeft :size="15" /> 返回用户端登录</RouterLink>
     </section>
 
     <section class="admin-login-form-panel">
@@ -59,7 +58,7 @@ async function submit() {
         <span class="admin-form-icon"><KeyRound :size="24" /></span>
         <span class="section-kicker">ADMINISTRATOR</span>
         <h2>管理员登录</h2>
-        <p>请使用具有 ADMIN 角色的账号登录管理控制台。</p>
+        <p>请使用管理员账号登录。</p>
         <div v-if="route.query.denied === '1'" class="admin-denied-notice">当前账号没有管理员权限，请更换管理员账号。</div>
         <form class="auth-form" @submit.prevent="submit">
           <div class="auth-field">
@@ -72,13 +71,13 @@ async function submit() {
             <div class="auth-input-wrap">
               <LockKeyhole :size="18" />
               <input id="admin-password" v-model="form.password" :type="passwordVisible ? 'text' : 'password'" autocomplete="current-password" placeholder="输入管理员密码" @input="errors.password = ''">
-              <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" @click="passwordVisible = !passwordVisible"><EyeOff v-if="passwordVisible" :size="17" /><Eye v-else :size="17" /></button>
+              <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏输入内容' : '显示输入内容'" :aria-pressed="passwordVisible" @mousedown.prevent @click.stop="togglePasswordVisibility"><EyeOff v-if="passwordVisible" :size="17" /><Eye v-else :size="17" /></button>
             </div>
             <span v-if="errors.password" class="field-error">{{ errors.password }}</span>
           </div>
           <button class="button admin-login-submit" :disabled="submitting">{{ submitting ? '身份验证中…' : '进入管理控制台' }} <ArrowRight v-if="!submitting" :size="17" /></button>
         </form>
-        <p class="admin-login-note"><ShieldCheck :size="13" /> 前端路由校验仅用于页面导航，后端仍会独立验证管理员权限。</p>
+        <p class="admin-login-note"><ShieldCheck :size="13" /> 管理员账号仅可进入管理端。</p>
       </div>
     </section>
   </div>

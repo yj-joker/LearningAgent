@@ -4,9 +4,9 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowRight,
   BookOpenText,
+  ChevronLeft,
   CircleAlert,
   GripVertical,
-  ListTree,
   LockKeyhole,
   Pencil,
   Plus,
@@ -30,7 +30,6 @@ const router = useRouter()
 const { knownCourses } = useActivity()
 const { showToast } = useToast()
 
-const courseIdInput = ref('')
 const chapters = ref<ChapterVO[]>([])
 const loading = ref(false)
 const loaded = ref(false)
@@ -60,23 +59,19 @@ const activeCourseId = computed(() => {
 })
 const knownCourse = computed(() => knownCourses.value.find((course) => course.courseId === activeCourseId.value) ?? null)
 const courseStatus = computed(() => knownCourse.value?.courseType ?? null)
-const courseName = computed(() => knownCourse.value?.courseName || (activeCourseId.value ? `课程 #${activeCourseId.value}` : '未选择课程'))
+const courseName = computed(() => knownCourse.value?.courseName || '未选择课程')
 const canReorder = computed(() => loaded.value && courseStatus.value === 'PRIVATE' && !ordering.value)
 const sortedChapters = computed(() => [...chapters.value].sort((a, b) => a.sortOrder - b.sortOrder))
-
-function isValidId(value: string) {
-  return /^[1-9]\d*$/.test(value)
-}
 
 function apiErrorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback
 }
 
-async function loadChapters(courseId = activeCourseId.value) {
-  if (!isValidId(courseId)) {
+async function loadChapters() {
+  const course = knownCourse.value
+  if (!course) {
     loaded.value = false
     chapters.value = []
-    loadError.value = '请输入有效的正整数课程 ID'
     return
   }
 
@@ -84,7 +79,7 @@ async function loadChapters(courseId = activeCourseId.value) {
   loaded.value = false
   loadError.value = ''
   try {
-    chapters.value = (await getChaptersByCourseId(courseId)).sort((a, b) => a.sortOrder - b.sortOrder)
+    chapters.value = (await getChaptersByCourseId(course.courseId)).sort((a, b) => a.sortOrder - b.sortOrder)
     loaded.value = true
   } catch (error) {
     chapters.value = []
@@ -94,15 +89,8 @@ async function loadChapters(courseId = activeCourseId.value) {
   }
 }
 
-async function openCourse(courseId = courseIdInput.value) {
-  const value = courseId.trim()
-  if (!isValidId(value)) {
-    loadError.value = '请输入有效的正整数课程 ID'
-    return
-  }
-  courseIdInput.value = value
-  if (activeCourseId.value === value) await loadChapters(value)
-  else await router.push({ name: 'chapters', params: { courseId: value } })
+function openCourse(courseId: string) {
+  router.push({ name: 'chapters', params: { courseId } })
 }
 
 function nextSortOrder() {
@@ -113,7 +101,7 @@ function nextSortOrder() {
 function openCreateEditor() {
   const sortOrder = nextSortOrder()
   if (sortOrder > MAX_SORT_ORDER) {
-    showToast('error', '无法添加章节', '排序值已达到数据库上限，请等待后端完成章节重排')
+    showToast('error', '无法添加章节', '当前章节顺序暂时无法继续扩展，请稍后重试')
     return
   }
   editorMode.value = 'create'
@@ -150,7 +138,7 @@ async function saveChapter() {
   try {
     if (editorMode.value === 'create') {
       const sortOrder = nextSortOrder()
-      if (sortOrder > MAX_SORT_ORDER) throw new Error('章节排序值已达到数据库上限')
+      if (sortOrder > MAX_SORT_ORDER) throw new Error('当前章节顺序暂时无法继续扩展')
       const created = await createChapters([{
         title,
         courseId: activeCourseId.value,
@@ -226,7 +214,7 @@ async function reorderChapter(fromIndex: number, insertionIndex: number) {
 
   const sortOrder = calculateSortOrder(reordered[targetIndex - 1], reordered[targetIndex + 1])
   if (sortOrder === null) {
-    showToast('error', '当前间隔无法继续排序', '相邻章节的排序值已没有可用空间，请等待后端重排后再试')
+    showToast('error', '暂时无法调整到该位置', '请刷新章节列表后重试')
     return
   }
 
@@ -243,7 +231,7 @@ async function reorderChapter(fromIndex: number, insertionIndex: number) {
     const saved = updated[0]
     if (saved) reordered[targetIndex] = saved
     chapters.value = [...reordered].sort((a, b) => a.sortOrder - b.sortOrder)
-    showToast('success', '章节顺序已保存', `${moved.title} 的排序值更新为 ${sortOrder}`)
+    showToast('success', '章节顺序已保存', `${moved.title} 已移动到新位置`)
   } catch (error) {
     chapters.value = original
     showToast('error', '排序保存失败，已恢复原顺序', apiErrorMessage(error, '请刷新章节列表后重试'))
@@ -340,11 +328,16 @@ function clearDrag() {
 
 watch(() => route.params.courseId, (value) => {
   const courseId = typeof value === 'string' ? value : ''
-  courseIdInput.value = courseId
   chapters.value = []
   loaded.value = false
   loadError.value = ''
-  if (courseId) loadChapters(courseId)
+  if (!courseId) return
+  if (!knownCourses.value.some((course) => course.courseId === courseId)) {
+    showToast('error', '无法打开课程', '请从你的课程列表中选择需要编排的课程')
+    router.replace({ name: 'chapters' })
+    return
+  }
+  loadChapters()
 }, { immediate: true })
 </script>
 
@@ -352,40 +345,29 @@ watch(() => route.params.courseId, (value) => {
   <div class="chapters-view">
     <section class="page-heading chapter-page-heading">
       <div>
-        <span class="section-kicker">COURSE STRUCTURE</span>
+        <span class="section-kicker">课程内容</span>
         <h2>章节编排</h2>
-        <p>打开自己的课程，添加和维护章节；私有课程可以通过拖动调整学习顺序。</p>
+        <p>选择课程后添加章节，私有课程可以直接拖动调整顺序。</p>
       </div>
-      <form class="chapter-course-picker" @submit.prevent="openCourse()">
-        <label for="chapter-course-id">课程 ID</label>
-        <div>
-          <input id="chapter-course-id" v-model="courseIdInput" inputmode="numeric" placeholder="输入课程 ID">
-          <button class="button button-primary">打开课程 <ArrowRight :size="16" /></button>
-        </div>
-      </form>
+      <button v-if="activeCourseId" class="button button-secondary" @click="router.push({ name: 'chapters' })"><ChevronLeft :size="17" /> 返回课程选择</button>
     </section>
 
-    <section v-if="knownCourses.length" class="known-course-strip" aria-label="本地课程快捷入口">
-      <span>最近课程</span>
-      <button
-        v-for="course in knownCourses"
-        :key="course.courseId"
-        :class="{ active: course.courseId === activeCourseId }"
-        @click="openCourse(course.courseId)"
-      >
-        {{ course.courseName }}
-        <StatusBadge :status="course.courseType" />
-      </button>
+    <section v-if="!activeCourseId" class="chapter-course-selection">
+      <header class="resource-section-header"><div><h3>选择课程</h3><p>选择一门课程开始编排</p></div></header>
+      <div v-if="knownCourses.length" class="chapter-course-grid">
+        <button v-for="course in knownCourses" :key="course.courseId" @click="openCourse(course.courseId)">
+          <span><BookOpenText :size="21" /></span>
+          <div><strong>{{ course.courseName }}</strong><small>{{ course.courseType === 'PRIVATE' ? '可以拖动排序' : '当前顺序已锁定' }}</small></div>
+          <StatusBadge :status="course.courseType" />
+          <ArrowRight :size="17" />
+        </button>
+      </div>
+      <EmptyState v-else title="还没有可编排的课程" description="请先创建一门课程，再回来添加章节。" />
     </section>
 
-    <section class="chapter-workspace">
-      <EmptyState
-        v-if="!activeCourseId"
-        title="先打开一门课程"
-        description="输入课程 ID，或从最近课程中选择一个课程开始编排章节。"
-      />
+    <section v-else class="chapter-workspace">
 
-      <div v-else-if="loading" class="chapter-loading" aria-live="polite">
+      <div v-if="loading" class="chapter-loading" aria-live="polite">
         <RefreshCw :size="25" class="spin" />
         <span>正在加载章节…</span>
       </div>
@@ -393,7 +375,7 @@ watch(() => route.params.courseId, (value) => {
       <div v-else-if="loadError" class="chapter-load-error">
         <span><CircleAlert :size="24" /></span>
         <div><strong>无法打开课程章节</strong><p>{{ loadError }}</p></div>
-        <button class="button button-secondary" @click="loadChapters()">重新加载</button>
+        <button class="button button-secondary" @click="loadChapters">重新加载</button>
       </div>
 
       <template v-else-if="loaded">
@@ -403,13 +385,11 @@ watch(() => route.params.courseId, (value) => {
             <div>
               <small>正在编辑</small>
               <h3>{{ courseName }}</h3>
-              <code>#{{ activeCourseId }}</code>
             </div>
           </div>
           <div class="chapter-workspace-actions">
             <StatusBadge v-if="courseStatus" :status="courseStatus" />
-            <span v-else class="chapter-status-unknown">状态未知</span>
-            <button class="icon-button" :disabled="loading || ordering" aria-label="刷新章节" title="刷新章节" @click="loadChapters()"><RefreshCw :size="17" :class="{ spin: loading }" /></button>
+            <button class="icon-button" :disabled="loading || ordering" aria-label="刷新章节" title="刷新章节" @click="loadChapters"><RefreshCw :size="17" :class="{ spin: loading }" /></button>
             <button class="button button-primary" @click="openCreateEditor"><Plus :size="17" /> 添加章节</button>
           </div>
         </header>
@@ -417,9 +397,8 @@ watch(() => route.params.courseId, (value) => {
         <div class="chapter-order-notice" :class="{ locked: !canReorder }">
           <GripVertical v-if="canReorder" :size="18" />
           <LockKeyhole v-else :size="18" />
-          <p v-if="canReorder">按住章节卡片拖到目标位置，松开后会自动计算并保存新的排序值。</p>
-          <p v-else-if="courseStatus">当前课程是 {{ courseStatus }} 状态，章节拖拽已锁定。</p>
-          <p v-else>后端没有返回课程状态，无法确认是 PRIVATE，章节拖拽暂时锁定。</p>
+          <p v-if="canReorder">按住章节卡片拖到目标位置，松开后会自动保存新顺序。</p>
+          <p v-else>课程审核中或已发布，章节顺序暂不可调整。</p>
         </div>
 
         <div v-if="sortedChapters.length" class="chapter-list" :class="{ 'is-ordering': ordering }">
@@ -453,7 +432,6 @@ watch(() => route.params.courseId, (value) => {
             <div class="chapter-row-copy">
               <small>CHAPTER {{ index + 1 }}</small>
               <h4>{{ chapter.title }}</h4>
-              <p>排序值 <code>{{ chapter.sortOrder }}</code></p>
             </div>
             <div class="chapter-row-actions">
               <button :draggable="false" :aria-label="`修改 ${chapter.title}`" title="修改章节" @click="openEditEditor(chapter)"><Pencil :size="16" /></button>
@@ -465,7 +443,7 @@ watch(() => route.params.courseId, (value) => {
         <EmptyState
           v-else
           title="这门课程还没有章节"
-          description="添加第一个章节，系统会将它的初始排序值设置为 1000。"
+          description="添加第一个章节，开始编排课程内容。"
         />
       </template>
     </section>
@@ -482,10 +460,6 @@ watch(() => route.params.courseId, (value) => {
           <input id="chapter-title" v-model="editorForm.title" class="form-input" maxlength="255" placeholder="例如：线程与并发基础" autofocus @input="editorError = ''">
           <span v-if="editorError" class="field-error">{{ editorError }}</span>
         </div>
-        <div class="chapter-sort-preview">
-          <ListTree :size="19" />
-          <div><small>排序值</small><strong>{{ editorMode === 'create' ? nextSortOrder() : editingChapter?.sortOrder }}</strong></div>
-        </div>
         <footer class="form-actions">
           <button type="button" class="button button-secondary" @click="editorOpen = false">取消</button>
           <button class="button button-primary" :disabled="savingChapter">{{ savingChapter ? '保存中…' : '保存章节' }} <ArrowRight v-if="!savingChapter" :size="16" /></button>
@@ -501,7 +475,7 @@ watch(() => route.params.courseId, (value) => {
     >
       <div class="delete-chapter-confirm">
         <span><Trash2 :size="23" /></span>
-        <p>删除后当前接口无法恢复该章节。后续接入知识点后，还需要由后端处理章节与知识点的关联数据。</p>
+        <p>删除后无法恢复，请确认不再需要该章节。</p>
       </div>
       <footer class="form-actions">
         <button type="button" class="button button-secondary" @click="deletingChapter = null">取消</button>

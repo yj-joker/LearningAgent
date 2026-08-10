@@ -9,9 +9,3 @@ export function createSession(payload: SessionCreatePayload) {
     body: JSON.stringify(payload),
   })
 }
-
-export function completeSession(learningSessionId: number) {
-  return request<LearningSessionVO>(`${SESSION_BASE}/session/completed/${learningSessionId}`, {
-    method: 'PUT',
-  })
-}

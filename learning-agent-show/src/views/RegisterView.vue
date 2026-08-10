@@ -6,13 +6,14 @@ import AuthShell from '@/components/AuthShell.vue'
 import { registerUser } from '@/api/auth'
 import { ApiError } from '@/api/client'
 import { useToast } from '@/composables/useToast'
+import { usePasswordVisibility } from '@/composables/usePasswordVisibility'
 
 const router = useRouter()
 const { showToast } = useToast()
 const form = reactive({ username: '', password: '', confirmPassword: '' })
 const errors = reactive({ username: '', password: '', confirmPassword: '' })
 const submitting = ref(false)
-const passwordVisible = ref(false)
+const { passwordVisible, togglePasswordVisibility } = usePasswordVisibility()
 
 function validate() {
   errors.username = form.username.trim() ? '' : '请输入用户名'
@@ -30,7 +31,7 @@ async function submit() {
     await router.replace({ name: 'login', query: { registered: '1', username: form.username.trim() } })
   } catch (error) {
     const message = error instanceof ApiError ? error.message : error instanceof Error ? error.message : '发生未知错误'
-    showToast('error', message.includes('未登录') ? '后端注册白名单未同步' : '注册失败', message.includes('未登录') ? '请将 /learning-agent/user/register 加入 LoginInterceptor 的排除路径。' : message)
+    showToast('error', '注册失败', message)
   } finally {
     submitting.value = false
   }
@@ -53,7 +54,7 @@ async function submit() {
         <div class="auth-input-wrap">
           <LockKeyhole :size="18" />
           <input id="register-password" v-model="form.password" :type="passwordVisible ? 'text' : 'password'" autocomplete="new-password" placeholder="设置登录密码" @input="errors.password = ''">
-          <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏密码' : '显示密码'" @click="passwordVisible = !passwordVisible">
+          <button type="button" class="auth-password-toggle" :aria-label="passwordVisible ? '隐藏输入内容' : '显示输入内容'" :aria-pressed="passwordVisible" @mousedown.prevent @click.stop="togglePasswordVisibility">
             <EyeOff v-if="passwordVisible" :size="17" /><Eye v-else :size="17" />
           </button>
         </div>
@@ -72,6 +73,6 @@ async function submit() {
       </button>
     </form>
     <p class="auth-switch">已经有账号？ <RouterLink to="/login">返回登录 <ArrowRight :size="14" /></RouterLink></p>
-    <p class="auth-footnote">密码会由后端使用 BCrypt 加密保存，前端不会持久化明文密码。</p>
+    <p class="auth-footnote">建议使用长度充足且不与其他网站重复的密码。</p>
   </AuthShell>
 </template>

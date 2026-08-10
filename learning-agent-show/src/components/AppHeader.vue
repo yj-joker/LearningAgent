@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { CalendarDays, Menu, Sparkles } from 'lucide-vue-next'
+import { CalendarDays, Menu } from 'lucide-vue-next'
 
 defineEmits<{ openMenu: [] }>()
 
@@ -21,7 +21,6 @@ const today = new Intl.DateTimeFormat('zh-CN', {
         <Menu :size="21" />
       </button>
       <div>
-        <span class="eyebrow"><Sparkles :size="13" /> LEARNING WORKSPACE</span>
         <h1>{{ pageTitle }}</h1>
       </div>
     </div>

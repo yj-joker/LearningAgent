@@ -1,40 +1,28 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   ArrowRight,
-  BookMarked,
   BookOpenText,
-  Braces,
-  Check,
-  CircleAlert,
-  CircleDashed,
+  CheckCircle2,
   Clock3,
+  ListTree,
   MessageSquareText,
   Plus,
-  RefreshCw,
-  Sparkles,
-  TrendingUp,
-  Wifi,
-  WifiOff,
+  Play,
 } from 'lucide-vue-next'
-import StatusBadge from '@/components/StatusBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { checkBackend, type BackendState } from '@/api/client'
+import StatusBadge from '@/components/StatusBadge.vue'
 import { useActivity } from '@/composables/useActivity'
 import { useAuth } from '@/composables/useAuth'
 
-const { recentActivities, courseCount, activeSessionCount } = useActivity()
-const { isAdmin } = useAuth()
-const connection = ref<BackendState | 'checking'>('checking')
-
-const completionCount = computed(() => recentActivities.value.filter((item) => item.kind === 'session-completed').length)
-const endpointCount = computed(() => isAdmin.value ? 13 : 10)
-
-async function testConnection() {
-  connection.value = 'checking'
-  connection.value = await checkBackend()
-}
+const { activities, recentActivities, courseCount, activeSessionCount } = useActivity()
+const { currentUser } = useAuth()
+const completionCount = computed(() => activities.value.filter((item) => item.kind === 'session-completed').length)
+const displayName = computed(() => {
+  const name = currentUser.value?.username || '学习者'
+  return name.length > 18 ? `${name.slice(0, 18)}…` : name
+})
 
 function formatTime(value: string) {
   const date = new Date(value)
@@ -44,70 +32,44 @@ function formatTime(value: string) {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date)
 }
-
-onMounted(testConnection)
 </script>
 
 <template>
   <div class="dashboard-view">
-    <section class="hero-card">
-      <div class="hero-copy">
-        <span class="hero-kicker"><Sparkles :size="15" /> 保持好奇，持续构建</span>
-        <h2>让每一次学习，<br><em>都有清晰的方向。</em></h2>
-        <p>创建课程、拆解目标、开启学习会话。今天，向你的目标再靠近一点。</p>
-        <div class="hero-actions">
-          <RouterLink class="button button-primary" to="/courses?create=1">
-            <Plus :size="18" /> 创建课程
-          </RouterLink>
-          <RouterLink class="button button-ghost-light" to="/sessions?create=1">
-            开始学习 <ArrowRight :size="17" />
-          </RouterLink>
-        </div>
+    <section class="workspace-summary">
+      <div>
+        <span class="section-kicker">今日学习</span>
+        <h2>{{ displayName }}，欢迎回来</h2>
+        <p>从一门课程开始，继续整理你的学习内容。</p>
       </div>
-      <div class="hero-art" aria-hidden="true">
-        <div class="orbit orbit-one" />
-        <div class="orbit orbit-two" />
-        <div class="hero-book">
-          <BookMarked :size="60" :stroke-width="1.4" />
-          <span class="spark spark-one">✦</span>
-          <span class="spark spark-two">✦</span>
-        </div>
-        <div class="floating-note note-one"><Check :size="13" /> 明确目标</div>
-        <div class="floating-note note-two"><TrendingUp :size="13" /> 持续进步</div>
+      <div class="workspace-summary-actions">
+        <RouterLink class="button button-secondary" to="/chapters"><ListTree :size="17" /> 编排章节</RouterLink>
+        <RouterLink class="button button-primary" to="/courses?create=1"><Plus :size="17" /> 创建课程</RouterLink>
       </div>
     </section>
 
     <section class="metrics-grid" aria-label="学习数据">
-      <article class="metric-card metric-sage">
-        <span class="metric-icon"><BookOpenText :size="21" /></span>
-        <div><strong>{{ courseCount }}</strong><span>已创建课程</span></div>
-        <RouterLink to="/courses" aria-label="查看课程"><ArrowRight :size="18" /></RouterLink>
+      <article class="metric-card">
+        <span class="metric-icon metric-icon-course"><BookOpenText :size="20" /></span>
+        <div><strong>{{ courseCount }}</strong><span>我的课程</span></div>
+        <RouterLink to="/courses" aria-label="查看课程"><ArrowRight :size="17" /></RouterLink>
       </article>
-      <article class="metric-card metric-sun">
-        <span class="metric-icon"><CircleDashed :size="21" /></span>
-        <div><strong>{{ activeSessionCount }}</strong><span>进行中会话</span></div>
-        <RouterLink to="/sessions" aria-label="查看会话"><ArrowRight :size="18" /></RouterLink>
+      <article class="metric-card">
+        <span class="metric-icon metric-icon-active"><Play :size="20" /></span>
+        <div><strong>{{ activeSessionCount }}</strong><span>进行中</span></div>
+        <RouterLink to="/sessions" aria-label="查看学习会话"><ArrowRight :size="17" /></RouterLink>
       </article>
-      <article class="metric-card metric-lilac">
-        <span class="metric-icon"><Check :size="21" /></span>
-        <div><strong>{{ completionCount }}</strong><span>近期已完成</span></div>
-        <RouterLink to="/sessions" aria-label="查看记录"><ArrowRight :size="18" /></RouterLink>
-      </article>
-      <article class="metric-card metric-cream">
-        <span class="metric-icon"><Braces :size="21" /></span>
-        <div><strong>{{ endpointCount }}</strong><span>当前可用接口</span></div>
-        <RouterLink to="/api-docs" aria-label="查看接口"><ArrowRight :size="18" /></RouterLink>
+      <article class="metric-card">
+        <span class="metric-icon metric-icon-complete"><CheckCircle2 :size="20" /></span>
+        <div><strong>{{ completionCount }}</strong><span>已完成</span></div>
+        <RouterLink to="/sessions" aria-label="查看完成记录"><ArrowRight :size="17" /></RouterLink>
       </article>
     </section>
 
-    <div class="dashboard-columns">
+    <div class="dashboard-workspace-grid">
       <section class="panel activity-panel">
         <div class="panel-header">
-          <div>
-            <span class="section-kicker">RECENT ACTIVITY</span>
-            <h3>最近动态</h3>
-          </div>
-          <RouterLink class="text-link" to="/sessions">查看全部 <ArrowRight :size="15" /></RouterLink>
+          <div><span class="section-kicker">最近动态</span><h3>学习记录</h3></div>
         </div>
         <div v-if="recentActivities.length" class="activity-list">
           <article v-for="item in recentActivities" :key="item.id" class="activity-item">
@@ -115,51 +77,21 @@ onMounted(testConnection)
               <BookOpenText v-if="item.kind.includes('course')" :size="18" />
               <MessageSquareText v-else :size="18" />
             </span>
-            <div class="activity-copy">
-              <strong>{{ item.title }}</strong>
-              <p>{{ item.description }}</p>
-            </div>
-            <div class="activity-meta">
-              <StatusBadge :status="item.status" />
-              <span><Clock3 :size="13" /> {{ formatTime(item.createdAt) }}</span>
-            </div>
+            <div class="activity-copy"><strong>{{ item.title }}</strong><p>{{ item.description }}</p></div>
+            <div class="activity-meta"><StatusBadge :status="item.status" /><span><Clock3 :size="13" /> {{ formatTime(item.createdAt) }}</span></div>
           </article>
         </div>
-        <EmptyState
-          v-else
-          title="还没有学习动态"
-          description="创建第一门课程后，你的操作记录会出现在这里。"
-        />
+        <EmptyState v-else title="还没有学习记录" description="创建第一门课程后，最近操作会显示在这里。" />
       </section>
 
-      <aside class="panel connection-panel">
-        <div class="panel-header compact">
-          <div>
-            <span class="section-kicker">BACKEND</span>
-            <h3>服务连接</h3>
-          </div>
-          <button class="icon-button" :disabled="connection === 'checking'" aria-label="重新检测" @click="testConnection">
-            <RefreshCw :size="17" :class="{ spin: connection === 'checking' }" />
-          </button>
-        </div>
-        <div class="connection-state" :class="`connection-${connection}`">
-          <span>
-            <Wifi v-if="connection === 'online'" :size="25" />
-            <CircleAlert v-else-if="connection === 'degraded'" :size="25" />
-            <WifiOff v-else-if="connection === 'offline'" :size="25" />
-            <RefreshCw v-else :size="25" class="spin" />
-          </span>
-          <div>
-            <strong>{{ connection === 'online' ? '后端服务在线' : connection === 'degraded' ? '后端服务异常' : connection === 'offline' ? '未连接到后端' : '正在检测服务' }}</strong>
-            <p>{{ connection === 'online' ? '接口文档可访问，可以开始联调。' : connection === 'degraded' ? '8080 端口可访问，但 OpenAPI 返回异常。' : connection === 'offline' ? '请确认 Spring Boot 已在 8080 端口启动。' : '正在访问 OpenAPI 文档…' }}</p>
-          </div>
-        </div>
-        <dl class="connection-details">
-          <div><dt>前端端口</dt><dd>5173</dd></div>
-          <div><dt>后端端口</dt><dd>8080</dd></div>
-          <div><dt>响应状态码</dt><dd>code: "200"</dd></div>
-        </dl>
-        <RouterLink class="button button-soft button-block" to="/api-docs">查看接口说明 <ArrowRight :size="16" /></RouterLink>
+      <aside class="panel next-action-panel">
+        <span class="section-kicker">快捷入口</span>
+        <h3>继续学习</h3>
+        <nav aria-label="快捷入口">
+          <RouterLink to="/courses"><span><BookOpenText :size="18" /></span><div><strong>我的课程</strong><small>查看课程与审核状态</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/chapters"><span><ListTree :size="18" /></span><div><strong>章节编排</strong><small>维护课程章节顺序</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/sessions"><span><MessageSquareText :size="18" /></span><div><strong>学习会话</strong><small>开始一次专注学习</small></div><ArrowRight :size="16" /></RouterLink>
+        </nav>
       </aside>
     </div>
   </div>

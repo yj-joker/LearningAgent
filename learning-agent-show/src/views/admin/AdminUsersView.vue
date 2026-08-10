@@ -4,7 +4,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  Copy,
   FilterX,
   RefreshCw,
   Search,
@@ -104,15 +103,6 @@ function initials(username: string) {
   return username.slice(0, 2).toUpperCase()
 }
 
-async function copyId(id: string) {
-  try {
-    await navigator.clipboard.writeText(id)
-    showToast('success', '用户 ID 已复制', id)
-  } catch {
-    showToast('error', '复制失败', '浏览器未授予剪贴板权限')
-  }
-}
-
 onMounted(() => loadUsers(1))
 </script>
 
@@ -128,9 +118,9 @@ onMounted(() => loadUsers(1))
     </header>
 
     <section class="admin-stats-grid">
-      <article><span class="stat-icon stat-total"><UsersRound :size="21" /></span><div><small>全部用户</small><strong>{{ result.totalElements }}</strong></div><i>数据库总数</i></article>
-      <article><span class="stat-icon stat-user"><UserRound :size="21" /></span><div><small>本页普通用户</small><strong>{{ normalUserCount }}</strong></div><i>USER</i></article>
-      <article><span class="stat-icon stat-admin"><ShieldCheck :size="21" /></span><div><small>本页管理员</small><strong>{{ adminCount }}</strong></div><i>ADMIN</i></article>
+      <article><span class="stat-icon stat-total"><UsersRound :size="21" /></span><div><small>全部用户</small><strong>{{ result.totalElements }}</strong></div><i>平台用户总数</i></article>
+      <article><span class="stat-icon stat-user"><UserRound :size="21" /></span><div><small>本页普通用户</small><strong>{{ normalUserCount }}</strong></div><i>学习者</i></article>
+      <article><span class="stat-icon stat-admin"><ShieldCheck :size="21" /></span><div><small>本页管理员</small><strong>{{ adminCount }}</strong></div><i>管理员</i></article>
     </section>
 
     <section class="admin-filter-card">
@@ -166,15 +156,14 @@ onMounted(() => loadUsers(1))
 
       <div v-else class="admin-table-wrap">
         <table class="admin-user-table">
-          <thead><tr><th>用户</th><th>用户 ID</th><th>角色</th><th>注册时间</th><th>最近更新</th></tr></thead>
+          <thead><tr><th>用户</th><th>角色</th><th>注册时间</th><th>最近更新</th></tr></thead>
           <tbody v-if="loading">
-            <tr v-for="index in 5" :key="index" class="admin-skeleton-row"><td><i /><span /></td><td><span /></td><td><span /></td><td><span /></td><td><span /></td></tr>
+            <tr v-for="index in 5" :key="index" class="admin-skeleton-row"><td><i /><span /></td><td><span /></td><td><span /></td><td><span /></td></tr>
           </tbody>
           <tbody v-else-if="result.items.length">
             <tr v-for="user in result.items" :key="user.id">
               <td><div class="admin-user-cell"><span v-if="!user.avatarUrl" class="admin-user-avatar">{{ initials(user.username) }}</span><img v-else :src="user.avatarUrl" :alt="`${user.username} 的头像`"><div><strong>{{ user.username }}</strong><small>{{ user.role === 'ADMIN' ? '管理员账号' : '普通学习者' }}</small></div></div></td>
-              <td><button class="admin-id-button" :title="`复制 ${user.id}`" @click="copyId(user.id)"><code>{{ user.id }}</code><Copy :size="13" /></button></td>
-              <td><span class="admin-role-badge" :class="user.role === 'ADMIN' ? 'role-admin' : 'role-user'"><i />{{ user.role }}</span></td>
+              <td><span class="admin-role-badge" :class="user.role === 'ADMIN' ? 'role-admin' : 'role-user'"><i />{{ user.role === 'ADMIN' ? '管理员' : '普通用户' }}</span></td>
               <td><time>{{ formatDate(user.createdAt) }}</time></td>
               <td><time>{{ formatDate(user.updatedAt) }}</time></td>
             </tr>
