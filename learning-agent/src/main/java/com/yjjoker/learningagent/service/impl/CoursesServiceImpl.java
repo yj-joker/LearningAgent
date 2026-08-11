@@ -16,6 +16,10 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.Consumer;
 
 @Service
@@ -69,6 +73,42 @@ public class CoursesServiceImpl implements CoursesService {
         return changeCourseStatus(courseId, courses -> new CoursesDO().rejectCourse(courses));
     }
 
+    //判断对应课程是否存在且属于当前用户
+    @Override
+    public void checkUserOwnsCourse(Long courseId){
+        Courses courseById = coursesRepository.findCourseById(courseId);
+        if (courseById == null) {
+            throw new NotFountException("课程不存在");
+        }
+        if (!Objects.equals(courseById.getUserId(), BaseContext.getCurrentId())) {
+            throw new ViolationOperationException("当前用户无权操作该课程");
+        }
+    }
+
+    //判断对应课程是否存在且属于当前用户 批量检查
+    @Override
+    public void checkUserOwnsCourses(Set<Long> courseIds) {
+        for (Courses course : getCoursesByIds(courseIds)) {
+            if (!Objects.equals(course.getUserId(), BaseContext.getCurrentId())) {
+                throw new ViolationOperationException("当前用户无权操作这些课程");
+            }
+        }
+    }
+
+    //判断对应课程当前用户是否有权限查看
+    @Override
+    public void checkUserCanViewCourse(Long courseId) {
+        checkUserCanView(getCourse(courseId));
+    }
+
+    //判断对应课程当前用户是否有权限查看 批量检查
+    @Override
+    public void checkUserCanViewCourses(Set<Long> courseIds) {
+        for (Courses course : getCoursesByIds(courseIds)) {
+            checkUserCanView(course);
+        }
+    }
+
     //修改课程状态
     private CoursesVO changeCourseStatus(Long courseId, Consumer<Courses> transition) {
         Courses courses = getCourse(courseId);
@@ -93,6 +133,33 @@ public class CoursesServiceImpl implements CoursesService {
             throw new NotFountException("课程不存在");
         }
         return courses;
+    }
+
+    private List<Courses> getCoursesByIds(Set<Long> courseIds) {
+        if (courseIds == null || courseIds.isEmpty()) {
+            return List.of();
+        }
+        if (courseIds.contains(null)) {
+            throw new DataIllegalException("课程 ID 不能为空");
+        }
+        List<Courses> courses = coursesRepository.findCoursesByIds(courseIds);
+        Set<Long> foundIds = new HashSet<>();
+        for (Courses course : courses) {
+            foundIds.add(course.getId());
+        }
+        if (foundIds.size() != courseIds.size() || !foundIds.containsAll(courseIds)) {
+            throw new NotFountException("部分课程不存在");
+        }
+        return courses;
+    }
+
+    //如果当前用户不是课程所有者且课程未发布，则抛出异常
+    private void checkUserCanView(Courses course) {
+        boolean isOwner = Objects.equals(course.getUserId(), BaseContext.getCurrentId());
+        boolean isPublished = course.getCourseType() == CoursesTypeEnum.PUBLISHED;
+        if (!isOwner && !isPublished) {
+            throw new ViolationOperationException("当前用户无权查看该课程");
+        }
     }
 
     //检查当前用户是否是管理员

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.KnowledgePointsRepository">
+    <insert id="saveAll">
+     insert into knowledge_points (id, course_id, chapter_id, name, sort_order, description, created_at, updated_at)
+     values
+        <foreach collection="knowledgePointsList" item="knowledgePoint" separator=",">
+            (#{knowledgePoint.id}, #{knowledgePoint.courseId}, #{knowledgePoint.chapterId}, #{knowledgePoint.name}, #{knowledgePoint.sortOrder}, #{knowledgePoint.description}, #{knowledgePoint.createdAt}, #{knowledgePoint.updatedAt})
+        </foreach>
+    </insert>
+
+    <select id="findByIds" resultType="com.yjjoker.learningagent.entity.KnowledgePoints">
+        select id, course_id as courseId, chapter_id as chapterId, name, sort_order as sortOrder, description, created_at as createdAt, updated_at as updatedAt
+        from knowledge_points
+        where id in
+        <foreach collection="ids" item="id" separator="," open="(" close=")">
+            #{id}
+        </foreach>
+    </select>
+    <update id="updateAll">
+        UPDATE knowledge_points
+        SET
+        name = CASE
+        <foreach collection="knowledgePoints" item="knowledgePoint">
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            THEN COALESCE(#{knowledgePoint.name}, name)
+        </foreach>
+        ELSE name
+        END,
+        description = CASE
+        <foreach collection="knowledgePoints" item="knowledgePoint">
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            THEN COALESCE(#{knowledgePoint.description}, description)
+        </foreach>
+        ELSE description
+        END,
+        sort_order = CASE
+        <foreach collection="knowledgePoints" item="knowledgePoint">
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            THEN COALESCE(#{knowledgePoint.sortOrder}, sort_order)
+        </foreach>
+        ELSE sort_order
+        END,
+
+        updated_at = CASE
+        <foreach collection="knowledgePoints" item="knowledgePoint">
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            THEN #{knowledgePoint.updatedAt}
+        </foreach>
+        ELSE updated_at
+        END
+
+        WHERE
+        <foreach collection="knowledgePoints" item="knowledgePoint" separator=" OR ">
+            (id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId})
+        </foreach>
+    </update>
+    <delete id="deleteAll">
+        delete from knowledge_points where id in
+        <foreach collection="ids" item="id" separator="," open="(" close=")">
+            #{id}
+        </foreach>
+    </delete>
+    <delete id="deleteByChapterId">
+        delete from knowledge_points where chapter_id in
+        <foreach collection="chapterIds" item="chapterId" separator="," open="(" close=")">
+            #{chapterId}
+        </foreach>
+    </delete>
+</mapper>

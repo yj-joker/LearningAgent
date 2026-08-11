@@ -24,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -69,7 +70,7 @@ class CourseServiceImplTest {
 
             assertEquals(CoursesTypeEnum.PENDING, course.getCourseType());
             assertEquals(CoursesTypeEnum.PENDING, result.getCourseType());
-            assertEquals(COURSE_ID, result.getCourseId());
+            assertEquals(COURSE_ID, result.getId());
             verify(coursesRepository).updateCourseStatus(eq(COURSE_ID), eq(CoursesTypeEnum.PRIVATE),
                     eq(CoursesTypeEnum.PENDING), any(LocalDateTime.class));
         }
@@ -207,6 +208,39 @@ class CourseServiceImplTest {
         assertEquals(OWNER_ID, captor.getValue().getUserId());
         assertTrue(captor.getValue().getCreatedAt().isBefore(LocalDateTime.now().plusSeconds(1)));
         assertNotNull(captor.getValue().getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("课程拥有者可以查看自己的私有课程")
+    void shouldAllowOwnerToViewPrivateCourse() {
+        Courses course = courseWithStatus(CoursesTypeEnum.PRIVATE);
+        signInAsOwner();
+        when(coursesRepository.findCourseById(COURSE_ID)).thenReturn(course);
+
+        assertDoesNotThrow(() -> coursesService.checkUserCanViewCourse(COURSE_ID));
+    }
+
+    @Test
+    @DisplayName("非拥有者可以查看已发布课程")
+    void shouldAllowNonOwnerToViewPublishedCourse() {
+        Courses course = courseWithStatus(CoursesTypeEnum.PUBLISHED);
+        BaseContext.setCurrentId(9999L);
+        when(coursesRepository.findCourseById(COURSE_ID)).thenReturn(course);
+
+        assertDoesNotThrow(() -> coursesService.checkUserCanViewCourse(COURSE_ID));
+    }
+
+    @Test
+    @DisplayName("非拥有者不能查看私有课程")
+    void shouldRejectNonOwnerViewingPrivateCourse() {
+        Courses course = courseWithStatus(CoursesTypeEnum.PRIVATE);
+        BaseContext.setCurrentId(9999L);
+        when(coursesRepository.findCourseById(COURSE_ID)).thenReturn(course);
+
+        assertThrows(
+                ViolationOperationException.class,
+                () -> coursesService.checkUserCanViewCourse(COURSE_ID)
+        );
     }
 
     private Courses courseWithStatus(CoursesTypeEnum courseStatus) {

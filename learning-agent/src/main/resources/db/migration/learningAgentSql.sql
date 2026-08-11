@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS knowledge_points (
                                                 name VARCHAR(255) NOT NULL
                                                     COMMENT '知识点名称',
 
+                                                sort_order INT UNSIGNED NOT NULL
+                                                    COMMENT '知识点展示顺序，同章节内必须唯一，初始值*1000，重排阀值为100',
+
                                                 description TEXT
                                                     COMMENT '知识点描述',
 
@@ -137,7 +140,7 @@ CREATE TABLE IF NOT EXISTS knowledge_points (
 
     -- 同一章节内，知识点名称不能重复
                                                 UNIQUE KEY uk_knowledge_points_chapter_name (chapter_id, name),
-
+                                                UNIQUE KEY uk_knowledge_points_course_sort_order (chapter_id, sort_order),
                                                 KEY idx_knowledge_points_course_id (course_id)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
