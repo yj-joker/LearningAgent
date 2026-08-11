@@ -45,6 +45,10 @@ npm run preview
 | 查询课程章节 | GET | `/getChaptersByCourseId/{courseId}` |
 | 批量修改章节 | PUT | `/updateChapters` |
 | 批量删除章节 | DELETE | `/deleteChaptersByIds/{ids}` |
+| 创建知识点 | POST | `/knowledgePoints/createKnowledgePoint` |
+| 查询章节知识点 | GET | `/knowledgePoints/chapter/{chapterId}` |
+| 批量修改知识点 | PUT | `/knowledgePoints/updateKnowledgePoints` |
+| 批量删除知识点 | DELETE | `/knowledgePoints/{ids}` |
 | 创建学习会话 | POST | `/learning-agent/learning/session` |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
 
@@ -88,3 +92,10 @@ npm run preview
 - 移动到两个章节之间时，新排序值为前后 `sortOrder` 的中间整数。
 - 排序空间不足、唯一索引冲突或请求失败时，前端不会保留错误顺序。
 - 章节 ID 使用雪花算法生成，前端通过无精度损失 JSON 解析并始终按字符串传递。
+
+## 知识点管理
+
+- 用户从课程和章节列表进入知识点管理，不需要手动填写任何数据库 ID。
+- 支持知识点创建、查询、修改和删除，名称与描述按照后端长度限制校验。
+- 新知识点默认添加到章节末尾，`sortOrder` 从 `1000` 开始并按 `1000` 递增。
+- PRIVATE 课程支持拖动知识点卡片调整顺序，其他状态只锁定拖动排序。

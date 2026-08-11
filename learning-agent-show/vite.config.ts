@@ -32,6 +32,10 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/knowledgePoints': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
     },
   },
 })

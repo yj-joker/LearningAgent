@@ -23,6 +23,12 @@ const router = createRouter({
       meta: { title: '章节编排', requiresUser: true },
     },
     {
+      path: '/knowledge-points/:courseId?/:chapterId?',
+      name: 'knowledge-points',
+      component: () => import('@/views/KnowledgePointsView.vue'),
+      meta: { title: '知识点管理', requiresUser: true },
+    },
+    {
       path: '/sessions',
       name: 'sessions',
       component: () => import('@/views/SessionsView.vue'),

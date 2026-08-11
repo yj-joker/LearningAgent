@@ -82,6 +82,24 @@ export interface ChapterVO {
   sortOrder: number
 }
 
+export interface KnowledgePointPayload {
+  id?: ApiId
+  courseId: ApiId
+  chapterId: ApiId
+  name: string
+  sortOrder: number
+  description: string | null
+}
+
+export interface KnowledgePointVO {
+  id: string
+  name: string
+  sortOrder: number
+  description: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface SessionCreatePayload {
   courseId: ApiId
   sessionTitle: string

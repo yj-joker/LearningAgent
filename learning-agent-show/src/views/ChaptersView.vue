@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   CircleAlert,
   GripVertical,
+  Lightbulb,
   LockKeyhole,
   Pencil,
   Plus,
@@ -434,6 +435,7 @@ watch(() => route.params.courseId, (value) => {
               <h4>{{ chapter.title }}</h4>
             </div>
             <div class="chapter-row-actions">
+              <button :draggable="false" :aria-label="`管理 ${chapter.title} 的知识点`" title="管理知识点" @click="router.push({ name: 'knowledge-points', params: { courseId: activeCourseId, chapterId: chapter.id } })"><Lightbulb :size="16" /></button>
               <button :draggable="false" :aria-label="`修改 ${chapter.title}`" title="修改章节" @click="openEditEditor(chapter)"><Pencil :size="16" /></button>
               <button :draggable="false" class="danger" :aria-label="`删除 ${chapter.title}`" title="删除章节" @click="deletingChapter = chapter"><Trash2 :size="16" /></button>
             </div>
