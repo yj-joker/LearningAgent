@@ -1,14 +1,19 @@
 package com.yjjoker.learningagent.service.impl;
 
 import com.yjjoker.learningagent.dto.KnowledgePointsDTO;
+import com.yjjoker.learningagent.entity.Courses;
 import com.yjjoker.learningagent.entity.KnowledgePoints;
 import com.yjjoker.learningagent.exception.DataIllegalException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.exception.NotFountException;
+import com.yjjoker.learningagent.exception.ViolationOperationException;
+import com.yjjoker.learningagent.projectenum.CoursesTypeEnum;
+import com.yjjoker.learningagent.repository.CoursesRepository;
 import com.yjjoker.learningagent.repository.KnowledgePointsRepository;
 import com.yjjoker.learningagent.service.ChaptersService;
 import com.yjjoker.learningagent.service.CoursesService;
 import com.yjjoker.learningagent.service.KnowledgePointsService;
+import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.utils.SnowflakeIdGenerator;
 import com.yjjoker.learningagent.vo.ChaptersVO;
 import com.yjjoker.learningagent.vo.KnowledgePointsVO;
@@ -36,6 +41,7 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
     private final ChaptersService chaptersService;
     private final KnowledgePointsRepository knowledgePointsRepository;
     private final CoursesService coursesService;
+    private final CoursesRepository coursesRepository;
 
     //创建知识点
     @Override
@@ -71,6 +77,7 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
         }
         List<KnowledgePointsVO> knowledgePointsVOS = knowledgePointsEntityToVO(knowledgePoints);
         log.info("保存知识点到mysql成功");
+        //TODO 异步处理source，进行重排序
         return knowledgePointsVOS;
     }
 
@@ -183,6 +190,38 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
         log.info("删除知识点成功");
     }
 
+    //根据课程id获取易混淆知识点
+    @Override
+    public List<KnowledgePointsVO> getConfusableKnowledgePointsByCourseId(Long courseId) {
+        check(courseId);
+        List<KnowledgePoints> knowledgePoints;
+        try {
+            knowledgePoints = knowledgePointsRepository.getConfusableKnowledgePointsByCourseId(courseId);
+        } catch (Exception e) {
+            log.error("查询课程易混淆知识点失败，courseId={}", courseId, e);
+            throw new LearningAgentServiceException("查询知识点失败");
+        }
+        List<KnowledgePointsVO> list = knowledgePointsEntityToVO(knowledgePoints);
+        log.info("查询易混淆知识点成功");
+        return list;
+    }
+
+    //根据课程id获取前置知识点
+    @Override
+    public List<KnowledgePointsVO> getPrerequisiteKnowledgePointsByCourseId(Long courseId) {
+        check(courseId);
+        List<KnowledgePoints> knowledgePoints;
+        try {
+            knowledgePoints = knowledgePointsRepository.getPrerequisiteKnowledgePointsByCourseId(courseId);
+        } catch (Exception e) {
+            log.error("查询课程前置知识点失败，courseId={}", courseId, e);
+            throw new LearningAgentServiceException("查询知识点失败");
+        }
+        List<KnowledgePointsVO> list = knowledgePointsEntityToVO(knowledgePoints);
+        log.info("查询前置知识点成功");
+        return list;
+    }
+
     // 将创建 DTO 转换为实体，由后端生成主键和创建时间。
     private List<KnowledgePoints> createDTOsToEntities(List<KnowledgePointsDTO> knowledgePointsDTO) {
         List<KnowledgePoints> knowledgePoints = new ArrayList<>();
@@ -190,6 +229,7 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
         for (KnowledgePointsDTO pointsDTO : knowledgePointsDTO) {
             KnowledgePoints knowledgePoint = mapCommonFields(pointsDTO);
             knowledgePoint.setId(snowflakeIdGenerator.nextId());
+            knowledgePoint.setCreatedBy(BaseContext.getCurrentId());
             knowledgePoint.setCreatedAt(now);
             knowledgePoints.add(knowledgePoint);
         }
@@ -215,6 +255,7 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
             knowledgePointsVO.setName(knowledgePoint.getName());
             knowledgePointsVO.setSortOrder(knowledgePoint.getSortOrder());
             knowledgePointsVO.setDescription(knowledgePoint.getDescription());
+            knowledgePointsVO.setCreatedBy(knowledgePoint.getCreatedBy());
             knowledgePointsVO.setCreatedAt(knowledgePoint.getCreatedAt());
             knowledgePointsVO.setUpdatedAt(knowledgePoint.getUpdatedAt());
             knowledgePointsVOS.add(knowledgePointsVO);
@@ -364,6 +405,22 @@ public class KnowledgePointsServiceImpl implements KnowledgePointsService {
             if (!Objects.equals(existing.getChapterId(), dto.getChapterId())) {
                 throw new DataIllegalException("知识点 ID 与章节 ID 不匹配");
             }
+        }
+    }
+
+    //检查课程是否存在，用户是否拥有该课程，用户是否可以查看该课程
+    private void check(Long courseId) {
+        Courses courseById;
+        try {
+            courseById = coursesRepository.findCourseById(courseId);
+        } catch (Exception e) {
+            throw new LearningAgentServiceException("检查课程失败，请稍后再试");
+        }
+        if (courseById == null) {
+            throw new NotFountException("课程不存在");
+        }
+        if (!courseById.getUserId().equals(BaseContext.getCurrentId()) && courseById.getCourseType() != CoursesTypeEnum.PUBLISHED) {
+            throw new ViolationOperationException("无权限访问");
         }
     }
 }

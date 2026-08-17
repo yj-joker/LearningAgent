@@ -5,41 +5,48 @@
 
 <mapper namespace="com.yjjoker.learningagent.repository.KnowledgePointsRepository">
     <insert id="saveAll">
-     insert into knowledge_points (id, course_id, chapter_id, name, sort_order, description, created_at, updated_at)
-     values
+        insert into knowledge_points (id, course_id, chapter_id, name, sort_order, description, created_at, updated_at,created_by)
+        values
         <foreach collection="knowledgePointsList" item="knowledgePoint" separator=",">
-            (#{knowledgePoint.id}, #{knowledgePoint.courseId}, #{knowledgePoint.chapterId}, #{knowledgePoint.name}, #{knowledgePoint.sortOrder}, #{knowledgePoint.description}, #{knowledgePoint.createdAt}, #{knowledgePoint.updatedAt})
+            (#{knowledgePoint.id}, #{knowledgePoint.courseId}, #{knowledgePoint.chapterId}, #{knowledgePoint.name},
+            #{knowledgePoint.sortOrder}, #{knowledgePoint.description}, #{knowledgePoint.createdAt},
+            #{knowledgePoint.updatedAt}, #{knowledgePoint.createdBy})
         </foreach>
     </insert>
 
     <select id="findByIds" resultType="com.yjjoker.learningagent.entity.KnowledgePoints">
-        select id, course_id as courseId, chapter_id as chapterId, name, sort_order as sortOrder, description, created_at as createdAt, updated_at as updatedAt
+        select id, course_id as courseId, chapter_id as chapterId, name, sort_order as sortOrder, description,
+        created_at as createdAt, updated_at as updatedAt
         from knowledge_points
         where id in
         <foreach collection="ids" item="id" separator="," open="(" close=")">
             #{id}
         </foreach>
     </select>
+
     <update id="updateAll">
         UPDATE knowledge_points
         SET
         name = CASE
         <foreach collection="knowledgePoints" item="knowledgePoint">
-            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND
+            chapter_id=#{knowledgePoint.chapterId}
             THEN COALESCE(#{knowledgePoint.name}, name)
         </foreach>
         ELSE name
         END,
         description = CASE
         <foreach collection="knowledgePoints" item="knowledgePoint">
-            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND
+            chapter_id=#{knowledgePoint.chapterId}
             THEN COALESCE(#{knowledgePoint.description}, description)
         </foreach>
         ELSE description
         END,
         sort_order = CASE
         <foreach collection="knowledgePoints" item="knowledgePoint">
-            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND
+            chapter_id=#{knowledgePoint.chapterId}
             THEN COALESCE(#{knowledgePoint.sortOrder}, sort_order)
         </foreach>
         ELSE sort_order
@@ -47,7 +54,8 @@
 
         updated_at = CASE
         <foreach collection="knowledgePoints" item="knowledgePoint">
-            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId}
+            WHEN id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND
+            chapter_id=#{knowledgePoint.chapterId}
             THEN #{knowledgePoint.updatedAt}
         </foreach>
         ELSE updated_at
@@ -55,7 +63,8 @@
 
         WHERE
         <foreach collection="knowledgePoints" item="knowledgePoint" separator=" OR ">
-            (id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND chapter_id=#{knowledgePoint.chapterId})
+            (id = #{knowledgePoint.id} AND course_id = #{knowledgePoint.courseId} AND
+            chapter_id=#{knowledgePoint.chapterId})
         </foreach>
     </update>
     <delete id="deleteAll">
@@ -70,4 +79,41 @@
             #{chapterId}
         </foreach>
     </delete>
+    <select id="getPrerequisiteKnowledgePointsByCourseId"
+            resultType="com.yjjoker.learningagent.entity.KnowledgePoints">
+        WITH RECURSIVE prereqs(point_id) AS (
+        SELECT r.from_point_id
+        FROM knowledge_point_relations r
+        JOIN knowledge_points kp ON r.to_point_id = kp.id
+        WHERE kp.course_id = #{courseId}
+        AND r.relation_type = 'PREREQUISITE'
+        AND r.status = 'ACTIVE'
+        UNION
+        SELECT r.from_point_id
+        FROM knowledge_point_relations r
+        INNER JOIN prereqs ON r.to_point_id = prereqs.point_id
+        WHERE r.relation_type = 'PREREQUISITE'
+        AND r.status = 'ACTIVE'
+        )
+        select * from knowledge_points where id in  (
+        SELECT point_id
+        FROM prereqs
+        )
+    </select>
+    <select id="getConfusableKnowledgePointsByCourseId"
+            resultType="com.yjjoker.learningagent.entity.KnowledgePoints">
+        SELECT DISTINCT
+        kp2.id, kp2.course_id AS courseId, kp2.chapter_id AS chapterId,
+        kp2.name, kp2.sort_order AS sortOrder, kp2.description,
+        kp2.created_at AS createdAt, kp2.updated_at AS updatedAt,
+        kp2.created_by AS createdBy
+        FROM knowledge_points kp1
+        JOIN knowledge_point_relations r
+        ON (r.from_point_id = kp1.id OR r.to_point_id = kp1.id)
+        AND r.relation_type = 'CONFUSABLE'
+        AND r.status = 'ACTIVE'
+        JOIN knowledge_points kp2
+        ON kp2.id = IF(r.from_point_id = kp1.id, r.to_point_id, r.from_point_id)
+        WHERE kp1.course_id = #{courseId}
+    </select>
 </mapper>

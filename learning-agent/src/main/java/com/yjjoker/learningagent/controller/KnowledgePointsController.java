@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.controller;
 import com.yjjoker.learningagent.dto.KnowledgePointsDTO;
 import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.service.KnowledgePointsService;
+import com.yjjoker.learningagent.vo.KnowledgePointRelationsVO;
 import com.yjjoker.learningagent.vo.KnowledgePointsVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -62,5 +63,22 @@ public class KnowledgePointsController {
             @PathVariable List<@Positive(message = "知识点 ID 必须大于 0") Long> ids) {
         knowledgePointsService.deleteKnowledgePoint(ids);
         return Result.success();
+    }
+
+
+    @GetMapping("/getPrerequisiteKnowledgePoints/{courseId}")
+    @Operation(summary = "获取课程 前置 知识点关系")
+    public Result<List<KnowledgePointsVO>> getCoursePrerequisiteRelations(
+            @Positive(message = "课程 ID 必须大于 0") @PathVariable Long courseId) {
+        // 调用知识点关系服务，根据课程 ID 获取 prerequisite 知识点关系。
+        return Result.success(knowledgePointsService.getPrerequisiteKnowledgePointsByCourseId(courseId));
+    }
+
+    @GetMapping("/getConfusableKnowledgePoints/{courseId}")
+    @Operation(summary = "获取课程 confusable 知识点关系")
+    public Result<List<KnowledgePointsVO>> getCourseConfusableRelations(
+            @Positive(message = "课程 ID 必须大于 0") @PathVariable Long courseId) {
+        // 调用知识点关系服务，根据课程 ID 获取 confusable 知识点关系。
+        return Result.success(knowledgePointsService.getConfusableKnowledgePointsByCourseId(courseId));
     }
 }

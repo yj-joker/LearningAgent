@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS knowledge_points (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '知识点表';
 
-
+ALTER TABLE knowledge_points ADD COLUMN created_by BIGINT COMMENT '创建者用户ID，NULL=系统/Agent';
 -- 知识点关系表
 CREATE TABLE IF NOT EXISTS knowledge_point_relations (
                                                          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -195,3 +195,11 @@ CREATE TABLE IF NOT EXISTS knowledge_point_relations (
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '知识点关系表';
+ALTER TABLE knowledge_point_relations
+    ADD COLUMN source ENUM('ADMIN', 'USER_SUGGESTED', 'AI_GENERATED') NOT NULL DEFAULT 'ADMIN'
+        COMMENT '来源：管理员创建/用户建议/AI生成',
+    ADD COLUMN status ENUM('PENDING', 'ACTIVE', 'REJECTED', 'DEPRECATED') NOT NULL DEFAULT 'ACTIVE'
+        COMMENT '状态：待审核/活跃/已拒绝/已废弃',
+    ADD COLUMN created_by BIGINT COMMENT '创建者用户ID，AI生成时为NULL',
+    ADD COLUMN reviewed_by BIGINT COMMENT '审核者用户ID',
+    ADD COLUMN reviewed_at DATETIME COMMENT '审核时间';

@@ -20,4 +20,11 @@ public interface KnowledgePointsService {
 
     // 删除知识点
     void deleteKnowledgePoint(List<Long> ids);
+
+    //根据课程id，找到该课程所有的对应的易混淆知识点
+    List<KnowledgePointsVO> getConfusableKnowledgePointsByCourseId(Long courseId);
+
+    //根据课程id，找到该课程所有的对应的前置知识点
+    List<KnowledgePointsVO> getPrerequisiteKnowledgePointsByCourseId(Long courseId);
+
 }

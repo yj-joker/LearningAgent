@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.KnowledgePointRelationsRepository">
+    <resultMap id="KnowledgePointRelationResultMap"
+               type="com.yjjoker.learningagent.entity.KnowledgePointRelations">
+        <id property="id" column="id"/>
+        <result property="fromPointId" column="from_point_id"/>
+        <result property="toPointId" column="to_point_id"/>
+        <result property="relationType" column="relation_type"/>
+        <result property="source" column="source"/>
+        <result property="status" column="status"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="reviewedBy" column="reviewed_by"/>
+        <result property="reviewedAt" column="reviewed_at"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+
+    <!-- 根据关系 ID 列表批量查询。 -->
+    <select id="findByIds" resultMap="KnowledgePointRelationResultMap">
+        SELECT id,
+        from_point_id,
+        to_point_id,
+        relation_type,
+        source,
+        status,
+        created_by,
+        reviewed_by,
+        reviewed_at,
+        created_at
+        FROM knowledge_point_relations
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY id
+    </select>
+
+    <!-- 查询知识点作为起点或终点参与的所有关系。 -->
+    <select id="findByKnowledgePointId" resultMap="KnowledgePointRelationResultMap">
+        SELECT id,
+        from_point_id,
+        to_point_id,
+        relation_type,
+        source,
+        status,
+        created_by,
+        reviewed_by,
+        reviewed_at,
+        created_at
+        FROM knowledge_point_relations
+        WHERE from_point_id = #{knowledgePointId}
+        OR to_point_id = #{knowledgePointId}
+        ORDER BY id
+    </select>
+
+    <!-- 根据关系 ID 使用一条 CASE WHEN SQL 批量更新三项关系字段。 -->
+    <update id="updateAll">
+        UPDATE knowledge_point_relations
+        SET from_point_id = CASE
+        <foreach collection="relations" item="relation">
+            WHEN id = #{relation.id} THEN #{relation.fromPointId}
+        </foreach>
+        ELSE from_point_id
+        END,
+        to_point_id = CASE
+        <foreach collection="relations" item="relation">
+            WHEN id = #{relation.id} THEN #{relation.toPointId}
+        </foreach>
+        ELSE to_point_id
+        END,
+        relation_type = CASE
+        <foreach collection="relations" item="relation">
+            WHEN id = #{relation.id} THEN #{relation.relationType}
+        </foreach>
+        ELSE relation_type
+        END
+        WHERE id IN
+        <foreach collection="relations" item="relation" open="(" separator="," close=")">
+            #{relation.id}
+        </foreach>
+    </update>
+
+    <!-- 根据关系 ID 列表批量删除。 -->
+    <delete id="deleteAll">
+        DELETE FROM knowledge_point_relations
+        WHERE id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+    <select id="getCoursePrerequisiteRelations"
+            resultMap="KnowledgePointRelationResultMap">
+        WITH RECURSIVE prereqs(point_id) AS (
+        SELECT r.from_point_id
+        FROM knowledge_point_relations r
+        JOIN knowledge_points kp ON r.to_point_id = kp.id
+        WHERE kp.course_id = #{courseId}
+        AND r.relation_type = 'PREREQUISITE'
+        AND r.status = 'ACTIVE'
+        UNION
+        SELECT r.from_point_id
+        FROM knowledge_point_relations r
+        INNER JOIN prereqs ON r.to_point_id = prereqs.point_id
+        WHERE r.relation_type = 'PREREQUISITE'
+        AND r.status = 'ACTIVE'
+        )
+    </select>
+
+    <select id="getCourseConfusableRelations"
+            resultMap="KnowledgePointRelationResultMap">
+        SELECT relation.id,
+        relation.from_point_id,
+        relation.to_point_id,
+        relation.relation_type,
+        relation.source,
+        relation.status,
+        relation.created_by,
+        relation.reviewed_by,
+        relation.reviewed_at,
+        relation.created_at
+        FROM knowledge_point_relations relation
+        INNER JOIN knowledge_points from_point
+        ON from_point.id = relation.from_point_id
+        INNER JOIN knowledge_points to_point
+        ON to_point.id = relation.to_point_id
+        WHERE (from_point.course_id = #{courseId}
+               OR to_point.course_id = #{courseId})
+        AND relation.relation_type = 'CONFUSABLE'
+        AND relation.status = 'ACTIVE'
+        ORDER BY relation.id
+    </select>
+</mapper>

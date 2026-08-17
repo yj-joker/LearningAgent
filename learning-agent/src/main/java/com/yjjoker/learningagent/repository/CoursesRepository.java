@@ -13,6 +13,7 @@ import java.util.Collection;
 import java.util.List;
 
 import com.yjjoker.learningagent.projectenum.CoursesTypeEnum;
+import com.yjjoker.learningagent.vo.KnowledgePointRelationContext;
 
 @Mapper
 public interface CoursesRepository {
@@ -56,4 +57,9 @@ public interface CoursesRepository {
     //生成课程id, 并返回
     @Options(useGeneratedKeys = true, keyProperty = "id", keyColumn = "id")
     int createCourse(Courses courses);
+
+    // 根据关系两端的知识点 ID，一次查询两个知识点对应的课程、所有者和课程状态。
+    KnowledgePointRelationContext findKnowledgePointRelationContext(
+            @Param("fromPointId") Long fromPointId,
+            @Param("toPointId") Long toPointId);
 }

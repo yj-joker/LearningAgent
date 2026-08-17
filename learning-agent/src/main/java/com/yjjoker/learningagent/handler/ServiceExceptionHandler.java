@@ -74,4 +74,10 @@ public class ServiceExceptionHandler {
         log.info(e.getMessage());
         return Result.error(e.getMessage(), "400");
     }
+
+    @ExceptionHandler(NullException.class)
+    public Result<String> handleNullException(NullException e) {
+        log.info(e.getMessage());
+        return Result.error(e.getMessage(), "400");
+    }
 }

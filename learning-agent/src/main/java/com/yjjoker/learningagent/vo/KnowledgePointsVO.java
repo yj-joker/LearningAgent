@@ -10,6 +10,7 @@ public class KnowledgePointsVO {
     private String name;
     private Long sortOrder;
     private String description;
+    private Long createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

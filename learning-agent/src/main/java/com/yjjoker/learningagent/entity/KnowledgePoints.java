@@ -12,6 +12,7 @@ public class KnowledgePoints {
     private Long sortOrder;
     private String name;
     private String description;
+    private Long createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

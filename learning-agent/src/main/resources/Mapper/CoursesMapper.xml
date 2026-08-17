@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.CoursesRepository">
+
+
+    <!-- 一次查询关系两端的知识点及其课程上下文；任一端不存在时 INNER JOIN 不返回记录。 -->
+    <select id="findKnowledgePointRelationContext"
+            resultType="com.yjjoker.learningagent.vo.KnowledgePointRelationContext">
+        SELECT from_point.id AS fromPointId,
+               from_course.id AS fromCourseId,
+               from_course.user_id AS fromCourseOwnerId,
+               from_course.course_type AS fromCourseType,
+               to_point.id AS toPointId,
+               to_course.id AS toCourseId,
+               to_course.user_id AS toCourseOwnerId,
+               to_course.course_type AS toCourseType
+        FROM knowledge_points from_point
+        INNER JOIN courses from_course
+                ON from_course.id = from_point.course_id
+        INNER JOIN knowledge_points to_point
+                ON to_point.id = #{toPointId}
+        INNER JOIN courses to_course
+                ON to_course.id = to_point.course_id
+        WHERE from_point.id = #{fromPointId}
+    </select>
+</mapper>

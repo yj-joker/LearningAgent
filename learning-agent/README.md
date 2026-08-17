@@ -74,4 +74,4 @@ PUT     /learning-agent/courses/publishCourse/{courseId}  发布课程
 
 ## 已知限制 
 
-不做登录认证，认证使用手动在BaseContext中添加给定值模拟。
+

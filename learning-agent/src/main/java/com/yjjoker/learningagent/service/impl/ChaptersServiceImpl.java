@@ -58,6 +58,8 @@ public class ChaptersServiceImpl implements ChaptersService {
         if (chaptersList.size() != result) {
             throw new LearningAgentServiceException("添加章节失败，请稍后再试");
         }
+        log.info("添加章节成功");
+        //TODO 异步处理source，进行重排序
         return getChaptersVOList(chaptersList);
     }
 
