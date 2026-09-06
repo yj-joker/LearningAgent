@@ -14,6 +14,14 @@ export function getKnowledgePointsByChapterId(chapterId: ApiId) {
   return request<KnowledgePointVO[]>(`${KNOWLEDGE_POINT_BASE}/chapter/${chapterId}`)
 }
 
+export function getCoursePrerequisiteKnowledgePoints(courseId: ApiId) {
+  return request<KnowledgePointVO[]>(`${KNOWLEDGE_POINT_BASE}/getPrerequisiteKnowledgePoints/${courseId}`)
+}
+
+export function getCourseConfusableKnowledgePoints(courseId: ApiId) {
+  return request<KnowledgePointVO[]>(`${KNOWLEDGE_POINT_BASE}/getConfusableKnowledgePoints/${courseId}`)
+}
+
 export function updateKnowledgePoints(payload: KnowledgePointPayload[]) {
   return request<KnowledgePointVO[]>(`${KNOWLEDGE_POINT_BASE}/updateKnowledgePoints`, {
     method: 'PUT',

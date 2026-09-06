@@ -157,7 +157,7 @@ public class KnowledgePointRelationsServiceImpl implements KnowledgePointRelatio
         }
         // 当前用户只能使用公开课程或自己拥有的非公开课程知识点。
         validatePrivateCourseAccess(context);
-        // 防止激活关系后，通过公开课程查询暴露非公开知识点。
+        // 校验课程的所属是否合法。非法：公开课程不能依赖非公开课程中的知识点，公开课程不能与非公开课程建立易混淆关系，不同所有者的非公开课程不能建立知识点关系。
         validateRelationVisibility(context, relationDTO.getRelationType());
         return context;
     }
@@ -168,17 +168,19 @@ public class KnowledgePointRelationsServiceImpl implements KnowledgePointRelatio
             return;
         }
         Long currentUserId = BaseContext.getCurrentId();
+        //如果fromId对应的课程不是公开课程，并且该课程的所有者不是当前用户
         if (!isPublished(context.getFromCourseType())
                 && !Objects.equals(context.getFromCourseOwnerId(), currentUserId)) {
             throw new ViolationOperationException("无权使用前置知识点所属的非公开课程");
         }
+        //如果toId对应的课程不是公开课程，并且该课程的所有者不是当前用户
         if (!isPublished(context.getToCourseType())
                 && !Objects.equals(context.getToCourseOwnerId(), currentUserId)) {
             throw new ViolationOperationException("无权使用目标知识点所属的非公开课程");
         }
     }
 
-    // 校验关系激活后不会通过课程关系查询暴露其他用户的非公开知识点。
+    // 校验课程的所属是否合法。非法：公开课程不能依赖非公开课程中的知识点，公开课程不能与非公开课程建立易混淆关系，不同所有者的非公开课程不能建立知识点关系。
     private void validateRelationVisibility(
             KnowledgePointRelationContext context,
             KnowledgePointRelationTypeEnum relationType) {

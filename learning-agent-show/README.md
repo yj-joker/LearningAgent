@@ -49,6 +49,10 @@ npm run preview
 | 查询章节知识点 | GET | `/knowledgePoints/chapter/{chapterId}` |
 | 批量修改知识点 | PUT | `/knowledgePoints/updateKnowledgePoints` |
 | 批量删除知识点 | DELETE | `/knowledgePoints/{ids}` |
+| 创建知识点关系/提交关系建议 | POST | `/knowledgePointRelations/createKnowledgePointRelations` |
+| 删除知识点关系（仅管理员接口，前端用户端不开放） | DELETE | `/knowledgePointRelations/deleteKnowledgePointRelations/{ids}` |
+| 查询课程已生效的前置知识点 | GET | `/knowledgePoints/getPrerequisiteKnowledgePoints/{courseId}` |
+| 查询课程已生效的易混淆知识点 | GET | `/knowledgePoints/getConfusableKnowledgePoints/{courseId}` |
 | 创建学习会话 | POST | `/learning-agent/learning/session` |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
 
@@ -99,3 +103,5 @@ npm run preview
 - 支持知识点创建、查询、修改和删除，名称与描述按照后端长度限制校验。
 - 新知识点默认添加到章节末尾，`sortOrder` 从 `1000` 开始并按 `1000` 递增。
 - PRIVATE 课程支持拖动知识点卡片调整顺序，其他状态只锁定拖动排序。
+- 支持从当前章节已加载的知识点中选择目标，创建“前置关系”或“易混淆关系”。创建成功后展示本次会话中的关系记录。
+- 当前后端提供的是课程维度的已生效知识点查询，但尚未提供完整的关系边详情和关系更新接口；页面刷新后会重新加载已生效关联知识点，本次新增记录提示会清空。删除关系接口仅允许管理员调用，用户端不提供删除入口。

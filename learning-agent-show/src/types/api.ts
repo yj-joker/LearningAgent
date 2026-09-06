@@ -100,6 +100,27 @@ export interface KnowledgePointVO {
   updatedAt: string
 }
 
+export type KnowledgePointRelationType = 'PREREQUISITE' | 'CONFUSABLE'
+export type KnowledgePointRelationStatus = 'PENDING' | 'ACTIVE' | 'REJECTED' | 'DEPRECATED'
+export type KnowledgePointRelationSource = 'ADMIN' | 'USER_SUGGESTED' | 'AI_GENERATED'
+
+export interface KnowledgePointRelationPayload {
+  id?: ApiId | null
+  fromPointId: ApiId
+  toPointId: ApiId
+  relationType: KnowledgePointRelationType
+}
+
+export interface KnowledgePointRelationVO {
+  id: ApiId
+  fromPointId: ApiId
+  toPointId: ApiId
+  relationType: KnowledgePointRelationType
+  status: KnowledgePointRelationStatus
+  source: KnowledgePointRelationSource
+  createdAt: string
+}
+
 export interface SessionCreatePayload {
   courseId: ApiId
   sessionTitle: string

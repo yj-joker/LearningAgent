@@ -6,7 +6,9 @@ import {
   BookOpenText,
   ChevronLeft,
   CircleAlert,
+  CheckCircle2,
   GripVertical,
+  Link2,
   Lightbulb,
   LockKeyhole,
   Pencil,
@@ -19,15 +21,23 @@ import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
 import { getChaptersByCourseId } from '@/api/chapters'
+import { createKnowledgePointRelation } from '@/api/knowledgePointRelations'
 import {
   createKnowledgePoints,
   deleteKnowledgePointsByIds,
+  getCourseConfusableKnowledgePoints,
+  getCoursePrerequisiteKnowledgePoints,
   getKnowledgePointsByChapterId,
   updateKnowledgePoints,
 } from '@/api/knowledgePoints'
 import { useActivity } from '@/composables/useActivity'
 import { useToast } from '@/composables/useToast'
-import type { ChapterVO, KnowledgePointVO } from '@/types/api'
+import type {
+  ChapterVO,
+  KnowledgePointRelationType,
+  KnowledgePointRelationVO,
+  KnowledgePointVO,
+} from '@/types/api'
 
 const SORT_STEP = 1000
 const MAX_SORT_ORDER = 4_294_967_295
@@ -41,8 +51,12 @@ const chapters = ref<ChapterVO[]>([])
 const knowledgePoints = ref<KnowledgePointVO[]>([])
 const loadingChapters = ref(false)
 const loadingPoints = ref(false)
+const loadingRelations = ref(false)
 const pointsLoaded = ref(false)
 const loadError = ref('')
+const relationLoadError = ref('')
+const prerequisitePoints = ref<KnowledgePointVO[]>([])
+const confusablePoints = ref<KnowledgePointVO[]>([])
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -64,6 +78,16 @@ const pointerDrag = ref<{
   active: boolean
 } | null>(null)
 
+const relationOpen = ref(false)
+const creatingRelation = ref(false)
+const relationForm = reactive<{
+  fromPointId: string
+  toPointId: string
+  relationType: KnowledgePointRelationType
+}>({ fromPointId: '', toPointId: '', relationType: 'PREREQUISITE' })
+const relationError = ref('')
+const recentRelations = ref<KnowledgePointRelationVO[]>([])
+
 const activeCourseId = computed(() => typeof route.params.courseId === 'string' ? route.params.courseId : '')
 const activeChapterId = computed(() => typeof route.params.chapterId === 'string' ? route.params.chapterId : '')
 const knownCourse = computed(() => knownCourses.value.find((course) => course.courseId === activeCourseId.value) ?? null)
@@ -71,9 +95,40 @@ const selectedChapter = computed(() => chapters.value.find((chapter) => chapter.
 const sortedChapters = computed(() => [...chapters.value].sort((a, b) => a.sortOrder - b.sortOrder))
 const sortedKnowledgePoints = computed(() => [...knowledgePoints.value].sort((a, b) => a.sortOrder - b.sortOrder))
 const canReorder = computed(() => pointsLoaded.value && knownCourse.value?.courseType === 'PRIVATE' && !ordering.value)
+const canCreateRelation = computed(() => sortedKnowledgePoints.value.length > 1 && !creatingRelation.value)
+const relationFromPoint = computed(() => knowledgePoints.value.find((point) => point.id === relationForm.fromPointId) ?? null)
+const relationToPoint = computed(() => knowledgePoints.value.find((point) => point.id === relationForm.toPointId) ?? null)
+const uniquePrerequisitePoints = computed(() => uniquePoints(prerequisitePoints.value))
+const uniqueConfusablePoints = computed(() => uniquePoints(confusablePoints.value))
+
+const relationTypeLabels: Record<KnowledgePointRelationType, string> = {
+  PREREQUISITE: '前置关系',
+  CONFUSABLE: '易混淆关系',
+}
+
+const relationStatusLabels: Record<KnowledgePointRelationVO['status'], string> = {
+  PENDING: '待审核',
+  ACTIVE: '已生效',
+  REJECTED: '已拒绝',
+  DEPRECATED: '已废弃',
+}
 
 function apiErrorMessage(error: unknown, fallback: string) {
   return error instanceof ApiError ? error.message : fallback
+}
+
+function pointName(pointId: string | number) {
+  return knowledgePoints.value.find((point) => String(point.id) === String(pointId))?.name ?? '未知知识点'
+}
+
+function uniquePoints(points: KnowledgePointVO[]) {
+  const seen = new Set<string>()
+  return points.filter((point) => {
+    const id = String(point.id)
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
 }
 
 function openCourse(courseId: string) {
@@ -97,8 +152,11 @@ async function loadCurrentSelection() {
   const chapterId = activeChapterId.value
   chapters.value = []
   knowledgePoints.value = []
+  prerequisitePoints.value = []
+  confusablePoints.value = []
   pointsLoaded.value = false
   loadError.value = ''
+  relationLoadError.value = ''
 
   if (!courseId) return
   if (!knownCourses.value.some((course) => course.courseId === courseId)) {
@@ -117,6 +175,21 @@ async function loadCurrentSelection() {
     return
   } finally {
     loadingChapters.value = false
+  }
+
+  loadingRelations.value = true
+  try {
+    const [loadedPrerequisites, loadedConfusables] = await Promise.all([
+      getCoursePrerequisiteKnowledgePoints(courseId),
+      getCourseConfusableKnowledgePoints(courseId),
+    ])
+    if (courseId !== activeCourseId.value) return
+    prerequisitePoints.value = loadedPrerequisites
+    confusablePoints.value = loadedConfusables
+  } catch (error) {
+    relationLoadError.value = apiErrorMessage(error, '暂时无法加载课程关联知识点')
+  } finally {
+    loadingRelations.value = false
   }
 
   if (!chapterId) return
@@ -167,6 +240,52 @@ function openEditEditor(point: KnowledgePointVO) {
   editorErrors.name = ''
   editorErrors.description = ''
   editorOpen.value = true
+}
+
+function openRelationEditor() {
+  if (!canCreateRelation.value) return
+  const [first, second] = sortedKnowledgePoints.value
+  relationForm.fromPointId = first?.id ?? ''
+  relationForm.toPointId = second?.id ?? ''
+  relationForm.relationType = 'PREREQUISITE'
+  relationError.value = ''
+  relationOpen.value = true
+}
+
+function closeRelationEditor() {
+  if (creatingRelation.value) return
+  relationOpen.value = false
+  relationError.value = ''
+}
+
+function validateRelation() {
+  if (!relationForm.fromPointId || !relationForm.toPointId) {
+    relationError.value = '请选择关系两端的知识点'
+  } else if (relationForm.fromPointId === relationForm.toPointId) {
+    relationError.value = '关系两端不能选择同一个知识点'
+  } else {
+    relationError.value = ''
+  }
+  return !relationError.value
+}
+
+async function saveRelation() {
+  if (!validateRelation() || !canCreateRelation.value) return
+  creatingRelation.value = true
+  try {
+    const created = await createKnowledgePointRelation({
+      fromPointId: relationForm.fromPointId,
+      toPointId: relationForm.toPointId,
+      relationType: relationForm.relationType,
+    })
+    recentRelations.value = [created, ...recentRelations.value].slice(0, 8)
+    relationOpen.value = false
+    showToast('success', '关系建议已提交', `${relationFromPoint.value?.name ?? '知识点'} → ${relationToPoint.value?.name ?? '知识点'}`)
+  } catch (error) {
+    relationError.value = apiErrorMessage(error, error instanceof Error ? error.message : '关系提交失败，请稍后重试')
+  } finally {
+    creatingRelation.value = false
+  }
 }
 
 function validateEditor() {
@@ -368,7 +487,11 @@ function clearDrag() {
   dragPlacement.value = null
 }
 
-watch(() => [route.params.courseId, route.params.chapterId], loadCurrentSelection, { immediate: true })
+watch(() => [route.params.courseId, route.params.chapterId], () => {
+  recentRelations.value = []
+  relationOpen.value = false
+  loadCurrentSelection()
+}, { immediate: true })
 </script>
 
 <template>
@@ -431,6 +554,7 @@ watch(() => [route.params.courseId, route.params.chapterId], loadCurrentSelectio
           <div class="knowledge-workspace-actions">
             <StatusBadge v-if="knownCourse" :status="knownCourse.courseType" />
             <button class="icon-button" :disabled="loadingPoints || ordering" aria-label="刷新知识点" title="刷新知识点" @click="loadCurrentSelection"><RefreshCw :size="17" :class="{ spin: loadingPoints }" /></button>
+            <button class="button button-secondary" :disabled="!canCreateRelation" :title="canCreateRelation ? '建立知识点关系' : '至少需要两个知识点'" @click="openRelationEditor"><Link2 :size="17" /> 建立关系</button>
             <button class="button button-primary" @click="openCreateEditor"><Plus :size="17" /> 添加知识点</button>
           </div>
         </header>
@@ -440,6 +564,31 @@ watch(() => [route.params.courseId, route.params.chapterId], loadCurrentSelectio
           <p v-if="canReorder">按住知识点卡片拖到目标位置，松开后会自动保存新顺序。</p>
           <p v-else>课程审核中或已发布，知识点顺序暂不可调整。</p>
         </div>
+
+        <section class="course-relation-panel">
+          <header>
+            <div><span class="section-kicker">学习关联</span><h4>课程中的已生效关系</h4></div>
+            <small>这里展示课程关系中已生效的知识点，待审核建议不会出现在列表中。</small>
+          </header>
+          <div v-if="loadingRelations" class="relation-insight-loading"><RefreshCw :size="15" class="spin" /> 正在加载关联知识点…</div>
+          <div v-else-if="relationLoadError" class="relation-insight-error"><CircleAlert :size="15" /> {{ relationLoadError }}</div>
+          <div v-else class="course-relation-columns">
+            <div class="course-relation-group">
+              <div class="course-relation-group-title"><ArrowRight :size="15" /><strong>前置知识点</strong><span>{{ uniquePrerequisitePoints.length }}</span></div>
+              <div v-if="uniquePrerequisitePoints.length" class="course-relation-chips">
+                <span v-for="point in uniquePrerequisitePoints" :key="point.id" class="course-relation-chip">{{ point.name }}</span>
+              </div>
+              <p v-else class="course-relation-empty">暂无已生效的前置关系</p>
+            </div>
+            <div class="course-relation-group">
+              <div class="course-relation-group-title mutual"><Link2 :size="15" /><strong>易混淆知识点</strong><span>{{ uniqueConfusablePoints.length }}</span></div>
+              <div v-if="uniqueConfusablePoints.length" class="course-relation-chips">
+                <span v-for="point in uniqueConfusablePoints" :key="point.id" class="course-relation-chip">{{ point.name }}</span>
+              </div>
+              <p v-else class="course-relation-empty">暂无已生效的易混淆关系</p>
+            </div>
+          </div>
+        </section>
 
         <div v-if="sortedKnowledgePoints.length" class="knowledge-point-list" :class="{ 'is-ordering': ordering }">
           <article
@@ -478,6 +627,29 @@ watch(() => [route.params.courseId, route.params.chapterId], loadCurrentSelectio
         </div>
 
         <EmptyState v-else title="这个章节还没有知识点" description="添加第一个知识点，开始整理章节内容。" />
+
+        <section v-if="recentRelations.length" class="recent-relation-panel">
+          <header>
+            <div><span class="section-kicker">本次操作</span><h4>刚刚建立的关系</h4></div>
+            <small>后端暂未提供历史关系查询，刷新页面后此列表会清空</small>
+          </header>
+          <div class="recent-relation-list">
+            <article v-for="relation in recentRelations" :key="String(relation.id)">
+              <span class="relation-result-icon"><CheckCircle2 :size="18" /></span>
+              <div class="relation-result-copy">
+                <strong>{{ pointName(relation.fromPointId) }}</strong>
+                <span :class="{ mutual: relation.relationType === 'CONFUSABLE' }">
+                  {{ relation.relationType === 'PREREQUISITE' ? '是其前置知识' : '容易与其混淆' }}
+                </span>
+                <strong>{{ pointName(relation.toPointId) }}</strong>
+              </div>
+              <div class="relation-result-meta">
+                <span>{{ relationTypeLabels[relation.relationType] }}</span>
+                <b :class="`relation-status-${relation.status.toLowerCase()}`">{{ relationStatusLabels[relation.status] }}</b>
+              </div>
+            </article>
+          </div>
+        </section>
       </template>
     </section>
 
@@ -502,6 +674,66 @@ watch(() => [route.params.courseId, route.params.chapterId], loadCurrentSelectio
         <footer class="form-actions">
           <button type="button" class="button button-secondary" @click="editorOpen = false">取消</button>
           <button class="button button-primary" :disabled="savingPoint">{{ savingPoint ? '保存中…' : '保存知识点' }} <ArrowRight v-if="!savingPoint" :size="16" /></button>
+        </footer>
+      </form>
+    </ModalDialog>
+
+    <ModalDialog
+      :open="relationOpen"
+      title="建立知识点关系"
+      description="从当前章节选择两个知识点，描述它们之间的学习联系。"
+      width="wide"
+      @close="closeRelationEditor"
+    >
+      <form class="form-layout" @submit.prevent="saveRelation">
+        <div class="relation-type-picker" role="radiogroup" aria-label="关系类型">
+          <label :class="{ active: relationForm.relationType === 'PREREQUISITE' }">
+            <input v-model="relationForm.relationType" type="radio" value="PREREQUISITE" @change="relationError = ''">
+            <span><ArrowRight :size="19" /></span>
+            <div><strong>前置关系</strong><small>左侧知识点是学习右侧知识点之前应先掌握的内容</small></div>
+          </label>
+          <label :class="{ active: relationForm.relationType === 'CONFUSABLE' }">
+            <input v-model="relationForm.relationType" type="radio" value="CONFUSABLE" @change="relationError = ''">
+            <span><Link2 :size="19" /></span>
+            <div><strong>易混淆关系</strong><small>两个知识点概念相近，学习时需要进行对比辨析</small></div>
+          </label>
+        </div>
+
+        <div class="relation-endpoint-grid">
+          <div class="form-section">
+            <label class="field-label" for="relation-from-point">{{ relationForm.relationType === 'PREREQUISITE' ? '前置知识点' : '知识点一' }} <b>*</b></label>
+            <select id="relation-from-point" v-model="relationForm.fromPointId" class="form-select" @change="relationError = ''">
+              <option value="" disabled>请选择知识点</option>
+              <option v-for="point in sortedKnowledgePoints" :key="point.id" :value="point.id" :disabled="point.id === relationForm.toPointId">{{ point.name }}</option>
+            </select>
+          </div>
+
+          <span class="relation-direction" :class="{ mutual: relationForm.relationType === 'CONFUSABLE' }"><ArrowRight :size="20" /></span>
+
+          <div class="form-section">
+            <label class="field-label" for="relation-to-point">{{ relationForm.relationType === 'PREREQUISITE' ? '后续知识点' : '知识点二' }} <b>*</b></label>
+            <select id="relation-to-point" v-model="relationForm.toPointId" class="form-select" @change="relationError = ''">
+              <option value="" disabled>请选择知识点</option>
+              <option v-for="point in sortedKnowledgePoints" :key="point.id" :value="point.id" :disabled="point.id === relationForm.fromPointId">{{ point.name }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="relation-preview">
+          <Lightbulb :size="18" />
+          <p v-if="relationFromPoint && relationToPoint">
+            <template v-if="relationForm.relationType === 'PREREQUISITE'">建议先学习“{{ relationFromPoint.name }}”，再学习“{{ relationToPoint.name }}”。</template>
+            <template v-else>“{{ relationFromPoint.name }}”与“{{ relationToPoint.name }}”容易混淆，建议对比学习。</template>
+          </p>
+          <p v-else>请选择两个不同的知识点。</p>
+        </div>
+        <span v-if="relationError" class="field-error relation-form-error">{{ relationError }}</span>
+
+        <footer class="form-actions">
+          <button type="button" class="button button-secondary" :disabled="creatingRelation" @click="closeRelationEditor">取消</button>
+          <button class="button button-primary" :disabled="creatingRelation || !relationFromPoint || !relationToPoint">
+            {{ creatingRelation ? '提交中…' : '提交关系建议' }} <ArrowRight v-if="!creatingRelation" :size="16" />
+          </button>
         </footer>
       </form>
     </ModalDialog>
