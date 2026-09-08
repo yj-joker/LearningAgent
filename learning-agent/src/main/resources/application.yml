@@ -3,6 +3,14 @@ mybatis:
   configuration:
     map-underscore-to-camel-case: true
 spring:
+  servlet:
+    multipart:
+      #如果文件大小超过10MB，则写入磁盘，否则进入内存 。如果并发量大，最好的方式是直接写入MinIO
+      file-size-threshold: 10MB
+      #单个文件最大500MB
+      max-file-size: 500MB
+      #一次请求最大处理500MB
+      max-request-size: 500MB
   config:
     import: "optional:file:./.env[.properties]"
   application:
@@ -25,6 +33,12 @@ springdoc:
 jwt:
   secret: ${JWT_SECRET}
   expiration-millis: ${JWT_EXPIRATION_MILLIS}
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket-name: ${MINIO_BUCKET:document-bucket}
+
 
 snowflake:
   # 本地单实例可以使用 0；多实例部署时，每个同时运行的实例必须配置不同的值。

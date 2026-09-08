@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.DocumentRepository">
+
+
+    <select id="getVerifyAndDocumentMessage"
+            resultType="com.yjjoker.learningagent.entity.VerifyAndDocumentMessage"
+            parameterType="java.lang.Long">
+        SELECT d.upload_user_id,
+               kb.owner_type,
+               kb.visibility AS visibility_enum,
+               d.filename,
+               d.object_name AS object_name,
+               d.mime_type
+        FROM documents d
+                 INNER JOIN knowledge_base kb ON kb.id = d.kb_id
+        WHERE d.id = #{documentId} AND d.delete_flag ='ACTIVE'
+    </select>
+</mapper>

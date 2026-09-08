@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.KnowledgeBaseRepository">
+
+    <!--
+        根据知识库 ID 查询上传文件前所需的校验信息：
+        知识库所属课程的用户、知识库类型、知识库可见性以及课程状态。
+        使用 INNER JOIN，知识库或其所属课程不存在时返回 null。
+    -->
+    <select id="getUploadFileVerifyMessage"
+            resultType="com.yjjoker.learningagent.entity.UploadFileVerifyMessage"
+            parameterType="java.lang.Long">
+        SELECT c.user_id AS userId,
+               kb.owner_type AS ownerType,
+               kb.visibility AS visibilityEnum,
+               c.course_type AS coursesTypeEnum
+        FROM knowledge_base kb
+                 INNER JOIN courses c ON c.id = kb.course_id
+        WHERE kb.id = #{kbId}
+    </select>
+
+</mapper>

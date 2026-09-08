@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserPageItemVO {
+    //TODO 将id改成long类型
     private String id;
     private String username;
     private String avatarUrl;

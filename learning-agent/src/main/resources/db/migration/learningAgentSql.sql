@@ -203,3 +203,68 @@ ALTER TABLE knowledge_point_relations
     ADD COLUMN created_by BIGINT COMMENT '创建者用户ID，AI生成时为NULL',
     ADD COLUMN reviewed_by BIGINT COMMENT '审核者用户ID',
     ADD COLUMN reviewed_at DATETIME COMMENT '审核时间';
+
+-- 知识库表
+CREATE TABLE `knowledge_base` (
+                                  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+                                      COMMENT '知识库ID',
+                                  `course_id` BIGINT UNSIGNED NOT NULL
+                                      COMMENT '课程ID',
+                                  `name` VARCHAR(255) NOT NULL
+                                      COMMENT '知识库名称',
+                                  `description` TEXT NULL
+                                      COMMENT '知识库描述',
+                                  `owner_type` ENUM('USER', 'SYSTEM') NOT NULL DEFAULT 'USER'
+                                      COMMENT '所有者类型：用户、系统',
+                                  `visibility` ENUM('PRIVATE', 'PUBLIC') NOT NULL DEFAULT 'PRIVATE'
+                                      COMMENT '可见性：私有、公开',
+                                  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                      COMMENT '创建时间',
+                                  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                      ON UPDATE CURRENT_TIMESTAMP
+                                      COMMENT '更新时间',
+                                  PRIMARY KEY (`id`),
+                                  KEY `idx_knowledge_base_course_id` (`course_id`)
+
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '知识库表';
+
+
+-- 文档表
+CREATE TABLE `documents` (
+                             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+                                 COMMENT '文档ID',
+                             `kb_id` BIGINT UNSIGNED NOT NULL
+                                 COMMENT '知识库ID',
+                             `filename` VARCHAR(255) NOT NULL
+                                 COMMENT '文件名',
+                             `object_name` VARCHAR(1024) NOT NULL
+                                 COMMENT '存储在minIO当中的文件唯一标识',
+                             `status` ENUM('UPLOADED', 'PARSING', 'READY', 'FAILED') NOT NULL DEFAULT 'UPLOADED'
+                                 COMMENT '文档状态：已上传、解析中、解析完成、解析失败',
+                             `file_size` BIGINT UNSIGNED NOT NULL DEFAULT 0
+                                 COMMENT '文件大小，单位：字节',
+                             `mime_type` VARCHAR(128) NULL
+                                 COMMENT '文件MIME类型',
+                             `upload_user_id` BIGINT UNSIGNED NOT NULL
+                                 COMMENT '上传用户ID',
+                             `delete_flag` ENUM('ACTIVE', 'DELETED')
+                                 NOT NULL DEFAULT 'ACTIVE' COMMENT '软删除标记：ACTIVE-正常，DELETED-已删除',
+                             `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                 COMMENT '创建时间',
+                             `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                 ON UPDATE CURRENT_TIMESTAMP
+                                 COMMENT '更新时间',
+                             PRIMARY KEY (`id`),
+                             KEY `idx_documents_kb_id_created_at`
+                                 (`kb_id`, `created_at`),
+                             KEY `idx_documents_upload_user_id_created_at`
+                                 (`upload_user_id`, `created_at`),
+                             KEY `idx_documents_status_created_at`
+                                 (`status`, `created_at`)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '文档表';
