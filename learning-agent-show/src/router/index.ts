@@ -29,6 +29,12 @@ const router = createRouter({
       meta: { title: '知识点管理', requiresUser: true },
     },
     {
+      path: '/knowledge-bases',
+      name: 'knowledge-bases',
+      component: () => import('@/views/KnowledgeBaseView.vue'),
+      meta: { title: '知识库', requiresUser: true },
+    },
+    {
       path: '/sessions',
       name: 'sessions',
       component: () => import('@/views/SessionsView.vue'),

@@ -53,6 +53,9 @@ npm run preview
 | 删除知识点关系（仅管理员接口，前端用户端不开放） | DELETE | `/knowledgePointRelations/deleteKnowledgePointRelations/{ids}` |
 | 查询课程已生效的前置知识点 | GET | `/knowledgePoints/getPrerequisiteKnowledgePoints/{courseId}` |
 | 查询课程已生效的易混淆知识点 | GET | `/knowledgePoints/getConfusableKnowledgePoints/{courseId}` |
+| 创建知识库 | POST | `/knowledgeBase/add` |
+| 上传知识库文档 | POST | `/document/upload/{kbId}` |
+| 下载知识库文档 | GET | `/document/download/{documentId}` |
 | 创建学习会话 | POST | `/learning-agent/learning/session` |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
 
@@ -105,3 +108,11 @@ npm run preview
 - PRIVATE 课程支持拖动知识点卡片调整顺序，其他状态只锁定拖动排序。
 - 支持从当前章节已加载的知识点中选择目标，创建“前置关系”或“易混淆关系”。创建成功后展示本次会话中的关系记录。
 - 当前后端提供的是课程维度的已生效知识点查询，但尚未提供完整的关系边详情和关系更新接口；页面刷新后会重新加载已生效关联知识点，本次新增记录提示会清空。删除关系接口仅允许管理员调用，用户端不提供删除入口。
+
+## 知识库与文档
+
+- 用户从自己的课程列表选择课程后创建知识库，不需要手动填写课程 ID 或知识库 ID。
+- 用户知识库默认为私有；只有课程处于 `PRIVATE` 状态时，课程拥有者才能上传文档。
+- 上传使用 `multipart/form-data`，下载直接处理后端返回的文件流和文件名。
+- 当前后端没有知识库列表和文档列表查询接口，因此页面只展示本次打开页面后创建、上传的记录；刷新后记录会清空，但服务端数据不会被删除。
+- 管理员虽然可以在后端创建系统知识库，但当前没有课程列表接口供管理端选择目标课程，因此管理端不提供要求手动输入课程 ID 的临时页面。

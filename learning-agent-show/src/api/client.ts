@@ -22,14 +22,16 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = isAuthRequest ? null : getStoredToken()
 
   try {
+    const isMultipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
+    const headers = {
+      Accept: 'application/json',
+      ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    }
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...init?.headers,
-      },
+      headers,
     })
   } catch {
     throw new ApiError('服务暂时不可用，请稍后重试')
@@ -62,4 +64,26 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return result.data
+}
+
+export async function requestBlob(path: string): Promise<{ blob: Blob; filename?: string }> {
+  const token = getStoredToken()
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: {
+        Accept: '*/*',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+  } catch {
+    throw new ApiError('服务暂时不可用，请稍后重试')
+  }
+  if (!response.ok) {
+    throw new ApiError(response.status >= 500 ? '服务暂时不可用，请稍后重试' : '文件下载失败，请检查权限后重试', response.status)
+  }
+  const disposition = response.headers.get('content-disposition') ?? ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+  return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : plain }
 }

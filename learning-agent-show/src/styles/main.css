@@ -1201,6 +1201,7 @@ textarea::placeholder { color: #aeb6b3; }
 .session-record-copy > div { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .session-record h4 { margin: 0 0 5px; }
 .session-record time { display: block; }
+.session-complete-button { margin-top: 11px; min-height: 29px; padding: 0 11px; font-size: 9px; }
 
 .modal-open { overflow: hidden; }
 
@@ -1821,6 +1822,7 @@ textarea::placeholder { color: #aeb6b3; }
 .auth-switch { display: flex; margin: 25px 0 0; gap: 4px; justify-content: center; color: #8b9692; font-size: 10px; }
 .auth-switch a { display: inline-flex; gap: 4px; align-items: center; color: var(--forest); font-weight: 700; }
 .auth-switch a:hover { color: #4d756a; }
+.auth-role-switch { margin-top: 12px; }
 .auth-footnote { margin: 42px 0 0; color: #a3ada9; font-size: 8px; line-height: 1.7; text-align: center; }
 .auth-notice { display: flex; padding: 11px 12px; margin-bottom: 17px; gap: 9px; align-items: center; border-radius: 10px; }
 .auth-notice span { display: grid; width: 21px; height: 21px; flex: 0 0 auto; place-items: center; border-radius: 50%; font-size: 11px; font-weight: 800; }
@@ -2063,6 +2065,9 @@ textarea::placeholder { color: #aeb6b3; }
 .admin-login-submit { width: 100%; min-height: 47px; margin-top: 5px; color: white; background: #173f48; border: 1px solid #173f48; }
 .admin-login-submit:hover:not(:disabled) { background: #20515a; }
 .admin-login-note { display: flex; margin-top: 30px !important; gap: 6px; align-items: center; justify-content: center; color: #9ba7aa !important; font-size: 8px !important; text-align: center; }
+.admin-login-switch { display: flex; margin: 14px 0 0 !important; gap: 7px; align-items: center; justify-content: center; color: #879497 !important; font-size: 9px !important; text-align: center; }
+.admin-login-switch a { display: inline-flex; gap: 4px; align-items: center; color: #245a5d; font-weight: 700; }
+.admin-login-switch a:hover { color: #4d756a; }
 .admin-denied-notice { padding: 10px 12px; margin: -8px 0 18px; color: #865f46; background: #f9efd9; border: 1px solid #eee0c2; border-radius: 9px; font-size: 8px; line-height: 1.5; }
 
 @media (max-width: 1120px) {
@@ -2651,7 +2656,59 @@ body { background: var(--canvas); }
   min-height: 250px;
 }
 
+.knowledge-base-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 16px; align-items: start; }
+.knowledge-base-course-panel,
+.knowledge-base-content-panel { min-width: 0; padding: 20px; }
+.knowledge-base-course-panel .panel-header,
+.knowledge-base-content-panel .panel-header { margin-bottom: 16px; }
+.knowledge-base-course-list { display: grid; gap: 8px; }
+.knowledge-base-course-list > button { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; align-items: center; width: 100%; padding: 10px; color: var(--ink); text-align: left; background: #fff; border: 1px solid #e4ebe5; border-radius: 8px; cursor: pointer; transition: border-color .2s, background .2s; }
+.knowledge-base-course-list > button:hover,
+.knowledge-base-course-list > button.active { background: #f1f8f2; border-color: #9bc4a6; }
+.knowledge-base-course-icon { display: grid; width: 32px; height: 32px; place-items: center; color: #4f8264; background: #e7f3e8; border-radius: 7px; }
+.knowledge-base-course-list strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-base-course-list small { display: block; margin-top: 5px; }
+.knowledge-base-course-list .status-badge { transform: scale(.84); transform-origin: left center; }
+.knowledge-base-content-panel > .empty-state { min-height: 285px; }
+.knowledge-base-empty-tip { display: grid; min-height: 300px; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; border: 1px dashed #dce6de; border-radius: 9px; }
+.knowledge-base-empty-tip svg { color: #6e9a7b; }
+.knowledge-base-empty-tip strong { color: var(--ink); font-size: 13px; }
+.knowledge-base-empty-tip p { margin: 0 0 5px; font-size: 10px; }
+.knowledge-base-cards { display: grid; gap: 12px; }
+.knowledge-base-card { padding: 16px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.knowledge-base-card > header { display: flex; min-width: 0; gap: 11px; align-items: flex-start; }
+.knowledge-base-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; color: #8a6524; background: #fff3cf; border-radius: 8px; }
+.knowledge-base-card > header > div { min-width: 0; flex: 1; }
+.knowledge-base-card h4 { overflow: hidden; margin: 2px 0 4px; color: var(--ink); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-base-card header p { overflow: hidden; margin: 0; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-base-visibility { display: inline-flex; gap: 4px; align-items: center; padding: 4px 7px; color: #668071; background: #eff6f0; border-radius: 999px; font-size: 9px; white-space: nowrap; }
+.knowledge-base-upload { display: flex; min-height: 48px; margin-top: 15px; padding: 7px 8px 7px 12px; gap: 8px; align-items: center; color: #708079; background: #fafcf9; border: 1px dashed #cbdacd; border-radius: 7px; }
+.knowledge-base-upload.disabled { opacity: .65; }
+.knowledge-base-file-picker { display: flex; min-width: 0; flex: 1; gap: 8px; align-items: center; cursor: pointer; }
+.knowledge-base-file-picker > svg { flex: 0 0 auto; color: #659178; }
+.knowledge-base-file-picker > span { overflow: hidden; flex: 1; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-base-file-picker > b { color: #47725a; font-size: 9px; white-space: nowrap; }
+.knowledge-base-file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.knowledge-base-upload .button { flex: 0 0 auto; min-height: 32px; padding: 0 11px; font-size: 10px; }
+.knowledge-base-session-note { display: flex; gap: 7px; align-items: flex-start; margin: -3px 0 13px; padding: 9px 11px; color: #6f786e; background: #fbf8ef; border: 1px solid #eee6ce; border-radius: 7px; font-size: 9px; line-height: 1.5; }
+.knowledge-base-session-note svg { flex: 0 0 auto; margin-top: 1px; color: #9b7b37; }
+.knowledge-base-lock-tip { display: flex; gap: 5px; align-items: center; margin: 8px 0 0; color: #92734c; font-size: 9px; }
+.document-list { display: grid; margin-top: 13px; gap: 6px; }
+.document-row { display: flex; min-width: 0; gap: 9px; align-items: center; padding: 9px; background: #fbfcfb; border: 1px solid #e9efea; border-radius: 6px; }
+.document-row-icon { display: grid; width: 29px; height: 29px; flex: 0 0 auto; place-items: center; color: #587e9a; background: #eaf2f7; border-radius: 6px; }
+.document-row > div { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.document-row strong { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.document-row small { color: var(--muted); font-size: 9px; }
+.document-row .icon-button { width: 29px; height: 29px; }
+.document-empty { margin: 13px 0 0; color: #9aa59f; font-size: 9px; text-align: center; }
+.knowledge-base-modal-note { display: flex; gap: 8px; align-items: flex-start; padding: 11px 12px; color: #54705d; background: #f1f8f2; border: 1px solid #dfebdf; border-radius: 7px; font-size: 10px; line-height: 1.5; }
+.knowledge-base-modal-note svg { flex: 0 0 auto; color: #518365; }
+
 @media (max-width: 760px) {
+  .knowledge-base-layout { grid-template-columns: 1fr; }
+  .knowledge-base-course-panel,
+  .knowledge-base-content-panel { padding: 16px; }
+  .knowledge-base-course-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .knowledge-chapter-grid {
     grid-template-columns: 1fr;
   }
@@ -2683,6 +2740,13 @@ body { background: var(--canvas); }
     grid-column: 2 / -1;
     justify-content: flex-end;
   }
+}
+
+@media (max-width: 480px) {
+  .knowledge-base-course-list { grid-template-columns: 1fr; }
+  .knowledge-base-upload { flex-wrap: wrap; }
+  .knowledge-base-file-picker { min-width: calc(100% - 45px); }
+  .knowledge-base-upload .button { margin-left: auto; }
 }
 
 @media (max-width: 480px) {

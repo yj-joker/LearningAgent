@@ -40,6 +40,14 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      '/knowledgeBase': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/document': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
     },
   },
 })

@@ -84,6 +84,10 @@ async function submit() {
       </button>
     </form>
     <p class="auth-switch">还没有账号？ <RouterLink to="/register">创建一个新账号 <ArrowRight :size="14" /></RouterLink></p>
+    <p class="auth-switch auth-role-switch">
+      <span>管理员账号？</span>
+      <RouterLink to="/admin/login">切换到管理员登录 <ArrowRight :size="14" /></RouterLink>
+    </p>
     <p class="auth-footnote">请勿在公共设备上保存登录信息。</p>
   </AuthShell>
 </template>

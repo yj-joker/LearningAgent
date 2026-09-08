@@ -6,7 +6,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
-import { createSession } from '@/api/sessions'
+import { completeSession, createSession } from '@/api/sessions'
 import { useActivity } from '@/composables/useActivity'
 import { useToast } from '@/composables/useToast'
 
@@ -17,10 +17,20 @@ const { showToast } = useToast()
 
 const createOpen = ref(false)
 const creating = ref(false)
+const completingId = ref<string | null>(null)
 const errors = reactive({ courseId: '', sessionTitle: '' })
 const form = reactive({ courseId: '', sessionTitle: '' })
 
-const sessionActivities = computed(() => activities.value.filter((item) => item.kind.includes('session')))
+const completedSessionIds = computed(() => new Set(
+  activities.value
+    .filter((item) => item.kind === 'session-completed' && item.resourceId)
+    .map((item) => item.resourceId as string),
+))
+const sessionActivities = computed(() => activities.value.filter((item) => {
+  if (item.kind === 'session-completed') return true
+  if (item.kind !== 'session-created') return false
+  return !item.resourceId || !completedSessionIds.value.has(item.resourceId)
+}))
 const selectedCourse = computed(() => knownCourses.value.find((course) => course.courseId === form.courseId) ?? null)
 
 watch(() => route.query.create, (value) => {
@@ -46,6 +56,7 @@ async function submitCreate() {
       title: result.sessionTitle,
       description: `课程：${selectedCourse.value.courseName}`,
       status: result.sessionStatus,
+      resourceId: String(result.id),
     })
     showToast('success', '学习会话已开始', `${result.sessionTitle} 正在进行中`)
     form.courseId = ''
@@ -55,6 +66,26 @@ async function submitCreate() {
     showToast('error', '创建失败', error instanceof ApiError ? error.message : '发生未知错误')
   } finally {
     creating.value = false
+  }
+}
+
+async function finishSession(item: { id: string; title: string }) {
+  if (completingId.value) return
+  completingId.value = item.id
+  try {
+    const result = await completeSession(item.id)
+    addActivity({
+      kind: 'session-completed',
+      title: result.sessionTitle || item.title,
+      description: '已完成本次学习目标',
+      status: result.sessionStatus,
+      resourceId: item.id,
+    })
+    showToast('success', '学习会话已完成', result.sessionTitle || item.title)
+  } catch (error) {
+    showToast('error', '完成失败', error instanceof ApiError ? error.message : '学习会话完成失败，请稍后重试')
+  } finally {
+    completingId.value = null
   }
 }
 </script>
@@ -77,6 +108,9 @@ async function submitCreate() {
             <div><h4>{{ item.title }}</h4><StatusBadge :status="item.status" /></div>
             <p>{{ item.description }}</p>
             <time>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time>
+            <button v-if="item.kind === 'session-created' && item.resourceId" class="button button-secondary session-complete-button" :disabled="completingId === item.resourceId" @click="finishSession({ id: item.resourceId, title: item.title })">
+              {{ completingId === item.resourceId ? '完成中…' : '完成会话' }}
+            </button>
           </div>
         </article>
       </div>

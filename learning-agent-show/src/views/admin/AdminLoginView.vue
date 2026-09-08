@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Eye, EyeOff, GraduationCap, KeyRound, LockKeyhole, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
 import { useAuth } from '@/composables/useAuth'
@@ -78,6 +78,10 @@ async function submit() {
           <button class="button admin-login-submit" :disabled="submitting">{{ submitting ? '身份验证中…' : '进入管理控制台' }} <ArrowRight v-if="!submitting" :size="17" /></button>
         </form>
         <p class="admin-login-note"><ShieldCheck :size="13" /> 管理员账号仅可进入管理端。</p>
+        <p class="admin-login-switch">
+          <span>想使用普通用户身份？</span>
+          <RouterLink to="/login">切换到用户登录 <ArrowRight :size="14" /></RouterLink>
+        </p>
       </div>
     </section>
   </div>

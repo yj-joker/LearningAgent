@@ -6,6 +6,7 @@ import {
   BookOpenText,
   CheckCircle2,
   Clock3,
+  FolderOpen,
   Lightbulb,
   ListTree,
   MessageSquareText,
@@ -92,6 +93,7 @@ function formatTime(value: string) {
           <RouterLink to="/courses"><span><BookOpenText :size="18" /></span><div><strong>我的课程</strong><small>查看课程与审核状态</small></div><ArrowRight :size="16" /></RouterLink>
           <RouterLink to="/chapters"><span><ListTree :size="18" /></span><div><strong>章节编排</strong><small>维护课程章节顺序</small></div><ArrowRight :size="16" /></RouterLink>
           <RouterLink to="/knowledge-points"><span><Lightbulb :size="18" /></span><div><strong>知识点管理</strong><small>整理章节中的知识内容</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/knowledge-bases"><span><FolderOpen :size="18" /></span><div><strong>课程知识库</strong><small>上传和下载课程资料</small></div><ArrowRight :size="16" /></RouterLink>
           <RouterLink to="/sessions"><span><MessageSquareText :size="18" /></span><div><strong>学习会话</strong><small>开始一次专注学习</small></div><ArrowRight :size="16" /></RouterLink>
         </nav>
       </aside>

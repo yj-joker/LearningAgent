@@ -121,14 +121,50 @@ export interface KnowledgePointRelationVO {
   createdAt: string
 }
 
+export type KnowledgeBaseOwnerType = 'USER' | 'SYSTEM'
+export type KnowledgeBaseVisibility = 'PUBLIC' | 'PRIVATE'
+export type DocumentStatus = 'UPLOADED' | 'PARSING' | 'READY' | 'FAILED'
+
+export interface KnowledgeBaseCreatePayload {
+  courseId: ApiId
+  name: string
+  description?: string | null
+}
+
+export interface KnowledgeBaseVO {
+  id: ApiId
+  name: string
+  description: string | null
+  ownerType: KnowledgeBaseOwnerType
+  visibility: KnowledgeBaseVisibility
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DocumentVO {
+  id: ApiId
+  filename: string
+  objectName: string
+  fileSize: number
+  status: DocumentStatus
+  mimeType: string | null
+  updatedAt: string
+}
+
 export interface SessionCreatePayload {
   courseId: ApiId
   sessionTitle: string
 }
 
 export interface LearningSessionVO {
+  id: ApiId
+  courseId?: ApiId
   sessionTitle: string
   sessionStatus: SessionStatus
+  createAt?: string | null
+  updateAt?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
 }
 
 export type ActivityKind = 'course-created' | 'course-published' | 'session-created' | 'session-completed'
