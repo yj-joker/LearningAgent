@@ -5,6 +5,7 @@ import com.yjjoker.learningagent.constant.MinioRetryData;
 import com.yjjoker.learningagent.entity.Documents;
 import com.yjjoker.learningagent.entity.UploadFileVerifyMessage;
 import com.yjjoker.learningagent.entity.VerifyAndDocumentMessage;
+import com.yjjoker.learningagent.exception.DataIllegalException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.exception.NullException;
 import com.yjjoker.learningagent.exception.ViolationOperationException;
@@ -26,6 +27,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Response;
 import org.springframework.beans.BeanUtils;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -141,12 +143,15 @@ public class DocumentServiceImpl implements DocumentService {
         document.setMimeType(contentType);
         document.setUploadUserId(BaseContext.getCurrentId());
         document.setStatus(DocumentEnum.UPLOADED);
-        document.setDeleteFlag(DeleteFlagEnum.ACTIVE);
         document.setCreatedAt(LocalDateTime.now());
         document.setUpdatedAt(LocalDateTime.now());
         int result;
         try {
             result = documentRepository.save(document);
+        } catch (DataIntegrityViolationException e) {
+            removeUploadedObjectQuietly(objectName);
+            log.error("保存文档时违反数据库约束，filename={}", document.getFilename(), e);
+            throw new DataIllegalException("文档数据不符合数据库约束");
         } catch (Exception e) {
             removeUploadedObjectQuietly(objectName);
             log.error("保存文档数据库记录失败，已尝试清理 MinIO 对象，objectName={}", objectName, e);

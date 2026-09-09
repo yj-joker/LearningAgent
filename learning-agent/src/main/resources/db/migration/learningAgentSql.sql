@@ -250,8 +250,8 @@ CREATE TABLE `documents` (
                                  COMMENT '文件MIME类型',
                              `upload_user_id` BIGINT UNSIGNED NOT NULL
                                  COMMENT '上传用户ID',
-                             `delete_flag` ENUM('ACTIVE', 'DELETED')
-                                 NOT NULL DEFAULT 'ACTIVE' COMMENT '软删除标记：ACTIVE-正常，DELETED-已删除',
+                             `deleted_at` DATETIME DEFAULT NULL
+                                 COMMENT '软删除时间：NULL-正常，非NULL-已删除',
                              `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                  COMMENT '创建时间',
                              `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

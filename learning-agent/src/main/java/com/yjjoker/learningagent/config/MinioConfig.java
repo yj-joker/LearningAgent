@@ -1,8 +1,11 @@
 package com.yjjoker.learningagent.config;
 
 import io.minio.MinioClient;
+import okhttp3.OkHttpClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * MinIO 客户端配置。
@@ -15,9 +18,15 @@ public class MinioConfig {
      */
     @Bean
     public MinioClient minioClient(MinioProperties minioProperties) {
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+                .connectTimeout(3, TimeUnit.SECONDS)//握手超时
+                .readTimeout(60, TimeUnit.SECONDS)//读超时
+                .writeTimeout(10, TimeUnit.MINUTES)//写超时（大文件）
+                .build();
         return MinioClient.builder()
                 .endpoint(minioProperties.getEndpoint())
                 .credentials(minioProperties.getAccessKey(), minioProperties.getSecretKey())
+                .httpClient(httpClient)
                 .build();
     }
 }

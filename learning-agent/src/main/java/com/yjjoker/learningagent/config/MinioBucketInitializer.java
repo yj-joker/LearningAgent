@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.config;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import io.minio.errors.ErrorResponseException;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
@@ -42,6 +43,20 @@ public class MinioBucketInitializer implements ApplicationRunner {
                 log.info("创建 MinIO 桶成功，bucketName={}", bucketName);
             } else {
                 log.info("MinIO 桶已存在，bucketName={}", bucketName);
+            }
+        } catch (ErrorResponseException e) {
+            String errorCode = e.errorResponse() == null ? "unknown" : e.errorResponse().code();
+            if ("InvalidAccessKeyId".equals(errorCode) || "SignatureDoesNotMatch".equals(errorCode)) {
+                log.error("初始化 MinIO 桶失败：应用配置的 Access Key 无法被 MinIO 识别，"
+                                + "请检查 MINIO_ACCESS_KEY/MINIO_SECRET_KEY，endpoint={}，bucketName={}，errorCode={}",
+                        minioProperties.getEndpoint(), bucketName, errorCode, e);
+            } else if ("AccessDenied".equals(errorCode)) {
+                log.error("初始化 MinIO 桶失败：MinIO 账号没有检查或创建桶的权限，"
+                                + "请为应用配置相应权限，endpoint={}，bucketName={}，errorCode={}",
+                        minioProperties.getEndpoint(), bucketName, errorCode, e);
+            } else {
+                log.error("初始化 MinIO 桶失败：S3/MinIO 返回错误，endpoint={}，bucketName={}，errorCode={}",
+                        minioProperties.getEndpoint(), bucketName, errorCode, e);
             }
         } catch (Exception e) {
             log.error("初始化 MinIO 桶失败，文件上传和下载功能暂不可用，bucketName={}", bucketName, e);

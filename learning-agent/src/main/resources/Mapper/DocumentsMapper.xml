@@ -17,6 +17,6 @@
                d.mime_type
         FROM documents d
                  INNER JOIN knowledge_base kb ON kb.id = d.kb_id
-        WHERE d.id = #{documentId} AND d.delete_flag ='ACTIVE'
+        WHERE d.id = #{documentId} AND d.deleted_at IS NULL
     </select>
 </mapper>

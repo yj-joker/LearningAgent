@@ -1,6 +1,5 @@
 package com.yjjoker.learningagent.entity;
 
-import com.yjjoker.learningagent.projectenum.DeleteFlagEnum;
 import com.yjjoker.learningagent.projectenum.DocumentEnum;
 import lombok.Data;
 
@@ -16,7 +15,7 @@ public class Documents {
     private Long fileSize;
     private String mimeType;
     private Long uploadUserId;
-    private DeleteFlagEnum deleteFlag;
+    private LocalDateTime deletedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }
