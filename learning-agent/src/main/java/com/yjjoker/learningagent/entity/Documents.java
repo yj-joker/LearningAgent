@@ -12,6 +12,8 @@ public class Documents {
     private String filename;
     private String objectName;
     private DocumentEnum status;
+    private Integer chunkCount;
+    private String parseError;
     private Long fileSize;
     private String mimeType;
     private Long uploadUserId;

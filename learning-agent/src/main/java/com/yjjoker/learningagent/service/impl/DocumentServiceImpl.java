@@ -13,6 +13,7 @@ import com.yjjoker.learningagent.projectenum.*;
 import com.yjjoker.learningagent.repository.DocumentRepository;
 import com.yjjoker.learningagent.repository.KnowledgeBaseRepository;
 import com.yjjoker.learningagent.service.DocumentService;
+import com.yjjoker.learningagent.service.DocumentsParseService;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.DocumentDownload;
 import com.yjjoker.learningagent.vo.DocumentVO;
@@ -38,6 +39,7 @@ import java.nio.file.AccessDeniedException;
 import java.nio.file.NoSuchFileException;
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.RejectedExecutionException;
 
 @Service
 @Slf4j
@@ -48,6 +50,8 @@ public class DocumentServiceImpl implements DocumentService {
     private final MinioProperties minioProperties;
     private final DocumentRepository documentRepository;
     private final KnowledgeBaseRepository knowledgeBaseRepository;
+    private final DocumentsParseService documentParseAsyncService;
+
 
     private static final int BUFFER_SIZE = 64 * 1024;
 
@@ -86,19 +90,20 @@ public class DocumentServiceImpl implements DocumentService {
             log.error("无权限上传文件");
             throw new ViolationOperationException("无权限上传文件");
         }
-
         Documents document = new Documents();
         //上传文件，先上传在写数据库，文件上传成功后再返回结果。
         String objectName = UUID.randomUUID().toString();
         String contentType = file.getContentType();
+        //如果文件类型为空，则设置为默认类型
         if (contentType == null || contentType.isBlank()) {
             contentType = "application/octet-stream";
         }
+        //如果文件名为空，则设置为默认名
         String filename = file.getOriginalFilename();
         if (filename == null || filename.isBlank()) {
             filename = "uploaded-file";
         }
-        // 最多阻塞尝试重新上传指定次数。
+        // 尝试上传文件， 最多阻塞尝试重新上传指定次数。
         boolean uploadSuccess = false;
         for (int attempt = 0; attempt < MinioRetryData.MINIO_MAX_RETRY; attempt++) {
             try (InputStream inputStream = file.getInputStream()) {
@@ -123,6 +128,7 @@ public class DocumentServiceImpl implements DocumentService {
                     try {
                         Thread.sleep(delayMillis);
                     } catch (InterruptedException interruptedException) {
+                        // sleep会清空中断状态，需要重新设置，否则程序会认为没有被中断，导致无法捕获中断异常
                         Thread.currentThread().interrupt();
                         removeUploadedObjectQuietly(objectName);
                         log.error("文件上传重试过程被中断：{}", interruptedException.getMessage());
@@ -143,9 +149,12 @@ public class DocumentServiceImpl implements DocumentService {
         document.setMimeType(contentType);
         document.setUploadUserId(BaseContext.getCurrentId());
         document.setStatus(DocumentEnum.UPLOADED);
+        document.setChunkCount(0);
+        document.setParseError(null);
         document.setCreatedAt(LocalDateTime.now());
         document.setUpdatedAt(LocalDateTime.now());
         int result;
+        // 保存文档信息到数据库当中。数据库生成主键后，才能将有效的 documentId 提交给异步任务。
         try {
             result = documentRepository.save(document);
         } catch (DataIntegrityViolationException e) {
@@ -159,13 +168,28 @@ public class DocumentServiceImpl implements DocumentService {
         }
         if (result != 1) {
             removeUploadedObjectQuietly(objectName);
+            log.error("保存文档数据库记录失败，已尝试清理 MinIO 对象，objectName={}", objectName);
             throw new LearningAgentServiceException("保存文档失败");
+        }
+        // 文档保存成功后，再提交异步解析任务。
+        try {
+            documentParseAsyncService.parseDocuments(document.getId());
+        } catch (RejectedExecutionException e) {
+            log.warn("文档解析任务提交失败，线程池已满，documentId={}", document.getId(), e);
+            documentRepository.updateParseResult(
+                    document.getId(),
+                    DocumentEnum.FAILED,
+                    0,
+                    "当前解析任务较多，请稍后重试",
+                    LocalDateTime.now()
+            );
+            document.setStatus(DocumentEnum.FAILED);
+            document.setParseError("当前解析任务较多，请稍后重试");
         }
         DocumentVO documentVO = new DocumentVO();
         BeanUtils.copyProperties(document, documentVO);
         return documentVO;
     }
-
     // 下载文档：先完成数据库和权限校验，再返回带有文件元数据的流式响应。
     @Override
     public DocumentDownload prepareDownload(Long documentId) {
@@ -236,7 +260,7 @@ public class DocumentServiceImpl implements DocumentService {
         );
     }
 
-    /** 将 MinIO 对象按缓冲区写入 HTTP 输出流，不关闭由 Spring 管理的输出流。 */
+    //将 MinIO 对象按缓冲区写入 HTTP 输出流，不关闭由 Spring 管理的输出流
     private void streamObject(String objectName, String bucketName, OutputStream outputStream) throws IOException {
         try (GetObjectResponse minioInputStream = minioClient.getObject(
                 GetObjectArgs.builder().bucket(bucketName).object(objectName).build())) {
@@ -252,7 +276,7 @@ public class DocumentServiceImpl implements DocumentService {
         }
     }
 
-    /** 数据库保存失败或上传失败时清理已生成的 MinIO 对象，避免遗留孤儿文件。 */
+    // 数据库保存失败或上传失败时清理已生成的 MinIO 对象，避免遗留孤儿文件
     private void removeUploadedObjectQuietly(String objectName) {
         try {
             minioClient.removeObject(RemoveObjectArgs.builder()

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.yjjoker.learningagent.repository.DocumentChunksRepository">
+
+
+    <insert id="saveChunk">
+        insert into document_chunks (document_id, chunk_index, content,vector_id,metadata,created_at) values
+        <foreach collection="documentChunksList" item="documentChunk" separator=",">
+            (#{documentChunk.documentId}, #{documentChunk.chunkIndex}, #{documentChunk.content}, #{documentChunk.vectorId}, #{documentChunk.metadata}, #{documentChunk.createdAt})
+        </foreach>
+    </insert>
+</mapper>

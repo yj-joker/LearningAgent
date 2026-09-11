@@ -12,6 +12,8 @@ public class DocumentVO {
     private String objectName;
     private Long fileSize;
     private DocumentEnum status;
+    private Integer chunkCount;
+    private String parseError;
     private String mimeType;
     private LocalDateTime updatedAt;
 }

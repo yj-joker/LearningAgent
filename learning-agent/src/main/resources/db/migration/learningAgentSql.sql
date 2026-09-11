@@ -268,3 +268,33 @@ CREATE TABLE `documents` (
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '文档表';
+
+
+-- document_chunks 表
+CREATE TABLE document_chunks (
+                                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                 document_id BIGINT UNSIGNED NOT NULL COMMENT '所属文档',
+                                 chunk_index INT UNSIGNED NOT NULL COMMENT '切片序号，从 0 开始',
+                                 content TEXT NOT NULL COMMENT '切片的文本内容（约 500 字）',
+                                 vector_id VARCHAR(128) COMMENT '向量数据库里的 ID',
+                                 metadata JSON COMMENT '{
+  "page": 23,                    // 这个 chunk 来自第 23 页
+  "chapter": "第三章 进程调度",    // 所属章节
+  "section": "3.2 调度算法",      // 所属小节
+  "start_char": 15000,           // 在全文中的起始字符位置
+  "end_char": 15500,             // 结束位置
+  "has_image": true,             // 这个 chunk 附近有图片（第 11 周加 OCR 时用）
+  "has_table": false,            // 是否包含表格
+  "is_code": false               // 是否是代码块（技术文档特有）
+}',
+                                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                                 PRIMARY KEY (id),
+                                 UNIQUE KEY uk_document_chunks_document_id_chunk_index
+                                     (document_id, chunk_index)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档切片表';
+
+-- documents 表增加字段
+ALTER TABLE documents
+    ADD COLUMN chunk_count INT UNSIGNED DEFAULT 0 COMMENT '切片总数',
+    ADD COLUMN parse_error TEXT COMMENT '解析失败时的错误信息';

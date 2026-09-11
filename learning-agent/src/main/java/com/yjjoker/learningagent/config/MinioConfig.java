@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.config;
 
 import io.minio.MinioClient;
+import lombok.extern.slf4j.Slf4j;
 import okhttp3.OkHttpClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit;
  * MinIO 客户端配置。
  */
 @Configuration
+@Slf4j
 public class MinioConfig {
 
     /**
@@ -23,6 +25,7 @@ public class MinioConfig {
                 .readTimeout(60, TimeUnit.SECONDS)//读超时
                 .writeTimeout(10, TimeUnit.MINUTES)//写超时（大文件）
                 .build();
+        log.info("MinIO 客户端初始化完成");
         return MinioClient.builder()
                 .endpoint(minioProperties.getEndpoint())
                 .credentials(minioProperties.getAccessKey(), minioProperties.getSecretKey())
