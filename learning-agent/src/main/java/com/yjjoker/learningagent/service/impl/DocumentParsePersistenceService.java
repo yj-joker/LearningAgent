@@ -1,9 +1,14 @@
 package com.yjjoker.learningagent.service.impl;
 
+import com.alibaba.fastjson.JSON;
+import com.yjjoker.learningagent.client.AliyunEmbeddingClient;
 import com.yjjoker.learningagent.entity.DocumentChunks;
+import com.yjjoker.learningagent.entity.DocumentChunksMetadata;
+import com.yjjoker.learningagent.entity.EmbeddingResult;
 import com.yjjoker.learningagent.projectenum.DocumentEnum;
 import com.yjjoker.learningagent.repository.DocumentChunksRepository;
 import com.yjjoker.learningagent.repository.DocumentRepository;
+import com.yjjoker.learningagent.service.MilvusService;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +27,8 @@ public class DocumentParsePersistenceService {
 
     private final DocumentRepository documentRepository;
     private final DocumentChunksRepository documentChunksRepository;
+    private final AliyunEmbeddingClient aliyunEmbeddingClient;
+    private final MilvusService milvusService;
 
     //替换文档已有切片，保存新的切片，并将文档状态更新为解析完成。
     // 任一步骤失败时，事务会回滚，避免留下部分切片或错误的 READY 状态。
@@ -36,7 +43,8 @@ public class DocumentParsePersistenceService {
                 DocumentEnum.READY,
                 chunkCount,
                 null,
-                LocalDateTime.now()
+                LocalDateTime.now(),
+                DocumentEnum.PARSING
         );
         if (updatedRows != 1) {
             throw new IllegalStateException("更新文档解析完成状态失败");
@@ -51,22 +59,37 @@ public class DocumentParsePersistenceService {
     private int saveChunks(Long documentId, String text) {
         int chunkCount = 0;
         List<DocumentChunks> batch = new ArrayList<>(CHUNK_BATCH_SIZE);
+        List<String> texts = new ArrayList<>();
         for (int start = 0; start < text.length(); start += CHUNK_SIZE) {
             int end = Math.min(start + CHUNK_SIZE, text.length());
             DocumentChunks chunk = new DocumentChunks();
             chunk.setDocumentId(documentId);
             chunk.setChunkIndex(chunkCount);
             chunk.setContent(text.substring(start, end));
+            texts.add(chunk.getContent());
             chunk.setCreatedAt(LocalDateTime.now());
+            DocumentChunksMetadata documentChunksMetadata = new DocumentChunksMetadata();
+            documentChunksMetadata.setDocumentId(documentId);
+            documentChunksMetadata.setChunkIndex(chunkCount);
+            String metadata = JSON.toJSONString(documentChunksMetadata);
+            chunk.setMetadata(metadata);
             batch.add(chunk);
             chunkCount++;
+            // 每批次满10个切片时保存一次
             if (batch.size() == CHUNK_BATCH_SIZE) {
+                // 保存当前批次的切片
                 saveChunkBatch(batch);
+                //将切片向量化并保存到向量库当中
+                embeddingAndSave(texts, batch);
+                texts.clear();
                 batch.clear();
             }
         }
         if (!batch.isEmpty()) {
+            // 保存剩余的切片
             saveChunkBatch(batch);
+            //将切片向量化并保存到向量库当中
+            embeddingAndSave(texts, batch);
         }
         return chunkCount;
     }
@@ -76,5 +99,10 @@ public class DocumentParsePersistenceService {
         if (savedRows != chunks.size()) {
             throw new IllegalStateException("保存文档切片数量不完整");
         }
+    }
+    //将切片向量化并保存到向量库当中
+    private void embeddingAndSave(List<String> texts, List<DocumentChunks> chunks) {
+        List<EmbeddingResult> embeddingResults = aliyunEmbeddingClient.embedDocuments(texts);
+        milvusService.insertAll(chunks, embeddingResults);
     }
 }

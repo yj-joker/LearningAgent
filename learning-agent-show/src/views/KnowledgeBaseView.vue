@@ -26,6 +26,7 @@ const creating = ref(false)
 const uploadingId = ref<string | null>(null)
 const downloadingId = ref<string | null>(null)
 const selectedFile = ref<File | null>(null)
+const uploadRequestId = ref<string | null>(null)
 const form = reactive({ name: '', description: '' })
 const errors = reactive({ name: '' })
 
@@ -95,15 +96,17 @@ async function submitCreate() {
 function chooseFile(event: Event) {
   const input = event.target as HTMLInputElement
   selectedFile.value = input.files?.[0] ?? null
+  uploadRequestId.value = selectedFile.value ? crypto.randomUUID() : null
   input.value = ''
 }
 
 function clearFile() {
   selectedFile.value = null
+  uploadRequestId.value = null
 }
 
 async function submitUpload(base: LocalKnowledgeBase) {
-  if (!selectedFile.value || uploadingId.value) return
+  if (!selectedFile.value || !uploadRequestId.value || uploadingId.value) return
   if (selectedCourse.value?.courseType !== 'PRIVATE') {
     showToast('info', '课程暂不可上传', '只有私有课程的用户知识库允许上传文件')
     return
@@ -111,7 +114,7 @@ async function submitUpload(base: LocalKnowledgeBase) {
   const file = selectedFile.value
   uploadingId.value = String(base.id)
   try {
-    const result = await uploadDocument(base.id, file)
+    const result = await uploadDocument(base.id, file, uploadRequestId.value)
     base.documents.unshift(result)
     showToast('success', '文件上传成功', file.name)
     clearFile()

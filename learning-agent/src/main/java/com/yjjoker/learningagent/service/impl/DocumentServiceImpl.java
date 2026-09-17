@@ -28,6 +28,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Response;
 import org.springframework.beans.BeanUtils;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -57,7 +58,7 @@ public class DocumentServiceImpl implements DocumentService {
 
     //上传文档
     @Override
-    public DocumentVO uploadDocument(MultipartFile file, Long kbId) {
+    public DocumentVO uploadDocument(MultipartFile file, Long kbId, String uploadRequestId) {
         if (BaseContext.isCurrentIdNull()) {
             throw new ViolationOperationException("非法操作");
         }
@@ -67,6 +68,9 @@ public class DocumentServiceImpl implements DocumentService {
         }
         if (kbId == null || kbId <= 0) {
             throw new NullException("知识库ID不合法");
+        }
+        if (uploadRequestId == null || uploadRequestId.isBlank() || uploadRequestId.length() > 64) {
+            throw new DataIllegalException("上传请求标识不合法");
         }
         //获取知识库的上传文件验证信息
         UploadFileVerifyMessage uploadFileVerifyMessage;
@@ -145,6 +149,7 @@ public class DocumentServiceImpl implements DocumentService {
         document.setKbId(kbId);
         document.setFilename(filename);
         document.setObjectName(objectName);
+        document.setUploadRequestId(uploadRequestId);
         document.setFileSize(file.getSize());
         document.setMimeType(contentType);
         document.setUploadUserId(BaseContext.getCurrentId());
@@ -157,6 +162,19 @@ public class DocumentServiceImpl implements DocumentService {
         // 保存文档信息到数据库当中。数据库生成主键后，才能将有效的 documentId 提交给异步任务。
         try {
             result = documentRepository.save(document);
+        } catch (DuplicateKeyException e) {
+            removeUploadedObjectQuietly(objectName);
+            Documents existingDocument = documentRepository.getByUploadRequestId(
+                    BaseContext.getCurrentId(),
+                    uploadRequestId
+            );
+            if (existingDocument == null) {
+                log.error("重复上传请求已被拦截，但查询原文档失败，uploadRequestId={}", uploadRequestId, e);
+                throw new LearningAgentServiceException("查询重复上传文档失败");
+            }
+            log.info("重复上传请求返回原文档，documentId={}，uploadRequestId={}",
+                    existingDocument.getId(), uploadRequestId);
+            return toDocumentVO(existingDocument);
         } catch (DataIntegrityViolationException e) {
             removeUploadedObjectQuietly(objectName);
             log.error("保存文档时违反数据库约束，filename={}", document.getFilename(), e);
@@ -173,6 +191,22 @@ public class DocumentServiceImpl implements DocumentService {
         }
         // 文档保存成功后，再提交异步解析任务。
         try {
+            // 提交文档解析任务，将文档状态设置为解析中，防止同一个id的文档被重复解析
+            // 修改文档状态为 PARSING，防止并发解析
+            if (documentRepository.markParsingIfUploaded(document.getId(), LocalDateTime.now()) != 1) {
+                log.info(
+                        "文档状态迁移失败：仅允许 UPLOADED 状态进入 PARSING，"
+                                + "文档可能已被处理、不存在或已删除，documentId={}",
+                        document.getId()
+                );
+                Documents currentDocument = documentRepository.getById(document.getId());
+                if (currentDocument == null) {
+                    throw new NullException("文档不存在");
+                }
+                // 返回原文档信息，避免错误信息直接返回给用户
+                return toDocumentVO(currentDocument);
+            }
+            // 提交文档解析任务
             documentParseAsyncService.parseDocuments(document.getId());
         } catch (RejectedExecutionException e) {
             log.warn("文档解析任务提交失败，线程池已满，documentId={}", document.getId(), e);
@@ -181,11 +215,17 @@ public class DocumentServiceImpl implements DocumentService {
                     DocumentEnum.FAILED,
                     0,
                     "当前解析任务较多，请稍后重试",
-                    LocalDateTime.now()
+                    LocalDateTime.now(),
+                    DocumentEnum.PARSING
             );
             document.setStatus(DocumentEnum.FAILED);
             document.setParseError("当前解析任务较多，请稍后重试");
         }
+        return toDocumentVO(document);
+    }
+
+    // 将文档实体转换为上传接口返回对象。
+    private DocumentVO toDocumentVO(Documents document) {
         DocumentVO documentVO = new DocumentVO();
         BeanUtils.copyProperties(document, documentVO);
         return documentVO;

@@ -42,5 +42,20 @@ minio:
 
 
 snowflake:
-  # 本地单实例可以使用 0；多实例部署时，每个同时运行的实例必须配置不同的值。
+  # 本地单实例可以使用 0；
+  #TODO  多实例部署时，每个同时运行的实例必须配置不同的值。
   worker-id: ${SNOWFLAKE_WORKER_ID:0}
+
+aliyun:
+  embedding:
+    # API Key 通过环境变量或 .env 注入，不要写入源码。
+    api-key: ${DASHSCOPE_API_KEY:}
+    base-url: ${DASHSCOPE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
+    model: ${DASHSCOPE_EMBEDDING_MODEL:qwen3.7-text-embedding}
+    dimensions: ${DASHSCOPE_EMBEDDING_DIMENSIONS:1536}
+    # 单次请求最多发送的文本数量，qwen3.7 系列当前建议不超过 20
+    max-batch-size: ${DASHSCOPE_EMBEDDING_MAX_BATCH_SIZE:20}
+milvus:
+  host: ${MILVUS_HOST:127.0.0.1}
+  port: ${MILVUS_PORT:19530}
+  timeout: ${MILVUS_TIMEOUT:10000}

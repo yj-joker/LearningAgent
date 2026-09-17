@@ -298,3 +298,36 @@ CREATE TABLE document_chunks (
 ALTER TABLE documents
     ADD COLUMN chunk_count INT UNSIGNED DEFAULT 0 COMMENT '切片总数',
     ADD COLUMN parse_error TEXT COMMENT '解析失败时的错误信息';
+
+-- 同一用户使用同一个上传请求幂等键时，只允许创建一条文档记录。
+ALTER TABLE documents
+    ADD COLUMN upload_request_id VARCHAR(64) NULL
+        COMMENT '上传请求幂等键';
+
+UPDATE documents
+SET upload_request_id = CONCAT('legacy-', id)
+WHERE upload_request_id IS NULL;
+
+ALTER TABLE documents
+    MODIFY COLUMN upload_request_id VARCHAR(64) NOT NULL
+        COMMENT '上传请求幂等键',
+    ADD UNIQUE KEY uk_documents_upload_request
+        (upload_user_id, upload_request_id);
+
+# 文档处理任务表
+CREATE TABLE document_tasks (
+                                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '任务 ID',
+                                document_id BIGINT UNSIGNED NOT NULL COMMENT '关联的文档',
+                                task_type VARCHAR(32) NOT NULL DEFAULT 'VECTORIZE' COMMENT '任务类型',
+                                status VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '任务状态',
+                                retry_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已重试次数',
+                                max_retries INT UNSIGNED NOT NULL DEFAULT 3 COMMENT '最大重试次数',
+                                error_message TEXT COMMENT '失败原因',
+                                started_at DATETIME COMMENT '开始处理时间',
+                                completed_at DATETIME COMMENT '完成时间',
+                                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                PRIMARY KEY (id),
+                                KEY idx_document (document_id),
+                                KEY idx_status (status)
+) COMMENT '文档处理任务表';

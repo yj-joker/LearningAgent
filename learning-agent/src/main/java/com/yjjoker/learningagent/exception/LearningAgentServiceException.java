@@ -5,4 +5,8 @@ public class LearningAgentServiceException extends RuntimeException {
     public LearningAgentServiceException(String message) {
         super(message);
     }
+
+    public LearningAgentServiceException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

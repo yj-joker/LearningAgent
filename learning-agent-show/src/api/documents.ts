@@ -1,10 +1,14 @@
 import { request, requestBlob } from './client'
 import type { ApiId, DocumentVO } from '@/types/api'
 
-export function uploadDocument(kbId: ApiId, file: File) {
+export function uploadDocument(kbId: ApiId, file: File, uploadRequestId: string) {
   const form = new FormData()
   form.append('file', file)
-  return request<DocumentVO>(`/document/upload/${encodeURIComponent(String(kbId))}`, { method: 'POST', body: form })
+  return request<DocumentVO>(`/document/upload/${encodeURIComponent(String(kbId))}`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': uploadRequestId },
+    body: form,
+  })
 }
 
 export async function downloadDocument(documentId: ApiId, filename?: string) {

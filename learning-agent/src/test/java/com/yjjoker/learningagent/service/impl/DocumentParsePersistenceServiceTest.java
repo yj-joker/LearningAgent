@@ -42,7 +42,7 @@ class DocumentParsePersistenceServiceTest {
         when(documentChunksRepository.saveChunk(anyList()))
                 .thenAnswer(invocation -> ((List<?>) invocation.getArgument(0)).size());
         when(documentRepository.updateParseResult(
-                eq(1L), eq(DocumentEnum.READY), eq(2), eq(null), any(LocalDateTime.class)
+                eq(1L), eq(DocumentEnum.READY), eq(2), eq(null), any(LocalDateTime.class), eq(DocumentEnum.PARSING)
         )).thenReturn(1);
 
         int chunkCount = documentParsePersistenceService
@@ -58,7 +58,7 @@ class DocumentParsePersistenceServiceTest {
         assertEquals(500, chunks.get(0).getContent().length());
         assertEquals(1, chunks.get(1).getContent().length());
         verify(documentRepository).updateParseResult(
-                eq(1L), eq(DocumentEnum.READY), eq(2), eq(null), any(LocalDateTime.class)
+                eq(1L), eq(DocumentEnum.READY), eq(2), eq(null), any(LocalDateTime.class), eq(DocumentEnum.PARSING)
         );
     }
 

@@ -11,6 +11,7 @@ public class Documents {
     private Long kbId;
     private String filename;
     private String objectName;
+    private String uploadRequestId;
     private DocumentEnum status;
     private Integer chunkCount;
     private String parseError;

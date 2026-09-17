@@ -4,7 +4,7 @@ import com.yjjoker.learningagent.vo.DocumentVO;
 import org.springframework.web.multipart.MultipartFile;
 
 public interface DocumentService {
-   DocumentVO uploadDocument(MultipartFile file, Long kbId);
+   DocumentVO uploadDocument(MultipartFile file, Long kbId, String uploadRequestId);
 
    /**
     * 校验下载权限并准备文件流及响应元数据。

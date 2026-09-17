@@ -28,8 +28,10 @@ public class DocumentController {
     // 上传文档
     @PostMapping("/upload/{kbId}")
     @Operation(summary = "上传文档")
-     public Result<DocumentVO> upload(@RequestParam("file") MultipartFile file, @PathVariable @NotNull @Positive Long kbId) {
-        return Result.success(documentService.uploadDocument(file, kbId));
+    public Result<DocumentVO> upload(@RequestParam("file") MultipartFile file,
+                                     @PathVariable @NotNull @Positive Long kbId,
+                                     @RequestHeader("Idempotency-Key") String uploadRequestId) {
+        return Result.success(documentService.uploadDocument(file, kbId, uploadRequestId));
     }
     // 下载文档
     @GetMapping("/download/{documentId}")

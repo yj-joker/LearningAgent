@@ -35,24 +35,19 @@ public class DocumentsParseServiceImpl implements DocumentsParseService {
             log.warn("文档 ID 不合法，跳过异步解析，documentId={}", documentId);
             return;
         }
+        // 异步线程重新查询最新文档，避免使用提交任务时的旧实体快照。
+        Documents document = documentRepository.getById(documentId);
+        if (document == null) {
+            log.warn("待解析文档不存在或已删除，documentId={}", documentId);
+            return;
+        }
+        if (document.getStatus() != DocumentEnum.PARSING) {
+            log.info("文档当前不处于解析中状态，跳过异步解析，documentId={}，status={}",
+                    documentId, document.getStatus());
+            return;
+        }
         // 获取文档
-        boolean parsingStarted = false;
         try {
-            Documents document = documentRepository.getById(documentId);
-            if (document == null) {
-                log.warn("待解析文档不存在或已删除，documentId={}", documentId);
-                return;
-            }
-
-            if (documentRepository.markParsingIfUploaded(documentId, LocalDateTime.now()) != 1) {
-                log.info(
-                        "文档状态迁移失败：仅允许 UPLOADED 状态进入 PARSING，"
-                                + "文档可能已被处理、不存在或已删除，documentId={}",
-                        documentId
-                );
-                return;
-            }
-            parsingStarted = true;
             // 从 MinIO 获取 PDF 文本内容
             String text = readPdfText(document);
             if (text.isBlank()) {
@@ -60,16 +55,14 @@ public class DocumentsParseServiceImpl implements DocumentsParseService {
             }
             // 保存文档切片
             int chunkCount = documentParsePersistenceService
-                    .replaceChunksAndMarkReady(documentId, text);
-            log.info("文档解析完成，documentId={}, chunkCount={}", documentId, chunkCount);
+                    .replaceChunksAndMarkReady(document.getId(), text);
+            log.info("文档解析完成，documentId={}, chunkCount={}", document.getId(), chunkCount);
         } catch (Exception e) {
-            log.error("文档解析失败，documentId={}", documentId, e);
-            if (parsingStarted) {
+            log.error("文档解析失败，documentId={}", document.getId(), e);
                 // 清理失败文档的切片
-                clearChunksQuietly(documentId);
+                clearChunksQuietly(document.getId());
                 // 更新文档状态为失败
-                updateFailedStatus(documentId, e);
-            }
+                updateFailedStatus(document.getId(), e);
         }
     }
     // 从 MinIO 获取 PDF 对象，并使用 PDFBox 提取其中的文本。
@@ -120,7 +113,8 @@ public class DocumentsParseServiceImpl implements DocumentsParseService {
                     DocumentEnum.FAILED,
                     0,
                     errorMessage,
-                    LocalDateTime.now()
+                    LocalDateTime.now(),
+                    DocumentEnum.PARSING
             );
         } catch (Exception updateException) {
             log.error(
