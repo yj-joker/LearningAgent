@@ -42,6 +42,13 @@ public interface DocumentRepository {
     @Select("select * from documents where id = #{documentId} and deleted_at is null")
     Documents getById(@Param("documentId") Long documentId);
 
+    // 重试任务前把文档从解析中恢复为待解析状态。
+    @Update("UPDATE documents SET status = 'UPLOADED', chunk_count = 0, parse_error = NULL, " +
+            "updated_at = #{updatedAt} WHERE id = #{documentId} AND deleted_at IS NULL " +
+            "AND status = 'PARSING'")
+    int resetToUploadedIfParsing(@Param("documentId") Long documentId,
+                                 @Param("updatedAt") LocalDateTime updatedAt);
+
     //下载文档时，根据文档id获取文档信息和验证信息
      VerifyAndDocumentMessage getVerifyAndDocumentMessage(@Param("documentId") Long documentId);
 

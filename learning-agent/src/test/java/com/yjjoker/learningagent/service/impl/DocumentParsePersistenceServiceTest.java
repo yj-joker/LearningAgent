@@ -1,9 +1,12 @@
 package com.yjjoker.learningagent.service.impl;
 
 import com.yjjoker.learningagent.entity.DocumentChunks;
+import com.yjjoker.learningagent.client.AliyunEmbeddingClient;
+import com.yjjoker.learningagent.entity.EmbeddingResult;
 import com.yjjoker.learningagent.projectenum.DocumentEnum;
 import com.yjjoker.learningagent.repository.DocumentChunksRepository;
 import com.yjjoker.learningagent.repository.DocumentRepository;
+import com.yjjoker.learningagent.service.MilvusService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -33,6 +36,12 @@ class DocumentParsePersistenceServiceTest {
     @Mock
     private DocumentChunksRepository documentChunksRepository;
 
+    @Mock
+    private AliyunEmbeddingClient aliyunEmbeddingClient;
+
+    @Mock
+    private MilvusService milvusService;
+
     @InjectMocks
     private DocumentParsePersistenceService documentParsePersistenceService;
 
@@ -41,6 +50,13 @@ class DocumentParsePersistenceServiceTest {
     void shouldSaveContinuousChunksAndMarkDocumentReady() {
         when(documentChunksRepository.saveChunk(anyList()))
                 .thenAnswer(invocation -> ((List<?>) invocation.getArgument(0)).size());
+        when(aliyunEmbeddingClient.embedDocuments(anyList()))
+                .thenAnswer(invocation -> {
+                    List<String> texts = invocation.getArgument(0);
+                    return java.util.stream.IntStream.range(0, texts.size())
+                            .mapToObj(index -> new EmbeddingResult(index, List.of()))
+                            .toList();
+                });
         when(documentRepository.updateParseResult(
                 eq(1L), eq(DocumentEnum.READY), eq(2), eq(null), any(LocalDateTime.class), eq(DocumentEnum.PARSING)
         )).thenReturn(1);

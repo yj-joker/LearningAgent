@@ -80,4 +80,10 @@ public class ServiceExceptionHandler {
         log.info(e.getMessage());
         return Result.error(e.getMessage(), "400");
     }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public Result<String> handleIllegalStateException(IllegalStateException e) {
+        log.info(e.getMessage());
+        return Result.error(e.getMessage(), "500");
+    }
 }

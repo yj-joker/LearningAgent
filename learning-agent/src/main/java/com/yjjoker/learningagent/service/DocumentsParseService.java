@@ -1,5 +1,5 @@
 package com.yjjoker.learningagent.service;
 
 public interface DocumentsParseService {
-    void parseDocuments(Long documentId);
+    void parseDocuments(Long taskId);
 }

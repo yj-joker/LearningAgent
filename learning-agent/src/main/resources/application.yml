@@ -59,3 +59,9 @@ milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}
   timeout: ${MILVUS_TIMEOUT:10000}
+
+document:
+  task:
+    scheduler:
+      # 解析任务提交间隔，单位毫秒
+      fixed-delay-ms: ${DOCUMENT_TASK_SCHEDULER_FIXED_DELAY_MS:1000}

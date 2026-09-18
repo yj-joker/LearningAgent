@@ -318,6 +318,7 @@ ALTER TABLE documents
 CREATE TABLE document_tasks (
                                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '任务 ID',
                                 document_id BIGINT UNSIGNED NOT NULL COMMENT '关联的文档',
+                                user_id BIGINT UNSIGNED NOT NULL COMMENT '任务所属用户',
                                 task_type VARCHAR(32) NOT NULL DEFAULT 'VECTORIZE' COMMENT '任务类型',
                                 status VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '任务状态',
                                 retry_count INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '已重试次数',
@@ -328,6 +329,7 @@ CREATE TABLE document_tasks (
                                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                                 PRIMARY KEY (id),
+                                UNIQUE KEY uk_document_task_type (document_id, task_type),
                                 KEY idx_document (document_id),
-                                KEY idx_status (status)
+                                KEY idx_status_created_at (status, created_at)
 ) COMMENT '文档处理任务表';
