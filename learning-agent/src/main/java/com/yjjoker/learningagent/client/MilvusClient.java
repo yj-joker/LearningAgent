@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 public class MilvusClient {
 
     @Bean
-    public MilvusServiceClient milvusClient() {
+    public MilvusServiceClient milvusServiceClient() {
         ConnectParam connectParam = ConnectParam.newBuilder()
                 .withHost("127.0.0.1")
                 .withPort(19530)

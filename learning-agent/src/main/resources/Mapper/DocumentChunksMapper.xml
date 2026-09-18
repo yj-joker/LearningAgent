@@ -7,9 +7,9 @@
 
 
     <insert id="saveChunk">
-        insert into document_chunks (document_id, chunk_index, content,vector_id,metadata,created_at) values
+        insert into document_chunks (id, document_id, chunk_index, content, vector_id, metadata, created_at) values
         <foreach collection="documentChunksList" item="documentChunk" separator=",">
-            (#{documentChunk.documentId}, #{documentChunk.chunkIndex}, #{documentChunk.content}, #{documentChunk.vectorId}, #{documentChunk.metadata}, #{documentChunk.createdAt})
+            (#{documentChunk.id}, #{documentChunk.documentId}, #{documentChunk.chunkIndex}, #{documentChunk.content}, #{documentChunk.vectorId}, #{documentChunk.metadata}, #{documentChunk.createdAt})
         </foreach>
     </insert>
 </mapper>

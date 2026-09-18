@@ -9,6 +9,7 @@ import com.yjjoker.learningagent.projectenum.DocumentEnum;
 import com.yjjoker.learningagent.repository.DocumentChunksRepository;
 import com.yjjoker.learningagent.repository.DocumentRepository;
 import com.yjjoker.learningagent.service.MilvusService;
+import com.yjjoker.learningagent.utils.SnowflakeIdGenerator;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,7 @@ public class DocumentParsePersistenceService {
     private final DocumentChunksRepository documentChunksRepository;
     private final AliyunEmbeddingClient aliyunEmbeddingClient;
     private final MilvusService milvusService;
+    private final SnowflakeIdGenerator snowflakeIdGenerator;
 
     //替换文档已有切片，保存新的切片，并将文档状态更新为解析完成。
     // 任一步骤失败时，事务会回滚，避免留下部分切片或错误的 READY 状态。
@@ -63,6 +65,10 @@ public class DocumentParsePersistenceService {
         for (int start = 0; start < text.length(); start += CHUNK_SIZE) {
             int end = Math.min(start + CHUNK_SIZE, text.length());
             DocumentChunks chunk = new DocumentChunks();
+            // 先由应用生成切片主键，让 MySQL 和 Milvus 使用同一个 ID，不依赖自增主键回填。
+            long chunkId = snowflakeIdGenerator.nextId();
+            chunk.setId(chunkId);
+            chunk.setVectorId(String.valueOf(chunkId));
             chunk.setDocumentId(documentId);
             chunk.setChunkIndex(chunkCount);
             chunk.setContent(text.substring(start, end));

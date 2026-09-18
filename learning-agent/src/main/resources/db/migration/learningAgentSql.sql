@@ -272,7 +272,7 @@ CREATE TABLE `documents` (
 
 -- document_chunks 表
 CREATE TABLE document_chunks (
-                                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                                 id BIGINT UNSIGNED NOT NULL COMMENT '文档切片ID，由应用雪花算法生成',
                                  document_id BIGINT UNSIGNED NOT NULL COMMENT '所属文档',
                                  chunk_index INT UNSIGNED NOT NULL COMMENT '切片序号，从 0 开始',
                                  content TEXT NOT NULL COMMENT '切片的文本内容（约 500 字）',

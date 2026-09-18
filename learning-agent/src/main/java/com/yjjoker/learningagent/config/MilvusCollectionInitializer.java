@@ -12,7 +12,9 @@ import io.milvus.param.collection.HasCollectionParam;
 import io.milvus.grpc.DataType;
 import io.milvus.grpc.CollectionSchema;
 import io.milvus.grpc.DescribeCollectionResponse;
+import io.milvus.grpc.ErrorCode;
 import io.milvus.grpc.FieldSchema;
+import io.milvus.exception.ServerException;
 import io.milvus.param.R;
 import io.milvus.param.index.CreateIndexParam;
 import io.milvus.param.index.DescribeIndexParam;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 /**
  * 应用启动时准备 Milvus：集合结构 -> 向量索引配置 -> 加载集合。
  *
@@ -64,12 +67,21 @@ public class MilvusCollectionInitializer implements ApplicationRunner {
         try {
             response = milvusClient.describeIndex(DescribeIndexParam.newBuilder()
                     .withCollectionName(COLLECTION_NAME).build());
+        } catch (ServerException e) {
+            // Milvus SDK 2.3.4 会把“索引不存在”直接抛成 ServerException，而不是返回 R 响应。
+            if (isIndexNotExist(e)) {
+                log.info("Milvus 集合尚未创建索引，开始创建：{}", COLLECTION_NAME);
+                createIndex();
+                return;
+            }
+            throw new LearningAgentServiceException("检查 Milvus 索引失败", e);
         } catch (Exception e) {
             throw new LearningAgentServiceException("检查 Milvus 索引失败", e);
         }
         // SDK 2.3.4 可能以 IndexNotExist 返回“没有索引”。仅这一明确状态允许创建；
         // 网络失败、权限不足等其他错误必须继续报错，不能当成不存在。
-        if (response != null && Integer.valueOf(R.Status.IndexNotExist.getCode()).equals(response.getStatus())) {
+        if (isIndexNotExist(response)) {
+            log.info("Milvus 集合尚未创建索引，开始创建：{}", COLLECTION_NAME);
             createIndex();
             return;
         }
@@ -96,6 +108,31 @@ public class MilvusCollectionInitializer implements ApplicationRunner {
             throw new LearningAgentServiceException("已有 Milvus 索引配置不符合预期");
         }
         log.info("Milvus 索引已存在，跳过创建：{}", index.getIndexName());
+    }
+
+    // 同时检查 SDK 的兼容错误码和异常状态码，兼容不同响应转换路径。
+    private boolean isIndexNotExist(ServerException exception) {
+        return ErrorCode.IndexNotExist.equals(exception.getCompatibleCode())
+                || Integer.valueOf(R.Status.IndexNotExist.getCode()).equals(exception.getStatus())
+                || isIndexNotExistMessage(exception.getMessage());
+    }
+
+    // SDK 可能将服务端错误转换成失败响应，使用错误消息作为最后的兼容判断。
+    private boolean isIndexNotExist(R<?> response) {
+        if (response == null) {
+            return false;
+        }
+        if (Integer.valueOf(R.Status.IndexNotExist.getCode()).equals(response.getStatus())) {
+            return true;
+        }
+        // R#getMessage() 会直接调用内部 exception.getMessage()，正常响应中 exception 为 null 时会空指针。
+        Exception exception = response.getException();
+        return exception != null && isIndexNotExistMessage(exception.getMessage());
+    }
+
+    // 只识别明确的“索引不存在”，其他错误继续按启动失败处理。
+    private boolean isIndexNotExistMessage(String message) {
+        return message != null && message.toLowerCase(Locale.ROOT).contains("index not found");
     }
 
     /**
@@ -204,8 +241,12 @@ public class MilvusCollectionInitializer implements ApplicationRunner {
     // 本方法只检查外层状态，调用方仍需按业务检查 Boolean/结构等 data 是否有效。
     private void requireSuccess(R<?> response, String message) {
         if (response == null || !Integer.valueOf(R.Status.Success.getCode()).equals(response.getStatus())) {
-            throw new LearningAgentServiceException(message + (response == null ? "" : "：" + response.getMessage()),
-                    response == null ? null : response.getException());
+            Exception exception = response == null ? null : response.getException();
+            String detail = exception == null ? null : exception.getMessage();
+            String responseDetail = detail == null || detail.isBlank()
+                    ? response == null ? "" : "，状态码：" + response.getStatus()
+                    : "：" + detail;
+            throw new LearningAgentServiceException(message + responseDetail, exception);
         }
     }
     // 保留原来的创建方法：由 ensureCollection 在确认不存在后调用。
