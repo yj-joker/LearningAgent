@@ -92,8 +92,8 @@ public class DocumentsParseServiceImpl implements DocumentsParseService {
                     taskId, document.getId(), chunkCount);
         } catch (Exception e) {
             log.error("文档解析失败，taskId={}，documentId={}", taskId, document.getId(), e);
-            // 清理失败文档的切片；第 12 个问题的任务隔离 TODO 保留在此处。
-            clearChunksQuietly(document.getId());
+            // 短事务失败会自动回滚并恢复旧切片，新写入的 Milvus 向量由持久化服务按本次 ID 补偿。
+            // 这里不能再按 documentId 无条件删除，否则可能把事务回滚后恢复的旧切片误删。
             markFailure(taskId, document.getId(), e);
         }
     }
@@ -118,16 +118,6 @@ public class DocumentsParseServiceImpl implements DocumentsParseService {
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setSortByPosition(true);
             return stripper.getText(pdfDocument);
-        }
-    }
-
-    // 解析失败后清理已经写入的部分切片。
-    private void clearChunksQuietly(Long documentId) {
-        try {
-            // TODO [问题12] 删除条件目前只有 documentId，未来应增加 taskId 或 parseGeneration 以隔离不同解析任务。
-            documentParsePersistenceService.deleteChunks(documentId);
-        } catch (Exception e) {
-            log.error("清理失败文档的切片失败，documentId={}", documentId, e);
         }
     }
 

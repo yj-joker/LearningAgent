@@ -24,7 +24,9 @@ import java.util.Map;
 public class AliyunEmbeddingClient {
 
     private final AliyunEmbeddingProperties properties;
-    private final RestClient restClient = RestClient.builder().build();
+    private final AliyunEmbeddingConcurrencyLimiter concurrencyLimiter;
+    private final RestClient restClient = RestClient.builder()
+            .build();
 
     // 批量生成文本向量。
     public List<EmbeddingResult> embedDocuments(List<String> texts) {
@@ -42,20 +44,8 @@ public class AliyunEmbeddingClient {
         // 发送 POST 请求。
         EmbeddingResponse response;
         try {
-            response = restClient.post()
-                    .uri(properties.getBaseUrl())
-                    // 设置请求头，指定内容类型为 JSON。
-                    .contentType(MediaType.APPLICATION_JSON)
-                    // 设置响应内容类型为 JSON。
-                    .accept(MediaType.APPLICATION_JSON)
-                    // 设置请求头，包含 API Key。
-                    .header("Authorization", "Bearer " + requireApiKey())
-                    // 设置请求体，包含要向量化的文本列表。
-                    .body(request)
-                    // 发送请求并获取响应。
-                    .retrieve()
-                    // 获取响应体并反序列化为 EmbeddingResponse 对象。
-                    .body(EmbeddingResponse.class);
+            // 每次真正发送 HTTP 请求前获取独立的阿里云并发许可，不降低其他文档处理阶段的并发度。
+            response = concurrencyLimiter.execute(() -> sendEmbeddingRequest(request));
         } catch (RestClientException exception) {
             // 网络错误、连接超时以及 HTTP 错误会进入这里。
             log.error("调用阿里云 Embedding 接口失败，文本数量：{}", texts.size(), exception);
@@ -64,6 +54,24 @@ public class AliyunEmbeddingClient {
 
         //校验阿里云返回的数据，并依据 index 恢复成输入文本的顺序。
         return validateAndOrderResponse(response, texts.size());
+    }
+
+    // 向阿里云发送一次 Embedding HTTP 请求，这个方法只能通过并发限制器调用。
+    private EmbeddingResponse sendEmbeddingRequest(EmbeddingRequest request) {
+        return restClient.post()
+                .uri(properties.getBaseUrl())
+                // 设置请求头，指定内容类型为 JSON。
+                .contentType(MediaType.APPLICATION_JSON)
+                // 设置响应内容类型为 JSON。
+                .accept(MediaType.APPLICATION_JSON)
+                // 设置请求头，包含 API Key。
+                .header("Authorization", "Bearer " + requireApiKey())
+                // 设置请求体，包含要向量化的文本列表。
+                .body(request)
+                // 发送请求并获取响应。
+                .retrieve()
+                // 获取响应体并反序列化为 EmbeddingResponse 对象。
+                .body(EmbeddingResponse.class);
     }
 
     // 校验请求参数。

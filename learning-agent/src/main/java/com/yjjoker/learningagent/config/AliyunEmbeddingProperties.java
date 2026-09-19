@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.config;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -28,4 +29,10 @@ public class AliyunEmbeddingProperties {
     //单次请求最多发送的文本数量，qwen3.7 系列当前建议不超过 20
     @NotNull
     private int maxBatchSize;
+    // 单个应用实例同时调用阿里云 Embedding 接口的最大请求数。
+    @Min(1)
+    private int maxConcurrency = 2;
+    // 等待阿里云并发许可的最长时间，超时后让任务进入现有失败或重试流程。
+    @Min(1)
+    private int acquireTimeoutSeconds = 30;
 }

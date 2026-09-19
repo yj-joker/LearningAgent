@@ -47,14 +47,20 @@ snowflake:
   worker-id: ${SNOWFLAKE_WORKER_ID:0}
 
 aliyun:
+  debug:
+    timeout-second: ${ALIYUN_DEBUG_TIMEOUT_SECOND:10}
   embedding:
     # API Key 通过环境变量或 .env 注入，不要写入源码。
-    api-key: ${DASHSCOPE_API_KEY:}
-    base-url: ${DASHSCOPE_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
-    model: ${DASHSCOPE_EMBEDDING_MODEL:qwen3.7-text-embedding}
-    dimensions: ${DASHSCOPE_EMBEDDING_DIMENSIONS:1536}
+    api-key: ${ALIYUN_EMBEDDING_API_KEY:}
+    base-url: ${ALIYUN_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings}
+    model: ${ALIYUN_EMBEDDING_MODEL:qwen3.7-text-embedding}
+    dimensions: ${ALIYUN_EMBEDDING_DIMENSIONS:1536}
     # 单次请求最多发送的文本数量，qwen3.7 系列当前建议不超过 20
-    max-batch-size: ${DASHSCOPE_EMBEDDING_MAX_BATCH_SIZE:20}
+    max-batch-size: ${ALIYUN_EMBEDDING_MAX_BATCH_SIZE:20}
+    # 单实例同时调用阿里云 Embedding 接口的最大请求数
+    max-concurrency: ${ALIYUN_EMBEDDING_MAX_CONCURRENCY:2}
+    # 等待并发许可的最长时间，单位秒
+    acquire-timeout-seconds: ${ALIYUN_EMBEDDING_ACQUIRE_TIMEOUT_SECONDS:30}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}

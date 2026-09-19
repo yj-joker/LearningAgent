@@ -9,6 +9,7 @@ import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.ErrorCode;
 import io.milvus.grpc.MutationResult;
 import io.milvus.param.R;
+import io.milvus.param.dml.DeleteParam;
 import io.milvus.param.dml.InsertParam;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,7 @@ import java.util.Set;
 public class MilvusServiceImpl implements MilvusService {
     // 必须与 MilvusCollectionInitializer 中 embedding 字段的维度一致。
     private static final int VECTOR_DIMENSION = 1536;
+    private static final int DELETE_BATCH_SIZE = 500;
 
     private final MilvusServiceClient milvusClient;
 
@@ -104,7 +106,7 @@ public class MilvusServiceImpl implements MilvusService {
         }
         if (!Integer.valueOf(R.Status.Success.getCode()).equals(response.getStatus())) {
             throw new LearningAgentServiceException(
-                    "Milvus 批量插入失败：" + response.getMessage(), response.getException());
+                    "Milvus 批量插入失败：" + getFailureDetail(response), response.getException());
         }
         MutationResult result = response.getData();
         if (result == null || !result.hasStatus()
@@ -119,6 +121,71 @@ public class MilvusServiceImpl implements MilvusService {
             chunk.setVectorId(String.valueOf(chunk.getId()));
         }
         return Math.toIntExact(result.getInsertCnt());
+    }
+
+    // 按切片 ID 分批删除向量，调用方可以用它精确补偿本次解析或清理替换前的旧版本。
+    // 删除表达式只包含主键 ID，不按 documentId 扩大删除范围，因此重复调用也是安全的。
+    @Override
+    public int deleteByIds(List<Long> chunkIds) {
+        if (chunkIds == null) {
+            throw new LearningAgentServiceException("待删除的切片 ID 列表不能为空");
+        }
+        if (chunkIds.isEmpty()) {
+            return 0;
+        }
+
+        // 去重并校验 ID，避免生成包含 null 或重复主键的 Milvus 删除表达式。
+        List<Long> uniqueChunkIds = chunkIds.stream()
+                .peek(chunkId -> {
+                    if (chunkId == null || chunkId <= 0) {
+                        throw new LearningAgentServiceException("待删除的切片 ID 必须为正数");
+                    }
+                })
+                .distinct()
+                .toList();
+
+        int deletedCount = 0;
+        for (int start = 0; start < uniqueChunkIds.size(); start += DELETE_BATCH_SIZE) {
+            int end = Math.min(start + DELETE_BATCH_SIZE, uniqueChunkIds.size());
+            List<Long> batch = uniqueChunkIds.subList(start, end);
+            String expression = "id in [" + batch.stream()
+                    .map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(",")) + "]";
+
+            // 通过主键表达式删除当前批次，单批大小受控，避免生成过长的请求表达式。
+            DeleteParam deleteParam = DeleteParam.newBuilder()
+                    .withCollectionName(MilvusCollectionInitializer.COLLECTION_NAME)
+                    .withExpr(expression)
+                    .build();
+            R<MutationResult> response = milvusClient.delete(deleteParam);
+            if (response == null) {
+                throw new LearningAgentServiceException("Milvus 批量删除失败：未返回结果");
+            }
+            if (!Integer.valueOf(R.Status.Success.getCode()).equals(response.getStatus())) {
+                throw new LearningAgentServiceException(
+                        "Milvus 批量删除失败：" + getFailureDetail(response), response.getException());
+            }
+
+            MutationResult result = response.getData();
+            if (result == null || !result.hasStatus()
+                    || result.getStatus().getErrorCode() != ErrorCode.Success) {
+                String reason = result == null || !result.hasStatus()
+                        ? "未返回完整删除结果"
+                        : result.getStatus().getReason();
+                throw new LearningAgentServiceException("Milvus 批量删除失败：" + reason);
+            }
+            deletedCount += Math.toIntExact(result.getDeleteCnt());
+        }
+        return deletedCount;
+    }
+
+    // 安全提取 Milvus SDK 的失败信息，避免部分响应没有 exception 时调用 getMessage() 再次抛空指针。
+    private String getFailureDetail(R<?> response) {
+        Exception exception = response.getException();
+        if (exception != null && exception.getMessage() != null && !exception.getMessage().isBlank()) {
+            return exception.getMessage();
+        }
+        return "状态码=" + response.getStatus();
     }
 
 }

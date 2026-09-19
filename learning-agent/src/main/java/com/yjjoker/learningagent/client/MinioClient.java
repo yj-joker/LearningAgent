@@ -17,8 +17,11 @@ public class MinioClient {
     @Bean
     public io.minio.MinioClient minioClient(MinioProperties minioProperties) {
         OkHttpClient httpClient = new OkHttpClient.Builder()
+                // 连接超时
                 .connectTimeout(3, TimeUnit.SECONDS)
+                // 读超时
                 .readTimeout(60, TimeUnit.SECONDS)
+                // 写超时
                 .writeTimeout(10, TimeUnit.MINUTES)
                 .build();
         log.info("MinIO 客户端初始化完成");
