@@ -35,4 +35,10 @@ public class AliyunEmbeddingProperties {
     // 等待阿里云并发许可的最长时间，超时后让任务进入现有失败或重试流程。
     @Min(1)
     private int acquireTimeoutSeconds = 30;
+    // 与阿里云建立 TCP 和 TLS 连接的最长等待时间。
+    @Min(1)
+    private int connectTimeoutSeconds = 5;
+    // 连接建立后等待阿里云返回响应数据的最长时间。
+    @Min(1)
+    private int readTimeoutSeconds = 60;
 }

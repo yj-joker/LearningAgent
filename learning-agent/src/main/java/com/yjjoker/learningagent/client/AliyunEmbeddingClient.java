@@ -4,13 +4,14 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.yjjoker.learningagent.config.AliyunEmbeddingProperties;
 import com.yjjoker.learningagent.entity.EmbeddingResult;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.time.Duration;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -19,14 +20,32 @@ import java.util.Map;
 // 阿里云 Embedding 客户端。
 // 这个类只负责和阿里云文本向量接口通信：接收文本、发送 HTTP 请求、校验响应并返回向量。
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class AliyunEmbeddingClient {
 
     private final AliyunEmbeddingProperties properties;
     private final AliyunEmbeddingConcurrencyLimiter concurrencyLimiter;
-    private final RestClient restClient = RestClient.builder()
-            .build();
+    private final RestClient restClient;
+
+    // 创建只供阿里云 Embedding 使用的 HTTP 客户端，并分别限制连接和读取等待时间。
+    public AliyunEmbeddingClient(
+            AliyunEmbeddingProperties properties,
+            AliyunEmbeddingConcurrencyLimiter concurrencyLimiter) {
+        this.properties = properties;
+        this.concurrencyLimiter = concurrencyLimiter;
+
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        // 连接超时限制建立 TCP 和 TLS 连接的等待时间，避免网络不可达时长期占用解析线程。
+        requestFactory.setConnectTimeout(Duration.ofSeconds(properties.getConnectTimeoutSeconds()));
+        // 读取超时限制连接成功后等待响应数据的时间，避免请求长期占用并发许可。
+        requestFactory.setReadTimeout(Duration.ofSeconds(properties.getReadTimeoutSeconds()));
+        this.restClient = RestClient.builder()
+                .requestFactory(requestFactory)
+                .build();
+
+        log.info("阿里云 Embedding HTTP 客户端初始化完成，connectTimeoutSeconds={}，readTimeoutSeconds={}",
+                properties.getConnectTimeoutSeconds(), properties.getReadTimeoutSeconds());
+    }
 
     // 批量生成文本向量。
     public List<EmbeddingResult> embedDocuments(List<String> texts) {
@@ -58,7 +77,8 @@ public class AliyunEmbeddingClient {
 
     // 向阿里云发送一次 Embedding HTTP 请求，这个方法只能通过并发限制器调用。
     private EmbeddingResponse sendEmbeddingRequest(EmbeddingRequest request) {
-        return restClient.post()
+        return restClient
+                .post()
                 .uri(properties.getBaseUrl())
                 // 设置请求头，指定内容类型为 JSON。
                 .contentType(MediaType.APPLICATION_JSON)

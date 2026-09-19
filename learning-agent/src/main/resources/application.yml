@@ -61,6 +61,10 @@ aliyun:
     max-concurrency: ${ALIYUN_EMBEDDING_MAX_CONCURRENCY:2}
     # 等待并发许可的最长时间，单位秒
     acquire-timeout-seconds: ${ALIYUN_EMBEDDING_ACQUIRE_TIMEOUT_SECONDS:30}
+    # 建立 TCP 和 TLS 连接的最长等待时间，单位秒
+    connect-timeout-seconds: ${ALIYUN_EMBEDDING_CONNECT_TIMEOUT_SECONDS:5}
+    # 连接成功后等待响应数据的最长时间，单位秒
+    read-timeout-seconds: ${ALIYUN_EMBEDDING_READ_TIMEOUT_SECONDS:60}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}
