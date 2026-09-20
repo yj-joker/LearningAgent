@@ -1,6 +1,10 @@
 package com.yjjoker.learningagent.harness;
 
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.harness.hook.AgentHook;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
+import com.yjjoker.learningagent.harness.hook.ToolArgumentValidationHook;
 import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
@@ -40,7 +44,7 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("find_all_users", "张三, 李四");
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry);
+        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry, List.of());
 
         String reply = harness.run("什么是数据库事务？");
 
@@ -69,7 +73,7 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("find_all_users", "张三, 李四");
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry);
+        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry, List.of());
 
         String reply = harness.run("系统中有哪些用户？");
 
@@ -108,7 +112,8 @@ class AgentHarnessTest {
         );
         AgentHarnessService harness = new AgentHarnessServiceImpl(
                 fakeLlmClient,
-                new ToolRegistry(List.of(tool))
+                new ToolRegistry(List.of(tool)),
+                List.of()
         );
 
         String reply = harness.run("帮我查一个用户");
@@ -131,7 +136,8 @@ class AgentHarnessTest {
         );
         AgentHarnessService harness = new AgentHarnessServiceImpl(
                 fakeLlmClient,
-                new ToolRegistry(List.of(new ThrowingTool()))
+                new ToolRegistry(List.of(new ThrowingTool())),
+                List.of()
         );
 
         LearningAgentServiceException exception = assertThrows(
@@ -162,7 +168,8 @@ class AgentHarnessTest {
         RecordingTool tool = new RecordingTool("find_all_users", "张三");
         AgentHarnessService harness = new AgentHarnessServiceImpl(
                 fakeLlmClient,
-                new ToolRegistry(List.of(tool))
+                new ToolRegistry(List.of(tool)),
+                List.of()
         );
 
         IllegalStateException exception = assertThrows(
@@ -172,6 +179,103 @@ class AgentHarnessTest {
 
         assertEquals("Harness 超过最多 5 轮工具调用，已停止继续执行", exception.getMessage());
         assertEquals(5, tool.executeCount);
+    }
+
+    @Test
+    @DisplayName("工具执行前后和任务结束时会按顺序通知 Hook")
+    void shouldNotifyHooksDuringAgentRun() {
+        ToolCall toolCall = new ToolCall("call_hook", "test_learning_tool", "{}");
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(toolCall)),
+                new TextLlmResponse("工具处理完成")
+        );
+        RecordingTool tool = new RecordingTool("test_learning_tool", "测试结果");
+        RecordingAgentHook hook = new RecordingAgentHook();
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(tool)),
+                List.of(hook)
+        );
+
+        String reply = harness.run("执行测试学习工具");
+
+        assertEquals("工具处理完成", reply);
+        assertEquals(
+                List.of("before:test_learning_tool", "afterTool:test_learning_tool:true", "afterRun"),
+                hook.events
+        );
+        assertTrue(hook.completedContext.isCompleted());
+        assertTrue(hook.completedContext.isSuccessful());
+        assertEquals(List.of("test_learning_tool"), hook.completedContext.getExecutedToolNames());
+    }
+
+    @Test
+    @DisplayName("可重试的 Hook 拒绝结果会交给模型修正")
+    void shouldSendRetryableHookRejectionBackToLlm() {
+        // 这里故意让模型返回缺少右花括号的非法 JSON。
+        ToolCall invalidToolCall = new ToolCall("call_invalid_json", "test_learning_tool", "{\"courseId\":1");
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(invalidToolCall)),
+                new TextLlmResponse("我已经重新检查参数，请补充课程编号。")
+        );
+        RecordingTool tool = new RecordingTool("test_learning_tool", "不应该得到这个结果");
+        RecordingAgentHook recordingHook = new RecordingAgentHook();
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(tool)),
+                List.of(new ToolArgumentValidationHook(), recordingHook)
+        );
+
+        String reply = harness.run("执行测试学习工具");
+
+        assertEquals("我已经重新检查参数，请补充课程编号。", reply);
+        // executeCount 为 0 证明 Hook 拒绝后，工具没有任何执行机会。
+        assertEquals(0, tool.executeCount);
+
+        // 参数 Hook 拒绝后，后面的 before 和 afterTool 都没有执行，只有任务级 afterRun 执行。
+        assertEquals(List.of("afterRun"), recordingHook.events);
+
+        JsonNode rejectedResult = JSON_MAPPER.readTree(
+                fakeLlmClient.receivedMessages.get(1).get(3).getContent()
+        );
+        assertFalse(rejectedResult.get("success").asBoolean());
+        assertEquals("INVALID_TOOL_ARGUMENTS", rejectedResult.get("errorCode").asString());
+        assertTrue(rejectedResult.get("retryable").asBoolean());
+    }
+
+    @Test
+    @DisplayName("不可重试的 Hook 拒绝结果会直接返回用户")
+    void shouldReturnNonRetryableHookRejectionDirectlyToUser() {
+        ToolCall toolCall = new ToolCall("call_forbidden", "test_learning_tool", "{}");
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(toolCall))
+        );
+        RecordingTool tool = new RecordingTool("test_learning_tool", "不应该得到这个结果");
+        RecordingAgentHook recordingHook = new RecordingAgentHook();
+        AgentHook permissionHook = new AgentHook() {
+            @Override
+            public ToolCallHookResult beforeToolExecution(AgentRunContext context, ToolCall ignored) {
+                return ToolCallHookResult.reject(
+                        "TOOL_ACCESS_DENIED",
+                        "当前用户没有权限执行该操作",
+                        false
+                );
+            }
+        };
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(tool)),
+                List.of(permissionHook, recordingHook)
+        );
+
+        String reply = harness.run("执行无权限的工具");
+
+        assertEquals("当前用户没有权限执行该操作", reply);
+        assertEquals(0, tool.executeCount);
+        // 只有一次请求说明 Harness 没有把不可恢复问题再次发送给模型。
+        assertEquals(1, fakeLlmClient.receivedMessages.size());
+        // 权限 Hook 拒绝后，后续 before 和 afterTool 不执行；整个任务结束时仍执行 afterRun。
+        assertEquals(List.of("afterRun"), recordingHook.events);
     }
 
     // 假模型按顺序返回预先准备好的结果，并保存每次收到的完整消息列表。
@@ -247,6 +351,32 @@ class AgentHarnessTest {
         @Override
         public ToolExecutionResult execute(String input) {
             throw new IllegalStateException("模拟数据库连接失败");
+        }
+    }
+
+    // 测试 Hook 只记录回调顺序，证明工具前置、工具后置和任务结束是三个不同节点。
+    private static class RecordingAgentHook implements AgentHook {
+
+        private final List<String> events = new ArrayList<>();
+        private AgentRunContext completedContext;
+
+        @Override
+        public ToolCallHookResult beforeToolExecution(AgentRunContext context, ToolCall toolCall) {
+            events.add("before:" + toolCall.name());
+            return ToolCallHookResult.allow();
+        }
+
+        @Override
+        public void afterToolExecution(AgentRunContext context,
+                                       ToolCall toolCall,
+                                       ToolExecutionResult result) {
+            events.add("afterTool:" + toolCall.name() + ":" + result.isSuccess());
+        }
+
+        @Override
+        public void afterRun(AgentRunContext context) {
+            events.add("afterRun");
+            completedContext = context;
         }
     }
 }

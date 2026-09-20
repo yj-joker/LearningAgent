@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话表';
 
+-- 学习会话消息表
+CREATE TABLE IF NOT EXISTS learning_session_messages (
+                                                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',
+                                                        session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
+                                                        role VARCHAR(20) NOT NULL COMMENT '消息角色：USER、ASSISTANT、TOOL',
+                                                        content LONGTEXT DEFAULT NULL COMMENT '消息正文或工具执行结果',
+                                                        tool_calls JSON DEFAULT NULL COMMENT 'ASSISTANT 发起的工具调用列表',
+                                                        tool_call_id VARCHAR(128) DEFAULT NULL COMMENT 'TOOL 消息对应的工具调用 ID',
+                                                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+
+                                                        PRIMARY KEY (id),
+                                                        KEY idx_session_messages_session_id_id (session_id, id),
+
+                                                        CONSTRAINT chk_learning_session_messages_role
+                                                            CHECK (role IN ('USER', 'ASSISTANT', 'TOOL'))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '学习会话消息表';
+
 -- 章节表
 CREATE TABLE IF NOT EXISTS chapters (
                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT

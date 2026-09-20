@@ -2,6 +2,9 @@ package com.yjjoker.learningagent.harness.impl;
 
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.AgentHarnessService;
+import com.yjjoker.learningagent.harness.hook.AgentHook;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -40,23 +43,48 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // Harness 通过注册表按照模型返回的工具名称找到真正的 Java 工具对象。
     private final ToolRegistry toolRegistry;
 
-    // Spring 发现当前类只有一个构造方法，会把 LlmClient 和 ToolRegistry 两个 Bean 都传进来。
-    // LlmClient 负责与模型通信，ToolRegistry 负责查找工具，两者职责不能混在一起。
-    public AgentHarnessServiceImpl(LlmClient llmClient, ToolRegistry toolRegistry) {
+    // Spring 会收集所有 AgentHook 实现类并注入列表，Harness 不需要依赖某个具体 Hook。
+    private final List<AgentHook> hooks;
+
+    // Spring 发现当前类只有一个构造方法，会把 LlmClient、ToolRegistry 和全部 Hook 传进来。
+    // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
+    public AgentHarnessServiceImpl(LlmClient llmClient, ToolRegistry toolRegistry, List<AgentHook> hooks) {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
+        this.hooks = List.copyOf(hooks);
     }
 
     @Override
     public String run(String userMessage) {
-        // ArrayList 允许在每轮结束后追加模型工具请求和工具结果，逐步构造完整对话历史。
+        // 每次 HTTP 请求都会得到独立上下文，用于保存本次任务的工具轨迹和完成状态。
+        AgentRunContext context = new AgentRunContext();
+
+        try {
+            //Agent工作
+            String answer = runAgentLoop(userMessage, context);
+            // 标记任务成功
+            context.markSucceeded();
+            return answer;
+        } catch (RuntimeException exception) {
+            // 标记任务失败
+            context.markFailed(exception);
+            throw exception;
+        } finally {
+            // finally 保证正常回答和异常终止都会触发任务结束的所有 Hook。
+            notifyAfterRun(context);
+        }
+    }
+
+    private String runAgentLoop(String userMessage, AgentRunContext context) {
+        // 每轮结束后追加模型工具请求和工具结果，构造完整对话历史。
         List<LlmMessage> messages = new ArrayList<>();
 
-        // System Prompt 必须位于第一条，它告诉模型整个 Agent Loop 应遵守什么规则。
-        // messages 会在循环中一直复用，所以后续工具请求也会继续携带这条系统消息。
+        //添加系统提示词
         messages.add(LlmMessage.system(AgentSystemPrompt.CONTENT));
+        //添加用户消息
         messages.add(LlmMessage.user(userMessage));
 
+        // 记录工具轮数，防止模型无限嵌套工具调用
         int completedToolRounds = 0;
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
@@ -74,20 +102,50 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     throw new IllegalStateException("Harness 超过最多 5 轮工具调用，已停止继续执行");
                 }
 
+                // 获取LLM想要调用的工具列表
                 List<ToolCall> toolCalls = toolCallResponse.toolCalls();
 
-                // 先把 assistant 的原始工具请求放回历史，保留每个调用的 id、名称和参数。
-                // 将工具调用放回历史，让LLM知道自己调用了那些工具，
-                // 如果只放工具结果，模型在下一轮无法还原自己为什么收到这些结果。
+                //将工具结果和调用放回历史，让模型知道工具执行情况
                 messages.add(LlmMessage.assistantToolCalls(toolCalls));
 
                 // 一次响应可能要求调用多个工具，所以必须逐个执行并分别添加结果消息。
                 for (ToolCall toolCall : toolCalls) {
-                    // 根据工具名称找到 Java 工具对象
+                    // 在已经注册的工具中找到对应名称的工具
                     Tool tool = toolRegistry.getRequiredTool(toolCall.name());
 
-                    // 可修正的参数错误会作为失败结果正常返回；数据库故障等系统异常会在这里终止请求。
+                    // 顺序执行前置 Hook；第一个拒绝结果会立即停止后续前置 Hook。
+                    ToolCallHookResult hookResult = notifyBeforeToolExecution(context, toolCall);
+
+                    if (!hookResult.isAllowed()) {
+                        if (!hookResult.isRetryable()) {
+                            // 权限不足等不可恢复问题不再交给模型，直接把安全提示返回用户并结束循环。
+                            return hookResult.getMessage();
+                        }
+
+                        // 可恢复问题不执行工具，也不执行 afterToolExecution。
+                        // 使用原 toolCallId 返回失败结果，让模型知道应该修正哪一次工具调用。
+                        ToolExecutionResult rejectedResult = ToolExecutionResult.failure(
+                                hookResult.getErrorCode(),
+                                hookResult.getMessage(),
+                                true
+                        );
+                        messages.add(LlmMessage.toolResult(
+                                toolCall.id(),
+                                serializeToolResult(rejectedResult)
+                        ));
+                        continue;
+                    }
+
+                    //全部before Hook执行完才记录为已执行；如果未来安全 Hook 拒绝，这里不会运行。
+                    context.recordToolExecution(toolCall.name());
+
+                    // 执行工具并获取结果，异常会在这里终止请求。
                     ToolExecutionResult toolResult = executeTool(tool, toolCall.arguments());
+
+                    // 执行全部 afterToolExecution Hook。
+                    notifyAfterToolExecution(context, toolCall, toolResult);
+
+                    // 将工具结果转换为 JSON 字符串
                     String toolResultJson = serializeToolResult(toolResult);
 
                     // 使用原始调用 id 建立一一对应关系，不能使用工具名称代替 id。
@@ -106,8 +164,53 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
+    // 顺序执行前置 Hook；一旦某个 Hook 拒绝，后面的 Hook 不再执行。
+    private ToolCallHookResult notifyBeforeToolExecution(AgentRunContext context, ToolCall toolCall) {
+        for (AgentHook hook : hooks) {
+            ToolCallHookResult result = hook.beforeToolExecution(context, toolCall);
+            if (result == null) {
+                throw new IllegalStateException("beforeToolExecution Hook 返回结果不能为空");
+            }
+            // 如果某个 Hook 拒绝了工具调用，立即返回结果，不再执行后续 Hook。
+            if (!result.isAllowed()) {
+                return result;
+            }
+        }
+        return ToolCallHookResult.allow();
+    }
+
+    // 工具正常返回后执行所有工具后置 Hook。
+    private void notifyAfterToolExecution(AgentRunContext context,
+                                          ToolCall toolCall,
+                                          ToolExecutionResult result) {
+        for (AgentHook hook : hooks) {
+            try {
+                hook.afterToolExecution(context, toolCall, result);
+            } catch (RuntimeException exception) {
+                // 当前后置 Hook 只用于观察，Hook 自身故障不能破坏已经完成的工具调用。
+                log.error("Agent 工具后置 Hook 执行失败，hookType={}, runId={}, toolName={}",
+                        hook.getClass().getSimpleName(), context.getRunId(), toolCall.name(), exception);
+            }
+        }
+    }
+
+    // 执行所有后置Hook
+    private void notifyAfterRun(AgentRunContext context) {
+        for (AgentHook hook : hooks) {
+            try {
+                hook.afterRun(context);
+            } catch (RuntimeException exception) {
+                // 结束日志属于辅助功能，不能因为某个 Hook 故障而覆盖任务原本的回答或异常。
+                log.error("Agent 结束 Hook 执行失败，hookType={}, runId={}",
+                        hook.getClass().getSimpleName(), context.getRunId(), exception);
+            }
+        }
+    }
+
+    // 执行工具并返回结果
     private ToolExecutionResult executeTool(Tool tool, String arguments) {
         try {
+            //执行工具
             ToolExecutionResult result = tool.execute(arguments);
             if (result == null) {
                 throw new IllegalStateException("工具返回结果不能为空");
