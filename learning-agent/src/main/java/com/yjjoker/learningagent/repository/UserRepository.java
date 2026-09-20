@@ -32,4 +32,8 @@ public interface UserRepository {
             @Param("offset") long offset,
             @Param("limit") int limit
     );
+
+    //查询所有用户（用于测试）
+    @Select("select id,username,password,role,avatar_url,created_at,updated_at from user")
+    List<User> findAllUsers();
 }

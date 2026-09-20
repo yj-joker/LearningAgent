@@ -12,6 +12,7 @@ import java.util.function.Supplier;
 
 @Component
 @Slf4j
+//高并发限制器，防止一次性向阿里云请求过多导致embedding等服务错误
 public class AliyunEmbeddingConcurrencyLimiter {
     private final Semaphore semaphore;
     private final int acquireTimeoutSeconds;

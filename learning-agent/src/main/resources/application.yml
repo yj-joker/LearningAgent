@@ -65,6 +65,17 @@ aliyun:
     connect-timeout-seconds: ${ALIYUN_EMBEDDING_CONNECT_TIMEOUT_SECONDS:5}
     # 连接成功后等待响应数据的最长时间，单位秒
     read-timeout-seconds: ${ALIYUN_EMBEDDING_READ_TIMEOUT_SECONDS:60}
+  llm:
+    # 优先读取聊天模型专用 Key；没有配置时回退到 Embedding Key，便于同一阿里云账号复用凭证。
+    # API Key 只存放在环境变量或本地 .env 中，不能直接写进这个会提交到 Git 的配置文件。
+    api-key: ${ALIYUN_LLM_API_KEY:${ALIYUN_EMBEDDING_API_KEY:}}
+    # OpenAI 兼容的聊天完成接口完整地址，测试时也可以通过环境变量替换成本地地址。
+    base-url: ${ALIYUN_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
+    # 默认模型使用稳定别名；更换模型只需要修改环境变量，不需要重新修改 Java 客户端。
+    model: ${ALIYUN_LLM_MODEL:qwen-plus}
+    # 分别限制建立连接和等待模型生成结果的最长时间，避免请求线程无限期阻塞。
+    connect-timeout-seconds: ${ALIYUN_LLM_CONNECT_TIMEOUT_SECONDS:5}
+    read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}
