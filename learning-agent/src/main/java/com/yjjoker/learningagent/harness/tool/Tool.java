@@ -27,6 +27,6 @@ public interface Tool {
     }
 
     // input 是模型按照 parametersSchema 生成的 JSON 字符串，例如 {"courseId":1001}。
-    // 工具执行后把结果转换成文本，Harness 会把该文本作为 tool 消息重新交给 LLM。
-    String execute(String input);
+    // 返回统一结果对象，让 Harness 能区分正常数据与模型可以修正的参数错误。
+    ToolExecutionResult execute(String input);
 }

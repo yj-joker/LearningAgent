@@ -1,5 +1,6 @@
 package com.yjjoker.learningagent.harness;
 
+import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
@@ -8,9 +9,12 @@ import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.tool.Tool;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -18,10 +22,14 @@ import java.util.Deque;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DisplayName("Agent Harness 循环测试")
 class AgentHarnessTest {
+
+    private static final JsonMapper JSON_MAPPER = new JsonMapper();
 
     @Test
     @DisplayName("模型直接返回文本时不执行工具")
@@ -38,7 +46,14 @@ class AgentHarnessTest {
 
         assertEquals("模拟的模型回复", reply);
         assertEquals(1, fakeLlmClient.receivedMessages.size());
-        assertEquals("什么是数据库事务？", fakeLlmClient.receivedMessages.getFirst().getFirst().getContent());
+
+        // 第一次请求也必须先发送 system，再发送 user，不能把系统规则当成用户说的话。
+        List<LlmMessage> firstRequest = fakeLlmClient.receivedMessages.getFirst();
+        assertEquals(2, firstRequest.size());
+        assertEquals("system", firstRequest.get(0).getRole());
+        assertTrue(firstRequest.get(0).getContent().contains("不能编造数据"));
+        assertEquals("user", firstRequest.get(1).getRole());
+        assertEquals("什么是数据库事务？", firstRequest.get(1).getContent());
         assertEquals(0, tool.executeCount);
     }
 
@@ -63,15 +78,69 @@ class AgentHarnessTest {
         assertEquals("{}", tool.receivedInput);
         assertEquals(2, fakeLlmClient.receivedMessages.size());
 
-        // 第二次请求必须包含三部分：最初的 user 消息、assistant 工具请求、tool 工具结果。
+        // 第二次请求必须保留 system，并带上 user、assistant 工具请求和 tool 工具结果。
         List<LlmMessage> secondRequest = fakeLlmClient.receivedMessages.get(1);
-        assertEquals(3, secondRequest.size());
-        assertEquals("user", secondRequest.get(0).getRole());
-        assertEquals("assistant", secondRequest.get(1).getRole());
-        assertEquals("call_123", secondRequest.get(1).getToolCalls().getFirst().id());
-        assertEquals("tool", secondRequest.get(2).getRole());
-        assertEquals("call_123", secondRequest.get(2).getToolCallId());
-        assertEquals("张三, 李四", secondRequest.get(2).getContent());
+        assertEquals(4, secondRequest.size());
+        assertEquals("system", secondRequest.get(0).getRole());
+        assertEquals("user", secondRequest.get(1).getRole());
+        assertEquals("assistant", secondRequest.get(2).getRole());
+        assertEquals("call_123", secondRequest.get(2).getToolCalls().getFirst().id());
+        assertEquals("tool", secondRequest.get(3).getRole());
+        assertEquals("call_123", secondRequest.get(3).getToolCallId());
+
+        // Harness 发送的是结构化 JSON，不再让模型猜测普通字符串表示成功还是失败。
+        JsonNode toolResult = JSON_MAPPER.readTree(secondRequest.get(3).getContent());
+        assertTrue(toolResult.get("success").asBoolean());
+        assertEquals("张三, 李四", toolResult.get("content").asString());
+    }
+
+    @Test
+    @DisplayName("可修正的工具错误会作为 tool 消息交给模型")
+    void shouldSendRecoverableToolFailureBackToLlm() {
+        ToolCall toolCall = new ToolCall("call_invalid", "find_user_by_name", "{}");
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(toolCall)),
+                new TextLlmResponse("请告诉我要查询的用户名。")
+        );
+        RecordingTool tool = new RecordingTool(
+                "find_user_by_name",
+                ToolExecutionResult.failure("INVALID_ARGUMENT", "缺少 username", true)
+        );
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(tool))
+        );
+
+        String reply = harness.run("帮我查一个用户");
+
+        assertEquals("请告诉我要查询的用户名。", reply);
+        JsonNode toolResult = JSON_MAPPER.readTree(
+                fakeLlmClient.receivedMessages.get(1).get(3).getContent()
+        );
+        assertFalse(toolResult.get("success").asBoolean());
+        assertEquals("INVALID_ARGUMENT", toolResult.get("errorCode").asString());
+        assertTrue(toolResult.get("retryable").asBoolean());
+    }
+
+    @Test
+    @DisplayName("工具系统异常会终止请求而不会把内部错误发给模型")
+    void shouldStopWhenToolHasSystemFailure() {
+        ToolCall toolCall = new ToolCall("call_failed", "broken_tool", "{}");
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(toolCall))
+        );
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(new ThrowingTool()))
+        );
+
+        LearningAgentServiceException exception = assertThrows(
+                LearningAgentServiceException.class,
+                () -> harness.run("执行故障工具")
+        );
+
+        assertEquals("工具执行失败，请稍后重试", exception.getMessage());
+        assertEquals(1, fakeLlmClient.receivedMessages.size());
     }
 
     @Test
@@ -132,11 +201,15 @@ class AgentHarnessTest {
     private static class RecordingTool implements Tool {
 
         private final String name;
-        private final String result;
+        private final ToolExecutionResult result;
         private int executeCount;
         private String receivedInput;
 
         private RecordingTool(String name, String result) {
+            this(name, ToolExecutionResult.success(result));
+        }
+
+        private RecordingTool(String name, ToolExecutionResult result) {
             this.name = name;
             this.result = result;
         }
@@ -152,10 +225,28 @@ class AgentHarnessTest {
         }
 
         @Override
-        public String execute(String input) {
+        public ToolExecutionResult execute(String input) {
             executeCount++;
             receivedInput = input;
             return result;
+        }
+    }
+
+    private static class ThrowingTool implements Tool {
+
+        @Override
+        public String name() {
+            return "broken_tool";
+        }
+
+        @Override
+        public String description() {
+            return "用于验证系统异常的测试工具";
+        }
+
+        @Override
+        public ToolExecutionResult execute(String input) {
+            throw new IllegalStateException("模拟数据库连接失败");
         }
     }
 }

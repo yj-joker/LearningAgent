@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.tool.impl;
 
 import com.yjjoker.learningagent.entity.User;
 import com.yjjoker.learningagent.harness.tool.Tool;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.repository.UserRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -31,19 +32,20 @@ public class FindAllUsersTool implements Tool {
     }
 
     @Override
-    public String execute(String input) {
+    public ToolExecutionResult execute(String input) {
         // 当前工具没有参数，所以不会读取 input；它通常是模型生成的空 JSON 对象字符串 "{}"。
         List<User> users = userRepository.findAllUsers();
 
         // 明确返回“没有用户”比返回空字符串更好，因为模型能理解这是一次成功但无数据的查询。
         if (users.isEmpty()) {
-            return "没有查找到用户";
+            return ToolExecutionResult.success("没有查找到用户");
         }
 
         // 工具只提供原始事实，不负责生成面向用户的完整回答；最终表述会由下一轮 LLM 完成。
         // joining 可以避免手动拼接产生末尾多余的逗号和空格。
-        return users.stream()
+        String usernames = users.stream()
                 .map(User::getUsername)
                 .collect(Collectors.joining(", "));
+        return ToolExecutionResult.success(usernames);
     }
 }

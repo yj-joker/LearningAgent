@@ -10,6 +10,7 @@ import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.tool.Tool;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -67,15 +68,20 @@ class AliyunLlmClientTest {
         ));
         AliyunLlmClient client = createClient(toolRegistry);
 
-        LlmResponse response = client.generate(List.of(LlmMessage.user("什么是数据库事务？")));
+        LlmResponse response = client.generate(List.of(
+                LlmMessage.system("你是 LearningAgent 学习助手"),
+                LlmMessage.user("什么是数据库事务？")
+        ));
 
         // assertInstanceOf 先验证结构化类型，再返回已经转换好的对象供后面的字段断言使用。
         TextLlmResponse textResponse = assertInstanceOf(TextLlmResponse.class, response);
         assertEquals("事务是一组不可分割的操作。", textResponse.content());
         assertEquals("Bearer test-api-key", authorization.get());
 
-        // 第一次请求只有 user 消息，但仍然要把当前所有可用工具定义发送给模型。
+        // System Prompt 和用户消息都应进入 messages，工具定义仍然通过 tools 单独发送。
         assertTrue(requestBody.get().contains("\"model\":\"qwen-plus\""));
+        assertTrue(requestBody.get().contains("\"role\":\"system\""));
+        assertTrue(requestBody.get().contains("你是 LearningAgent 学习助手"));
         assertTrue(requestBody.get().contains("\"role\":\"user\""));
         assertTrue(requestBody.get().contains("什么是数据库事务？"));
         assertTrue(requestBody.get().contains("\"tools\""));
@@ -229,7 +235,7 @@ class AliyunLlmClientTest {
         }
 
         @Override
-        public String execute(String input) {
+        public ToolExecutionResult execute(String input) {
             throw new IllegalStateException("AliyunLlmClient 不应该执行工具");
         }
     }

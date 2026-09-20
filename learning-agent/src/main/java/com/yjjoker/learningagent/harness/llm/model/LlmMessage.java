@@ -10,7 +10,7 @@ import java.util.List;
 @Getter
 public class LlmMessage {
 
-    // role 表示消息来源，目前会使用 user、assistant 和 tool 三种值。
+    // role 表示消息来源，目前会使用 system、user、assistant 和 tool 四种值。
     private final String role;
 
     // content 保存消息正文。assistant 请求工具时没有普通正文，因此这个字段允许为 null。
@@ -29,6 +29,11 @@ public class LlmMessage {
         // 普通用户消息没有工具调用，因此允许传入 null，并统一保存成不可修改的空列表。
         this.toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
         this.toolCallId = toolCallId;
+    }
+
+    // system 消息保存智能体的统一规则，必须放在用户消息之前发送给模型。
+    public static LlmMessage system(String content) {
+        return new LlmMessage("system", content, List.of(), null);
     }
 
     // 创建用户消息。role=user 告诉模型这段文字来自最终用户。

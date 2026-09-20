@@ -29,7 +29,7 @@ class ToolRegistryTest {
 
         // assertSame 验证找到的是注册时放入的同一个 Java 对象，而不只是内容相等的新对象。
         assertSame(courseQueryTool, foundTool);
-        assertEquals("课程名称：Java 入门", foundTool.execute("1001"));
+        assertEquals("课程名称：Java 入门", foundTool.execute("1001").getContent());
         assertEquals(1, registry.getAllTools().size());
     }
 
@@ -87,8 +87,8 @@ class ToolRegistryTest {
         }
 
         @Override
-        public String execute(String input) {
-            return result;
+        public ToolExecutionResult execute(String input) {
+            return ToolExecutionResult.success(result);
         }
     }
 }
