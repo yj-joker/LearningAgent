@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, CheckCircle2, MessageSquareText, Play, Plus, Target } from 'lucide-vue-next'
+import { ArrowRight, Bot, CheckCircle2, MessageSquareText, Play, Plus, Target } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -108,9 +108,12 @@ async function finishSession(item: { id: string; title: string }) {
             <div><h4>{{ item.title }}</h4><StatusBadge :status="item.status" /></div>
             <p>{{ item.description }}</p>
             <time>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time>
-            <button v-if="item.kind === 'session-created' && item.resourceId" class="button button-secondary session-complete-button" :disabled="completingId === item.resourceId" @click="finishSession({ id: item.resourceId, title: item.title })">
-              {{ completingId === item.resourceId ? '完成中…' : '完成会话' }}
-            </button>
+            <div v-if="item.kind === 'session-created' && item.resourceId" class="session-record-actions">
+              <RouterLink class="button button-primary session-chat-button" :to="{ name: 'agent-chat', query: { session: item.resourceId } }"><Bot :size="14" /> 与 AI 学习</RouterLink>
+              <button class="button button-secondary session-complete-button" :disabled="completingId === item.resourceId" @click="finishSession({ id: item.resourceId, title: item.title })">
+                {{ completingId === item.resourceId ? '完成中…' : '完成会话' }}
+              </button>
+            </div>
           </div>
         </article>
       </div>

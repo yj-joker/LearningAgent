@@ -41,6 +41,12 @@ const router = createRouter({
       meta: { title: '学习会话', requiresUser: true },
     },
     {
+      path: '/ai-assistant',
+      name: 'agent-chat',
+      component: () => import('@/views/AgentChatView.vue'),
+      meta: { title: 'AI 助教', requiresUser: true },
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),

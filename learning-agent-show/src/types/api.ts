@@ -167,6 +167,11 @@ export interface LearningSessionVO {
   updatedAt?: string | null
 }
 
+export interface AgentChatPayload {
+  sessionId: ApiId
+  userMessage: string
+}
+
 export type ActivityKind = 'course-created' | 'course-published' | 'session-created' | 'session-completed'
 
 export interface ActivityRecord {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { BookOpenText, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
+import { BookOpenText, Bot, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
@@ -14,6 +14,7 @@ const navItems = [
   { label: '知识点管理', to: '/knowledge-points', icon: Lightbulb },
   { label: '知识库', to: '/knowledge-bases', icon: FolderOpen },
   { label: '学习会话', to: '/sessions', icon: MessageSquareText },
+  { label: 'AI 助教', to: '/ai-assistant', icon: Bot },
 ]
 
 const router = useRouter()
