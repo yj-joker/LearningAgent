@@ -76,6 +76,13 @@ aliyun:
     # 分别限制建立连接和等待模型生成结果的最长时间，避免请求线程无限期阻塞。
     connect-timeout-seconds: ${ALIYUN_LLM_CONNECT_TIMEOUT_SECONDS:5}
     read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
+
+harness:
+  context:
+    # 当前测试阶段用字符数近似上下文大小，不等于模型厂商统计的真实 token 数。
+    max-context-characters: ${HARNESS_MAX_CONTEXT_CHARACTERS:2000}
+    # 工具结果正文超过 500 个字符时，只压缩发送给模型的工作副本。
+    max-tool-result-characters: ${HARNESS_MAX_TOOL_RESULT_CHARACTERS:500}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}

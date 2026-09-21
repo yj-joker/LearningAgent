@@ -7,6 +7,9 @@ import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.hook.ToolArgumentValidationHook;
+import com.yjjoker.learningagent.harness.context.ContextManager;
+import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
+import com.yjjoker.learningagent.harness.tool.impl.GetOriginalToolResultTool;
 import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
@@ -334,6 +337,89 @@ class AgentHarnessTest {
                 memoryService.savedMessages.stream().map(LlmMessage::getRole).toList());
         assertEquals("它有哪些特性？", memoryService.savedMessages.getFirst().getContent());
         assertEquals(reply, memoryService.savedMessages.getLast().getContent());
+    }
+
+    @Test
+    @DisplayName("Harness压缩发送副本但完整保存工具结果")
+    void shouldCompactOnlyWorkingMessagesAndKeepFullPersistenceMessage() throws Exception {
+        ToolCall toolCall = new ToolCall("call_large", "find_all_users", "{}");
+        String largeResult = "用户资料".repeat(1_000);
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(toolCall)),
+                new TextLlmResponse("我已经整理好用户资料。")
+        );
+        RecordingTool tool = new RecordingTool("find_all_users", largeResult);
+        FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(tool)),
+                List.of(),
+                memoryService,
+                new ActiveLearningSessionRepository(),
+                new ContextManager(2_000, 80)
+        );
+
+        harness.run(SESSION_ID, "查询所有用户");
+
+        // 第二次请求进入模型前已经压缩，避免发送完整的大型工具结果。
+        String compactedContent = fakeLlmClient.receivedMessages.get(1).get(3).getContent();
+        assertTrue(compactedContent.contains("工具结果已截断"));
+
+        // 持久化消息仍是完整原文，后续历史加载时不会丢失资料。
+        String persistedContent = JSON_MAPPER.readTree(
+                memoryService.savedMessages.stream()
+                        .filter(message -> "tool".equals(message.getRole()))
+                        .findFirst()
+                        .orElseThrow()
+                        .getContent()
+        ).get("content").asString();
+        assertEquals(largeResult, persistedContent);
+    }
+
+    @Test
+    @DisplayName("模型可以通过工具按片段恢复被截断的原始结果")
+    void shouldRestoreOriginalToolResultWhenModelRequestsIt() {
+        String largeResult = "ORIGINAL_DETAIL:" + "原始资料".repeat(500);
+        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(
+                        new ToolCall("call_large", "find_all_users", "{}")
+                )),
+                new ToolCallLlmResponse(List.of(
+                        new ToolCall(
+                                "call_restore",
+                                "get_original_tool_result",
+                                "{\"toolCallId\":\"call_large\",\"offset\":0,\"limit\":100}"
+                        )
+                )),
+                new TextLlmResponse("我已读取原始资料片段。")
+        );
+
+        ToolRegistry registry = new ToolRegistry(List.of(
+                new RecordingTool("find_all_users", largeResult),
+                new GetOriginalToolResultTool(resultStore)
+        ));
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                registry,
+                List.of(),
+                new FakeConversationMemoryService(),
+                new ActiveLearningSessionRepository(),
+                new ContextManager(2_000, 250),
+                resultStore
+        );
+
+        String answer = harness.run(SESSION_ID, "查询资料并在需要时读取原始细节");
+
+        assertEquals("我已读取原始资料片段。", answer);
+        // 第二次请求仍然只看到压缩后的第一次工具结果。
+        assertTrue(fakeLlmClient.receivedMessages.get(1).stream()
+                .anyMatch(message -> "tool".equals(message.getRole())
+                        && message.getContent().contains("工具结果已截断")));
+        // 第三次请求包含恢复工具返回的原始片段。
+        assertTrue(fakeLlmClient.receivedMessages.get(2).stream()
+                .anyMatch(message -> "tool".equals(message.getRole())
+                        && message.getContent().contains("ORIGINAL_DETAIL:")));
     }
 
     @Test

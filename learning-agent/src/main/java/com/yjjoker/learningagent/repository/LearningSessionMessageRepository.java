@@ -25,4 +25,13 @@ public interface LearningSessionMessageRepository {
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, created_at AS createdAt " +
             "FROM learning_session_messages WHERE session_id = #{sessionId} ORDER BY id")
     List<LearningSessionMessage> findBySessionId(@Param("sessionId") Long sessionId);
+
+    // 恢复工具结果时只允许查询当前会话中对应调用 ID 的 TOOL 消息。
+    @Select("SELECT id, session_id AS sessionId, role, content, " +
+            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, created_at AS createdAt " +
+            "FROM learning_session_messages " +
+            "WHERE session_id = #{sessionId} AND role = 'TOOL' AND tool_call_id = #{toolCallId} " +
+            "ORDER BY id DESC LIMIT 1")
+    LearningSessionMessage findToolResult(@Param("sessionId") Long sessionId,
+                                          @Param("toolCallId") String toolCallId);
 }

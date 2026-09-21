@@ -9,6 +9,9 @@ import com.yjjoker.learningagent.harness.AgentHarnessService;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
+import com.yjjoker.learningagent.harness.context.ContextManager;
+import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
+import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -60,18 +63,51 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 会话仓库用于确认当前用户只能访问自己的进行中会话。
     private final LearningSessionRepository learningSessionRepository;
 
-    // Spring 发现当前类只有一个构造方法，会把 LlmClient、ToolRegistry 和全部 Hook 传进来。
+    // 上下文管理器只修改发送给模型的工作副本，不影响本轮完整消息的持久化内容。
+    private final ContextManager contextManager;
+
+    // 保存本轮工具的完整结果，供 get_original_tool_result 在同一轮中按片段读取。
+    private final OriginalToolResultStore originalToolResultStore;
+
+    // Spring 注入配置化的 ContextManager；其他依赖仍通过接口接入，便于测试替换。
+    @org.springframework.beans.factory.annotation.Autowired
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
     public AgentHarnessServiceImpl(LlmClient llmClient,
                                    ToolRegistry toolRegistry,
                                    List<AgentHook> hooks,
                                    ConversationMemoryService conversationMemoryService,
-                                   LearningSessionRepository learningSessionRepository) {
+                                   LearningSessionRepository learningSessionRepository,
+                                   ContextManager contextManager,
+                                   OriginalToolResultStore originalToolResultStore) {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
         this.hooks = List.copyOf(hooks);
         this.conversationMemoryService = conversationMemoryService;
         this.learningSessionRepository = learningSessionRepository;
+        this.contextManager = contextManager;
+        this.originalToolResultStore = originalToolResultStore;
+    }
+
+    // 保留测试和旧调用方的五参数构造方法；生产环境使用上面的 Spring 构造方法读取配置。
+    public AgentHarnessServiceImpl(LlmClient llmClient,
+                                   ToolRegistry toolRegistry,
+                                   List<AgentHook> hooks,
+                                   ConversationMemoryService conversationMemoryService,
+                                   LearningSessionRepository learningSessionRepository) {
+        this(llmClient, toolRegistry, hooks, conversationMemoryService,
+                learningSessionRepository, new ContextManager(40_000, 8_000),
+                new InMemoryOriginalToolResultStore());
+    }
+
+    // 测试可以替换上下文限制，但不需要额外准备原文存储实现。
+    public AgentHarnessServiceImpl(LlmClient llmClient,
+                                   ToolRegistry toolRegistry,
+                                   List<AgentHook> hooks,
+                                   ConversationMemoryService conversationMemoryService,
+                                   LearningSessionRepository learningSessionRepository,
+                                   ContextManager contextManager) {
+        this(llmClient, toolRegistry, hooks, conversationMemoryService,
+                learningSessionRepository, contextManager, new InMemoryOriginalToolResultStore());
     }
 
     @Override
@@ -84,6 +120,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             validateUserMessage(userMessage);
             // 验证会话访问权限
             validateSessionAccess(sessionId);
+            // 给原始工具结果恢复工具设置当前会话范围，后续数据库查询不会跨会话读取。
+            originalToolResultStore.beginSession(sessionId);
             // 运行 Agent 循环，得到最终结果
             String answer = runAgentLoop(sessionId, userMessage, context);
             // 标记任务成功
@@ -96,6 +134,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         } finally {
             // finally 保证正常回答和异常终止都会触发任务结束的所有 Hook。
             notifyAfterRun(context);
+            // 原文只在当前 Agent Loop 内提供恢复能力，任务结束后立即释放内存缓存。
+            originalToolResultStore.clear();
         }
     }
 
@@ -127,6 +167,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
             // 得到模型的回复
+            // 请求前先检查上下文；超限时只压缩工具结果，用户和 assistant 消息保持不变。
+            messages = contextManager.prepareForLlmRequest(messages);
             LlmResponse response = llmClient.generate(messages);
 
             //是最终结果？
@@ -200,12 +242,19 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     // 将工具结果转换为 JSON 字符串
                     String toolResultJson = serializeToolResult(toolResult);
 
+                    // 压缩前先保存完整结果，恢复工具才能按 toolCallId 读取原文片段。
+                    originalToolResultStore.save(toolCall.id(), toolResultJson);
+
                     // 使用原始调用 id 建立一一对应关系，不能使用工具名称代替 id。
                     // 同一个工具在一轮中可能被调用两次，而这两次调用会拥有不同的 id。
                     LlmMessage toolResultMessage = LlmMessage.toolResult(toolCall.id(), toolResultJson);
                     messages.add(toolResultMessage);
                     currentToolRoundMessages.add(toolResultMessage);
                 }
+
+                // 工具结果可能来自 RAG 或联网搜索，加入后立即再次检查上下文是否超过限制，避免下一轮请求才发现过大。
+                // newMessages 不参与替换，确保数据库仍保存完整原始工具结果。
+                messages = contextManager.compactAfterToolExecution(messages);
 
                 // 保存所有本次执行工具信息。当前工具轮的每个调用都有结果后，才允许作为完整历史保存。
                 newMessages.addAll(currentToolRoundMessages);

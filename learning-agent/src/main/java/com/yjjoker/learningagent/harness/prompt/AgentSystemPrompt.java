@@ -14,6 +14,9 @@ public final class AgentSystemPrompt {
             retryable=true 表示可以修正参数后重新调用工具，或者向用户询问缺失信息；
             retryable=false 表示当前操作无法继续，应向用户说明无法完成。
 
+            如果工具结果出现“工具结果已截断”，且回答确实需要原始细节，使用 get_original_tool_result 按片段读取；
+            不要一次请求过大的 limit，也不要为了没有用处的细节反复读取。
+
             不要向用户展示工具调用编号、JSON 结构、异常堆栈或系统内部实现。
             """;
 
