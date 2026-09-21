@@ -4,7 +4,6 @@ package com.yjjoker.learningagent.harness;
 // Controller 或其他业务服务只需要依赖这个接口，不需要知道 Harness 内部使用哪一家 LLM。
 public interface AgentHarnessService {
 
-    // 接收一次用户输入并返回 Harness 的最终回复。
-    // 内部可能多次调用 LLM 并执行工具，但 Controller 只关心最后整理好的自然语言答案。
-    String run(String userMessage);
+    // sessionId 用于读取同一学习会话的历史，userMessage 是本轮用户输入。
+    String run(Long sessionId, String userMessage);
 }

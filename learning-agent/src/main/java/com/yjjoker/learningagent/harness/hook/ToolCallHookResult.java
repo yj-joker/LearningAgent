@@ -10,6 +10,7 @@ import lombok.Getter;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 public class ToolCallHookResult {
 
+    // true 表示允许，false 表示拒绝
     private final boolean allowed;
 
     // 拒绝时使用稳定的错误编码，模型和日志不需要解析自然语言来判断原因。

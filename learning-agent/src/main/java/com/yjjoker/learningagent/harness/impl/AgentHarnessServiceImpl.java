@@ -1,6 +1,10 @@
 package com.yjjoker.learningagent.harness.impl;
 
+import com.yjjoker.learningagent.entity.LearningSession;
+import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.exception.LearningSessionStatusException;
+import com.yjjoker.learningagent.exception.NotFountException;
 import com.yjjoker.learningagent.harness.AgentHarnessService;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
@@ -11,10 +15,14 @@ import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
+import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
+import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
+import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.utils.BaseContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
@@ -46,22 +54,38 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // Spring 会收集所有 AgentHook 实现类并注入列表，Harness 不需要依赖某个具体 Hook。
     private final List<AgentHook> hooks;
 
+    // 会话记忆服务负责读取历史，并在本轮成功后批量保存新增消息。
+    private final ConversationMemoryService conversationMemoryService;
+
+    // 会话仓库用于确认当前用户只能访问自己的进行中会话。
+    private final LearningSessionRepository learningSessionRepository;
+
     // Spring 发现当前类只有一个构造方法，会把 LlmClient、ToolRegistry 和全部 Hook 传进来。
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
-    public AgentHarnessServiceImpl(LlmClient llmClient, ToolRegistry toolRegistry, List<AgentHook> hooks) {
+    public AgentHarnessServiceImpl(LlmClient llmClient,
+                                   ToolRegistry toolRegistry,
+                                   List<AgentHook> hooks,
+                                   ConversationMemoryService conversationMemoryService,
+                                   LearningSessionRepository learningSessionRepository) {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
         this.hooks = List.copyOf(hooks);
+        this.conversationMemoryService = conversationMemoryService;
+        this.learningSessionRepository = learningSessionRepository;
     }
 
     @Override
-    public String run(String userMessage) {
+    public String run(Long sessionId, String userMessage) {
         // 每次 HTTP 请求都会得到独立上下文，用于保存本次任务的工具轨迹和完成状态。
         AgentRunContext context = new AgentRunContext();
 
         try {
-            //Agent工作
-            String answer = runAgentLoop(userMessage, context);
+            // 验证用户输入
+            validateUserMessage(userMessage);
+            // 验证会话访问权限
+            validateSessionAccess(sessionId);
+            // 运行 Agent 循环，得到最终结果
+            String answer = runAgentLoop(sessionId, userMessage, context);
             // 标记任务成功
             context.markSucceeded();
             return answer;
@@ -75,14 +99,28 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
-    private String runAgentLoop(String userMessage, AgentRunContext context) {
-        // 每轮结束后追加模型工具请求和工具结果，构造完整对话历史。
-        List<LlmMessage> messages = new ArrayList<>();
+    // Controller 之外的代码也可能调用 Harness，因此服务层仍需校验用户输入。
+    private void validateUserMessage(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) {
+            throw new ClientDataErrorException("用户消息不能为空");
+        }
+        if (userMessage.length() > 10_000) {
+            throw new ClientDataErrorException("用户消息不能超过 10000 个字符");
+        }
+    }
 
-        //添加系统提示词
+    private String runAgentLoop(Long sessionId, String userMessage, AgentRunContext context) {
+        // messages 是发送给模型的完整上下文，包含系统提示词、旧历史和本轮消息。
+        List<LlmMessage> messages = new ArrayList<>();
+        // newMessages 只收集本轮内容，避免把数据库中的旧历史重复保存。
+        List<LlmMessage> newMessages = new ArrayList<>();
+
         messages.add(LlmMessage.system(AgentSystemPrompt.CONTENT));
-        //添加用户消息
-        messages.add(LlmMessage.user(userMessage));
+        messages.addAll(conversationMemoryService.loadHistory(sessionId));
+
+        LlmMessage currentUserMessage = LlmMessage.user(userMessage);
+        messages.add(currentUserMessage);
+        newMessages.add(currentUserMessage);
 
         // 记录工具轮数，防止模型无限嵌套工具调用
         int completedToolRounds = 0;
@@ -93,6 +131,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
             //是最终结果？
             if (response instanceof TextLlmResponse textResponse) {
+                LlmMessage assistantMessage = LlmMessage.assistant(textResponse.content());
+                newMessages.add(assistantMessage);
+                // 只有完整得到最终回答后，才在一个事务中保存本轮全部消息。
+                conversationMemoryService.appendMessages(sessionId, newMessages);
                 return textResponse.content();
             }
 
@@ -105,8 +147,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 获取LLM想要调用的工具列表
                 List<ToolCall> toolCalls = toolCallResponse.toolCalls();
 
-                //将工具结果和调用放回历史，让模型知道工具执行情况
-                messages.add(LlmMessage.assistantToolCalls(toolCalls));
+                //将本轮LLM的工具请求添加到上下文
+                LlmMessage assistantToolMessage = LlmMessage.assistantToolCalls(toolCalls);
+                messages.add(assistantToolMessage);
+
+                // 本轮工具调用先暂存；全部处理完成后才加入待保存消息。
+                List<LlmMessage> currentToolRoundMessages = new ArrayList<>();
+                currentToolRoundMessages.add(assistantToolMessage);
 
                 // 一次响应可能要求调用多个工具，所以必须逐个执行并分别添加结果消息。
                 for (ToolCall toolCall : toolCalls) {
@@ -116,9 +163,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     // 顺序执行前置 Hook；第一个拒绝结果会立即停止后续前置 Hook。
                     ToolCallHookResult hookResult = notifyBeforeToolExecution(context, toolCall);
 
+                    // 如果 Hook 不允许LLM调用该工具并且不可重试，则立即返回结果。
                     if (!hookResult.isAllowed()) {
                         if (!hookResult.isRetryable()) {
-                            // 权限不足等不可恢复问题不再交给模型，直接把安全提示返回用户并结束循环。
+                            // 当前工具轮没有完成，不保存其 assistant/tool 消息，只保存Hook直接返回的答复。
+                            newMessages.add(LlmMessage.assistant(hookResult.getMessage()));
+                            conversationMemoryService.appendMessages(sessionId, newMessages);
                             return hookResult.getMessage();
                         }
 
@@ -129,10 +179,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                 hookResult.getMessage(),
                                 true
                         );
-                        messages.add(LlmMessage.toolResult(
+                        LlmMessage rejectedToolMessage = LlmMessage.toolResult(
                                 toolCall.id(),
                                 serializeToolResult(rejectedResult)
-                        ));
+                        );
+                        messages.add(rejectedToolMessage);
+                        currentToolRoundMessages.add(rejectedToolMessage);
                         continue;
                     }
 
@@ -150,9 +202,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
                     // 使用原始调用 id 建立一一对应关系，不能使用工具名称代替 id。
                     // 同一个工具在一轮中可能被调用两次，而这两次调用会拥有不同的 id。
-                    messages.add(LlmMessage.toolResult(toolCall.id(), toolResultJson));
+                    LlmMessage toolResultMessage = LlmMessage.toolResult(toolCall.id(), toolResultJson);
+                    messages.add(toolResultMessage);
+                    currentToolRoundMessages.add(toolResultMessage);
                 }
 
+                // 保存所有本次执行工具信息。当前工具轮的每个调用都有结果后，才允许作为完整历史保存。
+                newMessages.addAll(currentToolRoundMessages);
                 completedToolRounds++;
                 // 工具执行后不能直接把结果返回用户，因为工具只提供原始数据。
                 // 回到循环顶部，把结果交给模型，让模型结合用户问题组织最终自然语言答案。
@@ -161,6 +217,26 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
             // LlmResponse 是 sealed 类型，正常情况下只有上面两种实现；这个检查用于防御空返回值。
             throw new IllegalStateException("LLM 客户端返回了无法识别的结果");
+        }
+    }
+
+    // 会话必须存在、属于当前登录用户，并且仍处于进行中状态。
+    private void validateSessionAccess(Long sessionId) {
+        if (sessionId == null || sessionId <= 0) {
+            throw new LearningSessionStatusException("学习会话 ID 不合法");
+        }
+        if (BaseContext.isCurrentIdNull()) {
+            throw new LearningSessionStatusException("当前用户未登录");
+        }
+
+        LearningSession session = learningSessionRepository.findSessionById(sessionId)
+                .orElseThrow(() -> new NotFountException("学习会话不存在"));
+
+        if (!session.getUserId().equals(BaseContext.getCurrentId())) {
+            throw new LearningSessionStatusException("无权访问该学习会话");
+        }
+        if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
+            throw new LearningSessionStatusException("学习会话已结束");
         }
     }
 
@@ -223,6 +299,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
+    // 序列化工具结果为 JSON 字符串
     private String serializeToolResult(ToolExecutionResult result) {
         try {
             // 结构化 JSON 让模型能明确读取 success、errorCode、message 和 retryable。

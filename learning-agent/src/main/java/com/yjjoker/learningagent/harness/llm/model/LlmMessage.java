@@ -41,6 +41,11 @@ public class LlmMessage {
         return new LlmMessage("user", content, List.of(), null);
     }
 
+    // 创建模型的普通文本回答，与包含工具调用的 assistant 消息区分开。
+    public static LlmMessage assistant(String content) {
+        return new LlmMessage("assistant", content, List.of(), null);
+    }
+
     // 保存模型刚才返回的工具调用要求。
     // 这一步不能省略，否则下一次请求只有工具结果，模型不知道该结果对应自己提出的哪项调用。
     public static LlmMessage assistantToolCalls(List<ToolCall> toolCalls) {

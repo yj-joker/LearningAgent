@@ -1,6 +1,8 @@
 package com.yjjoker.learningagent.harness;
 
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.exception.LearningSessionStatusException;
+import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
@@ -12,9 +14,15 @@ import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
+import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
+import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
+import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.utils.BaseContext;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
@@ -24,6 +32,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,6 +43,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AgentHarnessTest {
 
     private static final JsonMapper JSON_MAPPER = new JsonMapper();
+    private static final Long SESSION_ID = 10L;
+    private static final Long USER_ID = 20L;
+
+    @BeforeEach
+    void setCurrentUser() {
+        BaseContext.setCurrentId(USER_ID);
+    }
+
+    @AfterEach
+    void clearCurrentUser() {
+        BaseContext.removeCurrentId();
+    }
 
     @Test
     @DisplayName("模型直接返回文本时不执行工具")
@@ -44,9 +65,9 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("find_all_users", "张三, 李四");
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry, List.of());
+        AgentHarnessService harness = createHarness(fakeLlmClient, toolRegistry, List.of());
 
-        String reply = harness.run("什么是数据库事务？");
+        String reply = harness.run(SESSION_ID, "什么是数据库事务？");
 
         assertEquals("模拟的模型回复", reply);
         assertEquals(1, fakeLlmClient.receivedMessages.size());
@@ -73,9 +94,9 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("find_all_users", "张三, 李四");
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(fakeLlmClient, toolRegistry, List.of());
+        AgentHarnessService harness = createHarness(fakeLlmClient, toolRegistry, List.of());
 
-        String reply = harness.run("系统中有哪些用户？");
+        String reply = harness.run(SESSION_ID, "系统中有哪些用户？");
 
         assertEquals("目前有两位用户：张三和李四。", reply);
         assertEquals(1, tool.executeCount);
@@ -110,13 +131,13 @@ class AgentHarnessTest {
                 "find_user_by_name",
                 ToolExecutionResult.failure("INVALID_ARGUMENT", "缺少 username", true)
         );
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of()
         );
 
-        String reply = harness.run("帮我查一个用户");
+        String reply = harness.run(SESSION_ID, "帮我查一个用户");
 
         assertEquals("请告诉我要查询的用户名。", reply);
         JsonNode toolResult = JSON_MAPPER.readTree(
@@ -134,19 +155,22 @@ class AgentHarnessTest {
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
                 new ToolCallLlmResponse(List.of(toolCall))
         );
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(new ThrowingTool())),
-                List.of()
+                List.of(),
+                memoryService
         );
 
         LearningAgentServiceException exception = assertThrows(
                 LearningAgentServiceException.class,
-                () -> harness.run("执行故障工具")
+                () -> harness.run(SESSION_ID, "执行故障工具")
         );
 
         assertEquals("工具执行失败，请稍后重试", exception.getMessage());
         assertEquals(1, fakeLlmClient.receivedMessages.size());
+        assertTrue(memoryService.savedMessages.isEmpty());
     }
 
     @Test
@@ -166,7 +190,7 @@ class AgentHarnessTest {
                 repeatedToolCall
         );
         RecordingTool tool = new RecordingTool("find_all_users", "张三");
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of()
@@ -174,7 +198,7 @@ class AgentHarnessTest {
 
         IllegalStateException exception = assertThrows(
                 IllegalStateException.class,
-                () -> harness.run("一直查用户")
+                () -> harness.run(SESSION_ID, "一直查用户")
         );
 
         assertEquals("Harness 超过最多 5 轮工具调用，已停止继续执行", exception.getMessage());
@@ -191,13 +215,13 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("test_learning_tool", "测试结果");
         RecordingAgentHook hook = new RecordingAgentHook();
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of(hook)
         );
 
-        String reply = harness.run("执行测试学习工具");
+        String reply = harness.run(SESSION_ID, "执行测试学习工具");
 
         assertEquals("工具处理完成", reply);
         assertEquals(
@@ -220,13 +244,13 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("test_learning_tool", "不应该得到这个结果");
         RecordingAgentHook recordingHook = new RecordingAgentHook();
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of(new ToolArgumentValidationHook(), recordingHook)
         );
 
-        String reply = harness.run("执行测试学习工具");
+        String reply = harness.run(SESSION_ID, "执行测试学习工具");
 
         assertEquals("我已经重新检查参数，请补充课程编号。", reply);
         // executeCount 为 0 证明 Hook 拒绝后，工具没有任何执行机会。
@@ -262,13 +286,13 @@ class AgentHarnessTest {
                 );
             }
         };
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = createHarness(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of(permissionHook, recordingHook)
         );
 
-        String reply = harness.run("执行无权限的工具");
+        String reply = harness.run(SESSION_ID, "执行无权限的工具");
 
         assertEquals("当前用户没有权限执行该操作", reply);
         assertEquals(0, tool.executeCount);
@@ -276,6 +300,84 @@ class AgentHarnessTest {
         assertEquals(1, fakeLlmClient.receivedMessages.size());
         // 权限 Hook 拒绝后，后续 before 和 afterTool 不执行；整个任务结束时仍执行 afterRun。
         assertEquals(List.of("afterRun"), recordingHook.events);
+    }
+
+    @Test
+    @DisplayName("历史消息会发送给模型且只保存本轮新增消息")
+    void shouldLoadHistoryAndSaveOnlyCurrentTurn() {
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new TextLlmResponse("它的四个特性是原子性、一致性、隔离性和持久性。")
+        );
+        FakeConversationMemoryService memoryService = new FakeConversationMemoryService(List.of(
+                LlmMessage.user("什么是数据库事务？"),
+                LlmMessage.assistant("事务是一组不可分割的数据库操作。")
+        ));
+        AgentHarnessService harness = createHarness(
+                fakeLlmClient,
+                new ToolRegistry(List.of()),
+                List.of(),
+                memoryService
+        );
+
+        String reply = harness.run(SESSION_ID, "它有哪些特性？");
+
+        assertEquals("它的四个特性是原子性、一致性、隔离性和持久性。", reply);
+
+        // 请求顺序应为 system、旧历史、本轮 user，System Prompt 不来自数据库。
+        List<LlmMessage> request = fakeLlmClient.receivedMessages.getFirst();
+        assertEquals(List.of("system", "user", "assistant", "user"),
+                request.stream().map(LlmMessage::getRole).toList());
+        assertEquals("它有哪些特性？", request.getLast().getContent());
+
+        // 旧历史已经存在于数据库，本轮只追加新的 user 和最终 assistant。
+        assertEquals(List.of("user", "assistant"),
+                memoryService.savedMessages.stream().map(LlmMessage::getRole).toList());
+        assertEquals("它有哪些特性？", memoryService.savedMessages.getFirst().getContent());
+        assertEquals(reply, memoryService.savedMessages.getLast().getContent());
+    }
+
+    @Test
+    @DisplayName("非会话所属用户不能读取历史或调用模型")
+    void shouldRejectUserWhoDoesNotOwnSession() {
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new TextLlmResponse("不应该返回")
+        );
+        FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of()),
+                List.of(),
+                memoryService,
+                new ActiveLearningSessionRepository(USER_ID + 1, LearningSessionStatusEnum.ACTIVE)
+        );
+
+        LearningSessionStatusException exception = assertThrows(
+                LearningSessionStatusException.class,
+                () -> harness.run(SESSION_ID, "读取其他用户的会话")
+        );
+
+        assertEquals("无权访问该学习会话", exception.getMessage());
+        assertEquals(0, memoryService.loadCount);
+        assertTrue(fakeLlmClient.receivedMessages.isEmpty());
+    }
+
+    private AgentHarnessService createHarness(FakeLlmClient llmClient,
+                                               ToolRegistry toolRegistry,
+                                               List<AgentHook> hooks) {
+        return createHarness(llmClient, toolRegistry, hooks, new FakeConversationMemoryService());
+    }
+
+    private AgentHarnessService createHarness(FakeLlmClient llmClient,
+                                               ToolRegistry toolRegistry,
+                                               List<AgentHook> hooks,
+                                               FakeConversationMemoryService memoryService) {
+        return new AgentHarnessServiceImpl(
+                llmClient,
+                toolRegistry,
+                hooks,
+                memoryService,
+                new ActiveLearningSessionRepository()
+        );
     }
 
     // 假模型按顺序返回预先准备好的结果，并保存每次收到的完整消息列表。
@@ -298,6 +400,73 @@ class AgentHarnessTest {
                 throw new IllegalStateException("测试没有准备足够的模型响应");
             }
             return responses.removeFirst();
+        }
+    }
+
+    // 测试记忆服务把预设历史交给 Harness，并记录 Harness 最终要求保存的本轮消息。
+    private static class FakeConversationMemoryService implements ConversationMemoryService {
+
+        private final List<LlmMessage> history;
+        private final List<LlmMessage> savedMessages = new ArrayList<>();
+        private int loadCount;
+
+        private FakeConversationMemoryService() {
+            this(List.of());
+        }
+
+        private FakeConversationMemoryService(List<LlmMessage> history) {
+            this.history = List.copyOf(history);
+        }
+
+        @Override
+        public List<LlmMessage> loadHistory(Long sessionId) {
+            loadCount++;
+            return history;
+        }
+
+        @Override
+        public void appendMessage(Long sessionId, LlmMessage message) {
+            savedMessages.add(message);
+        }
+
+        @Override
+        public void appendMessages(Long sessionId, List<LlmMessage> messages) {
+            savedMessages.addAll(messages);
+        }
+    }
+
+    // 为 Harness 测试提供属于当前用户且状态为 ACTIVE 的学习会话。
+    private static class ActiveLearningSessionRepository implements LearningSessionRepository {
+
+        private final Long ownerId;
+        private final LearningSessionStatusEnum status;
+
+        private ActiveLearningSessionRepository() {
+            this(USER_ID, LearningSessionStatusEnum.ACTIVE);
+        }
+
+        private ActiveLearningSessionRepository(Long ownerId, LearningSessionStatusEnum status) {
+            this.ownerId = ownerId;
+            this.status = status;
+        }
+
+        @Override
+        public int createSession(LearningSession learningSession) {
+            throw new UnsupportedOperationException("测试不需要创建会话");
+        }
+
+        @Override
+        public Optional<LearningSession> findSessionById(Long sessionId) {
+            LearningSession session = new LearningSession();
+            session.setId(sessionId);
+            session.setUserId(ownerId);
+            session.setStatus(status);
+            return Optional.of(session);
+        }
+
+        @Override
+        public int updateSession(LearningSession learningSession) {
+            throw new UnsupportedOperationException("测试不需要更新会话");
         }
     }
 
