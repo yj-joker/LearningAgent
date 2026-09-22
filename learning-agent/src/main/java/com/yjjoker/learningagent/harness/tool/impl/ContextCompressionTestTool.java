@@ -2,11 +2,13 @@ package com.yjjoker.learningagent.harness.tool.impl;
 
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 // 这是专门验证上下文压缩流程的测试工具，不承担真实业务功能。
 // 它故意返回超过配置上限的大文本，方便观察 Harness 是否只压缩发送给模型的副本。
-//@Component
+@Component
+@Profile("harness-test-tools")
 public class ContextCompressionTestTool implements Tool {
 
     private static final String RESULT_PREFIX = "CONTEXT_COMPRESSION_TEST_RESULT:";

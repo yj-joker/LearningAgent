@@ -17,6 +17,10 @@ public class LearningSessionMessage {
 
     // ASSISTANT 请求工具时 content 可以为空，此时调用信息保存在 toolCallsJson。
     private String content;
+
+    // TOOL 消息压缩后保存此副本；原始结果仍保留在 content 中。
+    private String contextContent;
+
     private String toolCallsJson;
 
     // 仅 TOOL 消息使用，用来对应 ASSISTANT 发起的某一次工具调用。

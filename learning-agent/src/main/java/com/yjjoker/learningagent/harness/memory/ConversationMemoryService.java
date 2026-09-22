@@ -15,4 +15,7 @@ public interface ConversationMemoryService {
 
     // 一次保存完整的一轮消息，避免数据库只留下半轮工具调用。
     void appendMessages(Long sessionId, List<LlmMessage> messages);
+
+    // 将历史工具消息本轮产生的压缩副本回写数据库，避免后续请求重复加载完整原文再压缩。
+    void updateToolContextCopies(Long sessionId, List<LlmMessage> messages);
 }

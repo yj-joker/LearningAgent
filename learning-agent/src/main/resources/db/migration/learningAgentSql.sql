@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
                                                         role VARCHAR(20) NOT NULL COMMENT '消息角色：USER、ASSISTANT、TOOL',
                                                         content LONGTEXT DEFAULT NULL COMMENT '消息正文或工具执行结果',
+                                                        context_content LONGTEXT DEFAULT NULL COMMENT '发送给模型的工具结果压缩副本',
                                                         tool_calls JSON DEFAULT NULL COMMENT 'ASSISTANT 发起的工具调用列表',
                                                         tool_call_id VARCHAR(128) DEFAULT NULL COMMENT 'TOOL 消息对应的工具调用 ID',
                                                         context_replayable TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许进入未来模型上下文',

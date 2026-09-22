@@ -152,15 +152,14 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     private String runAgentLoop(Long sessionId, String userMessage, AgentRunContext context) {
         // messages 是发送给模型的完整上下文，包含系统提示词、旧历史和本轮消息。
         List<LlmMessage> messages = new ArrayList<>();
-        // newMessages 只收集本轮内容，避免把数据库中的旧历史重复保存。
-        List<LlmMessage> newMessages = new ArrayList<>();
 
         messages.add(LlmMessage.system(AgentSystemPrompt.CONTENT));
         messages.addAll(conversationMemoryService.loadHistory(sessionId));
 
+        // 记住本轮用户消息的起点，最终只保存这个位置之后的新消息。
+        int currentRunStartIndex = messages.size();
         LlmMessage currentUserMessage = LlmMessage.user(userMessage);
         messages.add(currentUserMessage);
-        newMessages.add(currentUserMessage);
 
         // 记录工具轮数，防止模型无限嵌套工具调用
         int completedToolRounds = 0;
@@ -172,14 +171,22 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 得到模型的回复
             // 请求前先检查上下文；超限时只压缩工具结果，用户和 assistant 消息保持不变。
             messages = contextManager.prepareForLlmRequest(messages);
+            // 保存工具结果被压缩之后的上下文
+            conversationMemoryService.updateToolContextCopies(
+                    sessionId,
+                    messages.subList(1, currentRunStartIndex)
+            );
             LlmResponse response = llmClient.generate(messages);
 
             //是最终结果？
             if (response instanceof TextLlmResponse textResponse) {
                 LlmMessage assistantMessage = LlmMessage.assistant(textResponse.content());
-                newMessages.add(assistantMessage);
+                messages.add(assistantMessage);
                 // 只有完整得到最终回答后，才在一个事务中保存本轮全部消息。
-                conversationMemoryService.appendMessages(sessionId, newMessages);
+                conversationMemoryService.appendMessages(
+                        sessionId,
+                        new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()))
+                );
                 return textResponse.content();
             }
 
@@ -198,13 +205,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 boolean recoveryRound = containsRecoveryTool(toolCalls);
                 boolean contextReplayable = !recoveryRound;
 
+                // 如果 Hook 直接结束任务，需要用这个位置排除尚未完成的工具消息。
+                int currentToolRoundStartIndex = messages.size();
                 //将本轮LLM的工具请求添加到上下文，标记是否可重放
                 LlmMessage assistantToolMessage = LlmMessage.assistantToolCalls(toolCalls, contextReplayable);
                 messages.add(assistantToolMessage);
-
-                // 本轮工具调用先暂存；全部处理完成后才加入待保存消息。
-                List<LlmMessage> currentToolRoundMessages = new ArrayList<>();
-                currentToolRoundMessages.add(assistantToolMessage);
 
                 // 一次响应可能要求调用多个工具，所以必须逐个执行并分别添加结果消息。
                 for (ToolCall toolCall : toolCalls) {
@@ -223,7 +228,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                 false
                         );
                         messages.add(rejectedRecoveryMessage);
-                        currentToolRoundMessages.add(rejectedRecoveryMessage);
                         continue;
                     }
 
@@ -239,12 +243,16 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     if (!hookResult.isAllowed()) {
                         if (!hookResult.isRetryable()) {
                             // 当前工具轮没有完成，不保存其 assistant/tool 消息，只保存Hook直接返回的答复。
-                            newMessages.add(LlmMessage.assistant(hookResult.getMessage()));
-                            conversationMemoryService.appendMessages(sessionId, newMessages);
+                            List<LlmMessage> completedMessages = new ArrayList<>(messages.subList(
+                                    currentRunStartIndex,//除去system的开始索引
+                                    currentToolRoundStartIndex//调用工具前的索引
+                            ));
+                            completedMessages.add(LlmMessage.assistant(hookResult.getMessage()));
+                            conversationMemoryService.appendMessages(sessionId, completedMessages);
                             return hookResult.getMessage();
                         }
-
-                        // 可恢复问题不执行工具，也不执行 afterToolExecution。
+                        // Hook拒绝工具调用并且该工具可以重新调用
+                        // 出现可恢复问题时不执行工具，也不执行 afterToolExecution。
                         // 使用原 toolCallId 返回失败结果，让模型知道应该修正哪一次工具调用。
                         ToolExecutionResult rejectedResult = ToolExecutionResult.failure(
                                 hookResult.getErrorCode(),
@@ -257,7 +265,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                 contextReplayable
                         );
                         messages.add(rejectedToolMessage);
-                        currentToolRoundMessages.add(rejectedToolMessage);
                         continue;
                     }
 
@@ -281,22 +288,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                     "本次任务可恢复的工具结果字符数已达到上限"
                             );
                         } else {
-                            LlmMessage candidateMessage = createToolResultMessage(
-                                    toolCall.id(),
-                                    toolResult,
-                                    false
-                            );
-
-                            // 恢复结果加入后的完整 messages 必须低于最大上下文的 95%。
-                            if (!contextManager.fitsRecoverySafetyLimit(messages, candidateMessage)) {
-                                // TODO 下一阶段先强制压缩旧工具结果，再重新估算；仍超限时才返回恢复失败。
-                                toolResult = recoveryFailure(
-                                        "CONTEXT_RECOVERY_BUDGET_EXCEEDED",
-                                        "当前上下文剩余空间不足，无法恢复更多工具内容"
-                                );
-                            } else {
-                                recoveredCharacters += nextRecoveredCharacters;
-                            }
+                            // 上下文空间由后面的统一压缩流程判断，这里只累计恢复工具自己的字符预算。
+                            recoveredCharacters += nextRecoveredCharacters;
                         }
                     }
 
@@ -319,15 +312,14 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                             contextReplayable
                     );
                     messages.add(toolResultMessage);
-                    currentToolRoundMessages.add(toolResultMessage);
                 }
 
-                // 工具结果可能来自 RAG 或联网搜索，加入后立即再次检查上下文是否超过限制，避免下一轮请求才发现过大。
-                // newMessages 不参与替换，确保数据库仍保存完整原始工具结果。
+                // 普通工具和恢复工具都在这里执行 95% 安全水位检查，并且只压缩上下文副本。
                 messages = contextManager.compactAfterToolExecution(messages);
-
-                // 保存所有本次执行工具信息。当前工具轮的每个调用都有结果后，才允许作为完整历史保存。
-                newMessages.addAll(currentToolRoundMessages);
+                conversationMemoryService.updateToolContextCopies(
+                        sessionId,
+                        messages.subList(1, currentRunStartIndex)
+                );
                 completedToolRounds++;
                 // 工具执行后不能直接把结果返回用户，因为工具只提供原始数据。
                 // 回到循环顶部，把结果交给模型，让模型结合用户问题组织最终自然语言答案。

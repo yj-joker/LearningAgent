@@ -120,19 +120,46 @@ class ContextManagerTest {
     }
 
     @Test
-    @DisplayName("恢复结果加入后不能超过最大上下文的百分之九十五")
-    void shouldReserveFivePercentOfContextForRecovery() {
-        ContextManager manager = new ContextManager(100, 50, 2, 300, 0.95);
-        List<LlmMessage> currentMessages = List.of(LlmMessage.user("问".repeat(80)));
+    @DisplayName("所有工具结果都在百分之九十五安全水位触发压缩")
+    void shouldApplySafeContextRatioToEveryToolResult() {
+        ContextManager manager = new ContextManager(100, 20, 2, 300, 0.95);
+        List<LlmMessage> messages = List.of(
+                LlmMessage.user("问".repeat(50)),
+                LlmMessage.toolResult("c", "结果".repeat(19))
+        );
 
-        assertTrue(manager.fitsRecoverySafetyLimit(
-                currentMessages,
-                LlmMessage.toolResult("c", "结果")
-        ));
-        assertFalse(manager.fitsRecoverySafetyLimit(
-                currentMessages,
-                LlmMessage.toolResult("call_restore", "恢复内容".repeat(10), false)
-        ));
+        // 原消息没有超过 100 字符硬上限，但超过 95% 安全水位，因此仍需压缩工具正文。
+        assertTrue(manager.estimateCharacters(messages) <= 100);
+        assertTrue(manager.estimateCharacters(messages) > 95);
+
+        List<LlmMessage> compacted = manager.prepareForLlmRequest(messages);
+
+        assertEquals(20, compacted.get(1).getContent().length());
+        assertEquals("结果".repeat(19), compacted.get(1).getOriginalContent());
+        assertEquals(compacted.get(1).getContent(), compacted.get(1).getContextContent());
+    }
+
+    @Test
+    @DisplayName("触发压缩后尽量达到目标水位，而不是刚低于安全上限就停止")
+    void shouldStopCompactingAfterReachingTargetRatio() {
+        ContextManager manager = new ContextManager(1_000, 200, 2, 300, 0.95, 0.80);
+        String oldToolContent = "旧资料".repeat(400);
+        String recentToolContent = "新资料".repeat(100);
+        List<LlmMessage> messages = List.of(
+                LlmMessage.user("用户问题".repeat(10)),
+                LlmMessage.toolResult("old", oldToolContent),
+                LlmMessage.toolResult("recent", recentToolContent)
+        );
+
+        int before = manager.estimateCharacters(messages);
+        List<LlmMessage> compacted = manager.prepareForLlmRequest(messages);
+        int after = manager.estimateCharacters(compacted);
+
+        assertTrue(before > 950);
+        assertTrue(after <= 800);
+        assertTrue(compacted.get(1).getContent().contains("工具结果已截断"));
+        // 旧工具已经释放出足够空间，因此较新的工具结果不必继续压缩。
+        assertEquals(recentToolContent, compacted.get(2).getContent());
     }
 
     // 仅用于生成与真实 ToolExecutionResult 相同结构的 JSON，避免测试依赖手写转义字符串。

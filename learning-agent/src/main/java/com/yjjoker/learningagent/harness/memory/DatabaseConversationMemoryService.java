@@ -78,11 +78,38 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         }
     }
 
+    // 更新本轮工具调用的上下文副本，供后续轮次使用。
+    @Override
+    @Transactional
+    public void updateToolContextCopies(Long sessionId, List<LlmMessage> messages) {
+        requireSessionId(sessionId);
+        if (messages == null) {
+            throw new LearningAgentServiceException("更新的上下文消息列表不能为空");
+        }
+
+        for (LlmMessage message : messages) {
+            // 只回写可重放工具消息；本轮尚未插入的新消息会在最终批量保存时带上副本。
+            if (message == null
+                    || !"tool".equals(message.getRole())
+                    || !message.isContextReplayable()
+                    || message.getContextContent() == null) {
+                continue;
+            }
+            messageRepository.updateToolContextContent(
+                    sessionId,
+                    message.getToolCallId(),
+                    message.getContextContent()
+            );
+        }
+    }
+
     // 将 Harness 消息转换成数据库实体。
     private LearningSessionMessage toStoredMessage(Long sessionId, LlmMessage message) {
         LearningSessionMessage storedMessage = new LearningSessionMessage();
         storedMessage.setSessionId(sessionId);
-        storedMessage.setContent(message.getContent());
+        // content 永远保存完整原文，contextContent 只保存发送给模型的压缩副本。
+        storedMessage.setContent(message.getOriginalContent());
+        storedMessage.setContextContent(message.getContextContent());
         storedMessage.setToolCallId(message.getToolCallId());
         // 不可重放消息仍完整落库，只在后续 loadHistory 时被 Repository 过滤。
         storedMessage.setContextReplayable(message.isContextReplayable());
@@ -116,9 +143,11 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         return switch (storedMessage.getRole()) {
             case USER -> LlmMessage.user(storedMessage.getContent());
             case ASSISTANT -> toAssistantMessage(storedMessage);
-            case TOOL -> LlmMessage.toolResult(
+            case TOOL -> LlmMessage.toolResultWithContextContent(
                     storedMessage.getToolCallId(),
-                    storedMessage.getContent()
+                    storedMessage.getContent(),
+                    storedMessage.getContextContent(),
+                    storedMessage.isContextReplayable()
             );
         };
     }

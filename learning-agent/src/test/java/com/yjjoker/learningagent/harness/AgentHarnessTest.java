@@ -366,15 +366,17 @@ class AgentHarnessTest {
         String compactedContent = fakeLlmClient.receivedMessages.get(1).get(3).getContent();
         assertTrue(compactedContent.contains("工具结果已截断"));
 
-        // 持久化消息仍是完整原文，后续历史加载时不会丢失资料。
-        String persistedContent = JSON_MAPPER.readTree(
-                memoryService.savedMessages.stream()
-                        .filter(message -> "tool".equals(message.getRole()))
-                        .findFirst()
-                        .orElseThrow()
-                        .getContent()
+        LlmMessage persistedToolMessage = memoryService.savedMessages.stream()
+                .filter(message -> "tool".equals(message.getRole()))
+                .findFirst()
+                .orElseThrow();
+
+        // 同一条持久化消息同时携带完整原文和以后发给模型的压缩副本。
+        String persistedOriginalContent = JSON_MAPPER.readTree(
+                persistedToolMessage.getOriginalContent()
         ).get("content").asString();
-        assertEquals(largeResult, persistedContent);
+        assertEquals(largeResult, persistedOriginalContent);
+        assertTrue(persistedToolMessage.getContextContent().contains("工具结果已截断"));
     }
 
     @Test
@@ -497,8 +499,8 @@ class AgentHarnessTest {
     }
 
     @Test
-    @DisplayName("恢复结果超过上下文百分之九十五安全线时返回失败")
-    void shouldRejectRecoveryBeyondSafeContextRatio() throws Exception {
+    @DisplayName("恢复工具和普通工具使用同一套上下文压缩流程")
+    void shouldCompactRecoveryWithSharedContextPolicy() throws Exception {
         String userMessage = "测试恢复安全水位";
         InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
         resultStore.save("call_source", "原始资料".repeat(100));
@@ -509,8 +511,7 @@ class AgentHarnessTest {
                 "{\"toolCallId\":\"call_source\",\"offset\":0,\"limit\":100}"
         );
 
-        // 先按真实消息结构计算成功恢复后的大小，再把它作为硬上限。
-        // 成功结果虽然没有超过 100% 硬上限，但一定超过 95% 安全线。
+        // 按真实消息结构计算未压缩结果大小，让它处于硬上限内但超过 95% 安全水位。
         ToolExecutionResult projectedResult = recoveryTool.execute(recoveryCall.arguments());
         LlmMessage projectedToolMessage = LlmMessage.toolResult(
                 recoveryCall.id(),
@@ -536,15 +537,16 @@ class AgentHarnessTest {
                 List.of(),
                 new FakeConversationMemoryService(),
                 new ActiveLearningSessionRepository(),
-                new ContextManager(projectedCharacters, 500, 2, 1_000, 0.95),
+                new ContextManager(projectedCharacters, 40, 2, 1_000, 0.95),
                 resultStore
         );
 
-        harness.run(SESSION_ID, userMessage);
+        String answer = harness.run(SESSION_ID, userMessage);
 
-        JsonNode rejectedResult = findToolResult(fakeLlmClient.receivedMessages.get(1), "call_restore");
-        assertFalse(rejectedResult.get("success").asBoolean());
-        assertEquals("CONTEXT_RECOVERY_BUDGET_EXCEEDED", rejectedResult.get("errorCode").asString());
+        assertEquals("安全水位测试结束", answer);
+        JsonNode compactedResult = findToolResult(fakeLlmClient.receivedMessages.get(1), "call_restore");
+        assertTrue(compactedResult.get("success").asBoolean());
+        assertTrue(compactedResult.get("content").asString().contains("工具结果已截断"));
     }
 
     private ToolCallLlmResponse recoveryResponse(String callId, int offset, int limit) {
@@ -661,6 +663,11 @@ class AgentHarnessTest {
         @Override
         public void appendMessages(Long sessionId, List<LlmMessage> messages) {
             savedMessages.addAll(messages);
+        }
+
+        @Override
+        public void updateToolContextCopies(Long sessionId, List<LlmMessage> messages) {
+            // 单元测试使用内存列表，不需要模拟数据库 UPDATE。
         }
     }
 

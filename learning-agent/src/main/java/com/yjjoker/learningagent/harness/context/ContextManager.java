@@ -14,8 +14,8 @@ import tools.jackson.databind.node.ObjectNode;
 import java.util.ArrayList;
 import java.util.List;
 
-// ContextManager 只管理发送给模型的工作上下文，不负责删除数据库中的原始历史。
-// 当前阶段只做字符数估算和工具结果截断，摘要和长期记忆留到后续阶段。
+// ContextManager 只管理发送给模型的上下文副本，不删除工具原文或数据库历史。
+// 当前阶段统一压缩普通工具和恢复工具的结果，摘要和长期记忆留到后续阶段。
 @Component
 public class ContextManager {
 
@@ -26,7 +26,8 @@ public class ContextManager {
     private final int maxToolResultCharacters;
     private final int maxRecoveryCallsPerRun;
     private final int maxRecoveryCharactersPerRun;
-    private final double recoverySafeContextRatio;
+    private final double safeContextRatio;
+    private final double compressionTargetRatio;
 
     // 存在测试专用构造方法，因此显式告诉 Spring 生产环境应使用配置对象创建组件。
     @Autowired
@@ -36,7 +37,8 @@ public class ContextManager {
                 properties.getMaxToolResultCharacters(),
                 properties.getMaxRecoveryCallsPerRun(),
                 properties.getMaxRecoveryCharactersPerRun(),
-                properties.getRecoverySafeContextRatio()
+                properties.getSafeContextRatio(),
+                properties.getCompressionTargetRatio()
         );
     }
 
@@ -50,28 +52,48 @@ public class ContextManager {
                           int maxToolResultCharacters,
                           int maxRecoveryCallsPerRun,
                           int maxRecoveryCharactersPerRun,
-                          double recoverySafeContextRatio) {
+                          double safeContextRatio) {
+        this(
+                maxContextCharacters,
+                maxToolResultCharacters,
+                maxRecoveryCallsPerRun,
+                maxRecoveryCharactersPerRun,
+                safeContextRatio,
+                0.80
+        );
+    }
+
+    // 生产配置可以同时指定安全上限和压缩目标，测试可用此构造方法验证两者关系。
+    public ContextManager(int maxContextCharacters,
+                          int maxToolResultCharacters,
+                          int maxRecoveryCallsPerRun,
+                          int maxRecoveryCharactersPerRun,
+                          double safeContextRatio,
+                          double compressionTargetRatio) {
         if (maxContextCharacters <= 0
                 || maxToolResultCharacters <= 0
                 || maxRecoveryCallsPerRun <= 0
                 || maxRecoveryCharactersPerRun <= 0
-                || recoverySafeContextRatio <= 0
-                || recoverySafeContextRatio >= 1) {
-            throw new IllegalArgumentException("上下文限制必须大于 0");
+                || safeContextRatio <= 0
+                || safeContextRatio >= 1
+                || compressionTargetRatio <= 0
+                || compressionTargetRatio >= safeContextRatio) {
+            throw new IllegalArgumentException("上下文压缩阈值必须满足 0 < 目标阈值 < 安全阈值 < 1");
         }
         this.maxContextCharacters = maxContextCharacters;
         this.maxToolResultCharacters = maxToolResultCharacters;
         this.maxRecoveryCallsPerRun = maxRecoveryCallsPerRun;
         this.maxRecoveryCharactersPerRun = maxRecoveryCharactersPerRun;
-        this.recoverySafeContextRatio = recoverySafeContextRatio;
+        this.safeContextRatio = safeContextRatio;
+        this.compressionTargetRatio = compressionTargetRatio;
     }
 
-    // 每次请求模型前调用；如果上下文未超限，只复制列表，不改变消息内容。
+    // 每次请求模型前都使用安全水位检查，避免普通工具结果占满模型窗口。
     public List<LlmMessage> prepareForLlmRequest(List<LlmMessage> messages) {
         return fitToolResults(messages);
     }
 
-    // 工具结果加入工作上下文后调用，与请求前使用同一套规则，避免两个入口行为不一致。
+    // 普通工具和恢复工具执行后都走这里，与请求前保持同一套压缩规则。
     public List<LlmMessage> compactAfterToolExecution(List<LlmMessage> messages) {
         return fitToolResults(messages);
     }
@@ -102,19 +124,15 @@ public class ContextManager {
         return recoveredCharacters + nextRecoveredCharacters <= maxRecoveryCharactersPerRun;
     }
 
-    // 用完整消息结构估算加入恢复结果后的大小，而不是只比较恢复正文长度。
-    public boolean fitsRecoverySafetyLimit(List<LlmMessage> currentMessages, LlmMessage recoveryResultMessage) {
-        List<LlmMessage> candidateMessages = new ArrayList<>(currentMessages);
-        candidateMessages.add(recoveryResultMessage);
-        int safeLimit = (int) Math.floor(maxContextCharacters * recoverySafeContextRatio);
-        return estimateCharacters(candidateMessages) <= safeLimit;
-    }
-
-    // 判断工具结果是否超出限制，超出则压缩，没有就返回原列表；如果压缩后仍然超出则抛出异常。
+    // 超过安全水位时从旧到新压缩工具结果；压缩后仍放不下才终止请求。
     private List<LlmMessage> fitToolResults(List<LlmMessage> messages) {
         List<LlmMessage> workingMessages = new ArrayList<>(messages);
-        // 没有超出限制，直接返回原列表
-        if (estimateCharacters(workingMessages) <= maxContextCharacters) {
+        // 计算安全水位，即最大字符数乘以安全比例
+        int safeContextCharacters = (int) Math.floor(maxContextCharacters * safeContextRatio);
+        // 只有超过安全水位才触发压缩；触发后尽量压到更低的目标水位。
+        int compressionTargetCharacters = (int) Math.floor(maxContextCharacters * compressionTargetRatio);
+        // 如果当前消息总和未超过安全水位，则无需压缩
+        if (estimateCharacters(workingMessages) <= safeContextCharacters) {
             return workingMessages;
         }
 
@@ -126,15 +144,16 @@ public class ContextManager {
             }
             workingMessages.set(index, compactToolMessage(message));
             // 旧结果已经释放出足够空间时立即停止，尽量保留较新的工具结果全文。
-            if (estimateCharacters(workingMessages) <= maxContextCharacters) {
+            if (estimateCharacters(workingMessages) <= compressionTargetCharacters) {
                 return workingMessages;
             }
         }
 
-        if (estimateCharacters(workingMessages) > maxContextCharacters) {
+        if (estimateCharacters(workingMessages) > safeContextCharacters) {
             // 本阶段不擅自删除用户/assistant 对话，也不调用模型做摘要，因此明确报告无法继续。
+            // TODO 后续接入摘要压缩：优先保留用户目标、最近工具结果和关键 assistant 结论，再重新估算。
             throw new ContextWindowExceededException(
-                    "上下文超过限制，压缩工具结果后仍无法容纳；摘要压缩功能尚未启用"
+                    "上下文超过安全水位，压缩工具结果后仍无法容纳；摘要压缩功能尚未启用"
             );
         }
         return workingMessages;
@@ -148,12 +167,8 @@ public class ContextManager {
         }
         // 尝试压缩结构化结果
         String compactedContent = compactStructuredResult(content);
-        // 压缩只改变正文，是否允许未来重放的属性必须保持不变。
-        return LlmMessage.toolResult(
-                message.getToolCallId(),
-                compactedContent,
-                message.isContextReplayable()
-        );
+        // 新消息只替换上下文副本，完整原文和是否允许重放的标记保持不变。
+        return message.withContextContent(compactedContent);
     }
 
     // 尝试压缩结构化工具结果，如 JSON 格式，只保留 content 字段。

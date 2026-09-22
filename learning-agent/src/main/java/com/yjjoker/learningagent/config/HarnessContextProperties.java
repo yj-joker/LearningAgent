@@ -29,8 +29,13 @@ public class HarnessContextProperties {
     @Min(1)
     private int maxRecoveryCharactersPerRun = 600;
 
-    // 恢复消息加入后只能使用最大上下文的 95%，剩余空间留给模型生成和后续控制消息。
+    // 每次模型请求最多使用上下文的 95%，剩余空间留给模型生成和后续控制消息。
     @DecimalMin("0.1")
     @DecimalMax("0.99")
-    private double recoverySafeContextRatio = 0.95;
+    private double safeContextRatio = 0.95;
+
+    // 触发压缩后尽量回落到 80%，为后续工具调用预留空间；达不到目标但低于安全上限仍可继续。
+    @DecimalMin("0.1")
+    @DecimalMax("0.94")
+    private double compressionTargetRatio = 0.80;
 }

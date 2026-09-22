@@ -69,10 +69,11 @@ class DatabaseConversationMemoryServiceTest {
         );
         LearningSessionMessage toolResult = storedMessage(
                 LearningSessionMessageRoleEnum.TOOL,
-                "{\"success\":true}",
+                "{\"success\":true,\"content\":\"完整资料\"}",
                 null,
                 "call_1"
         );
+        toolResult.setContextContent("{\"success\":true,\"content\":\"压缩资料\"}");
         LearningSessionMessage assistantAnswer = storedMessage(
                 LearningSessionMessageRoleEnum.ASSISTANT,
                 "事务是一组不可分割的操作。",
@@ -92,8 +93,46 @@ class DatabaseConversationMemoryServiceTest {
                 history.stream().map(LlmMessage::getRole).toList());
         assertEquals("call_1", history.get(1).getToolCalls().getFirst().id());
         assertEquals("call_1", history.get(2).getToolCallId());
+        assertEquals("{\"success\":true,\"content\":\"压缩资料\"}", history.get(2).getContent());
+        assertEquals("{\"success\":true,\"content\":\"完整资料\"}",
+                history.get(2).getOriginalContent());
         assertEquals("事务是一组不可分割的操作。", history.get(3).getContent());
         verify(messageRepository).findReplayableBySessionId(10L);
+    }
+
+    @Test
+    @DisplayName("工具原文和上下文副本会分别保存")
+    void shouldPersistOriginalAndContextToolContentSeparately() {
+        when(messageRepository.save(any())).thenReturn(1);
+        DatabaseConversationMemoryService service = service();
+        LlmMessage compactedToolMessage = LlmMessage
+                .toolResult("call_large", "完整工具结果")
+                .withContextContent("压缩工具结果");
+
+        service.appendMessage(10L, compactedToolMessage);
+
+        ArgumentCaptor<LearningSessionMessage> captor =
+                ArgumentCaptor.forClass(LearningSessionMessage.class);
+        verify(messageRepository).save(captor.capture());
+        assertEquals("完整工具结果", captor.getValue().getContent());
+        assertEquals("压缩工具结果", captor.getValue().getContextContent());
+    }
+
+    @Test
+    @DisplayName("历史工具结果的新压缩副本会回写数据库")
+    void shouldUpdatePersistedToolContextCopy() {
+        DatabaseConversationMemoryService service = service();
+        LlmMessage compactedToolMessage = LlmMessage
+                .toolResult("call_old", "完整历史结果")
+                .withContextContent("更小的上下文副本");
+
+        service.updateToolContextCopies(10L, List.of(compactedToolMessage));
+
+        verify(messageRepository).updateToolContextContent(
+                10L,
+                "call_old",
+                "更小的上下文副本"
+        );
     }
 
     @Test
