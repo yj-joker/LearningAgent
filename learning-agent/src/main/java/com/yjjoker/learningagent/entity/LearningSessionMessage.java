@@ -21,5 +21,9 @@ public class LearningSessionMessage {
 
     // 仅 TOOL 消息使用，用来对应 ASSISTANT 发起的某一次工具调用。
     private String toolCallId;
+
+    // false 表示消息只用于审计，后续构造模型上下文时不再加载。
+    private boolean contextReplayable = true;
+
     private LocalDateTime createdAt;
 }

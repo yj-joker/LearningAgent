@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         content LONGTEXT DEFAULT NULL COMMENT '消息正文或工具执行结果',
                                                         tool_calls JSON DEFAULT NULL COMMENT 'ASSISTANT 发起的工具调用列表',
                                                         tool_call_id VARCHAR(128) DEFAULT NULL COMMENT 'TOOL 消息对应的工具调用 ID',
+                                                        context_replayable TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许进入未来模型上下文',
                                                         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 
                                                         PRIMARY KEY (id),

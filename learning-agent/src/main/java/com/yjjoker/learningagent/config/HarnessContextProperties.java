@@ -1,5 +1,7 @@
 package com.yjjoker.learningagent.config;
 
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -18,4 +20,17 @@ public class HarnessContextProperties {
     // 工具结果的 content 正文最多保留多少字符，避免 RAG 或联网结果占满整个上下文。
     @Min(1)
     private int maxToolResultCharacters = 8_000;
+
+    // 单次 Agent Loop 最多允许模型调用几次原始结果恢复工具。
+    @Min(1)
+    private int maxRecoveryCallsPerRun = 2;
+
+    // 单次 Agent Loop 中所有成功恢复结果的累计字符上限。
+    @Min(1)
+    private int maxRecoveryCharactersPerRun = 600;
+
+    // 恢复消息加入后只能使用最大上下文的 95%，剩余空间留给模型生成和后续控制消息。
+    @DecimalMin("0.1")
+    @DecimalMax("0.99")
+    private double recoverySafeContextRatio = 0.95;
 }

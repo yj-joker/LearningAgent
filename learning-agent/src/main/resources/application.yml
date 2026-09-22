@@ -83,6 +83,12 @@ harness:
     max-context-characters: ${HARNESS_MAX_CONTEXT_CHARACTERS:2000}
     # 工具结果正文超过 500 个字符时，只压缩发送给模型的工作副本。
     max-tool-result-characters: ${HARNESS_MAX_TOOL_RESULT_CHARACTERS:500}
+    # 单次 Agent Loop 最多执行两次原始工具结果恢复，避免模型反复读取。
+    max-recovery-calls-per-run: ${HARNESS_MAX_RECOVERY_CALLS_PER_RUN:2}
+    # 所有成功恢复结果的累计字符上限。
+    max-recovery-characters-per-run: ${HARNESS_MAX_RECOVERY_CHARACTERS_PER_RUN:600}
+    # 恢复结果加入后最多占用 95% 上下文；超限时先返回失败，强制压缩留到下一阶段。
+    recovery-safe-context-ratio: ${HARNESS_RECOVERY_SAFE_CONTEXT_RATIO:0.95}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}

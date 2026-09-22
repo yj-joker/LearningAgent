@@ -41,6 +41,12 @@ public class GetOriginalToolResultTool implements Tool {
     }
 
     @Override
+    public boolean isContextRecoveryTool() {
+        // Harness 据此应用恢复预算，并把本轮消息标记为不可在未来上下文中重放。
+        return true;
+    }
+
+    @Override
     public Map<String, Object> parametersSchema() {
         // Schema 是发给 LLM 的参数说明；它约束模型应该生成哪些字段和字段类型。
         return Map.of(

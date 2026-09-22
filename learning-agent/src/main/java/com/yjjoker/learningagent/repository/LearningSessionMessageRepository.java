@@ -14,23 +14,27 @@ public interface LearningSessionMessageRepository {
 
     // 保存一条消息；工具调用 JSON 为空时，MySQL 会保存为 NULL。
     @Insert("INSERT INTO learning_session_messages " +
-            "(session_id, role, content, tool_calls, tool_call_id, created_at) " +
+            "(session_id, role, content, tool_calls, tool_call_id, context_replayable, created_at) " +
             "VALUES (#{message.sessionId}, #{message.role}, #{message.content}, " +
-            "#{message.toolCallsJson}, #{message.toolCallId}, #{message.createdAt})")
+            "#{message.toolCallsJson}, #{message.toolCallId}, #{message.contextReplayable}, #{message.createdAt})")
     @Options(useGeneratedKeys = true, keyProperty = "message.id", keyColumn = "id")
     int save(@Param("message") LearningSessionMessage message);
 
-    // id 表示消息写入顺序，按它升序读取才能还原完整对话。
+    // 只加载允许重放的消息；恢复工具轨迹虽然保留在数据库，但不会进入未来上下文。
     @Select("SELECT id, session_id AS sessionId, role, content, " +
-            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, created_at AS createdAt " +
-            "FROM learning_session_messages WHERE session_id = #{sessionId} ORDER BY id")
-    List<LearningSessionMessage> findBySessionId(@Param("sessionId") Long sessionId);
+            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
+            "context_replayable AS contextReplayable, created_at AS createdAt " +
+            "FROM learning_session_messages " +
+            "WHERE session_id = #{sessionId} AND context_replayable = TRUE ORDER BY id")
+    List<LearningSessionMessage> findReplayableBySessionId(@Param("sessionId") Long sessionId);
 
     // 恢复工具结果时只允许查询当前会话中对应调用 ID 的 TOOL 消息。
     @Select("SELECT id, session_id AS sessionId, role, content, " +
-            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, created_at AS createdAt " +
+            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
+            "context_replayable AS contextReplayable, created_at AS createdAt " +
             "FROM learning_session_messages " +
-            "WHERE session_id = #{sessionId} AND role = 'TOOL' AND tool_call_id = #{toolCallId} " +
+            "WHERE session_id = #{sessionId} AND role = 'TOOL' " +
+            "AND tool_call_id = #{toolCallId} AND context_replayable = TRUE " +
             "ORDER BY id DESC LIMIT 1")
     LearningSessionMessage findToolResult(@Param("sessionId") Long sessionId,
                                           @Param("toolCallId") String toolCallId);

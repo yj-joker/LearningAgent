@@ -15,6 +15,11 @@ public interface Tool {
     // 名称负责精确定位工具，说明负责表达工具的用途，两者承担的职责不同。
     String description();
 
+    // 恢复类工具只为当前 Agent Loop 补充临时细节，其调用和结果不会进入未来上下文。
+    default boolean isContextRecoveryTool() {
+        return false;
+    }
+
     // 返回工具输入参数的 JSON Schema，也就是“参数应该长什么样”的结构说明。
     // 模型不会读取 Java 方法签名，因此必须通过这个结构知道参数名称、类型以及哪些参数必填。
     // 当前默认结构表示工具不接收任何参数，find_all_users 正好可以直接使用这个默认实现。

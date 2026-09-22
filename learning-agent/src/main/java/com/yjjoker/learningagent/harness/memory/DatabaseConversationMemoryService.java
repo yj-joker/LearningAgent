@@ -33,7 +33,7 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     public List<LlmMessage> loadHistory(Long sessionId) {
         // 先阻止非法 ID 进入数据库查询。
         requireSessionId(sessionId);
-        return messageRepository.findBySessionId(sessionId)
+        return messageRepository.findReplayableBySessionId(sessionId)
                 .stream()
                 // 数据库实体不能直接发给模型，需要逐条还原成 LlmMessage。
                 .map(this::toLlmMessage)
@@ -84,6 +84,8 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         storedMessage.setSessionId(sessionId);
         storedMessage.setContent(message.getContent());
         storedMessage.setToolCallId(message.getToolCallId());
+        // 不可重放消息仍完整落库，只在后续 loadHistory 时被 Repository 过滤。
+        storedMessage.setContextReplayable(message.isContextReplayable());
         storedMessage.setCreatedAt(LocalDateTime.now());
 
         // LLM 使用小写角色，数据库使用枚举，写入前需要明确映射。

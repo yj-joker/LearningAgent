@@ -68,6 +68,7 @@ class ContextManagerTest {
         // 用户问题和 assistant 工具请求不能因为压缩而丢失。
         assertEquals("请查询资料", result.get(1).getContent());
         assertEquals("search_knowledge", result.get(2).getToolCalls().getFirst().name());
+        assertTrue(compactedToolMessage.isContextReplayable());
 
         // 输入列表代表完整历史，ContextManager 不能在原对象上覆盖工具结果。
         assertEquals(largeToolResult, messages.get(3).getContent());
@@ -103,6 +104,35 @@ class ContextManagerTest {
         );
 
         assertTrue(exception.getMessage().contains("摘要压缩功能尚未启用"));
+    }
+
+    @Test
+    @DisplayName("恢复预算同时限制次数和累计字符数")
+    void shouldLimitRecoveryCallsAndCharacters() {
+        ContextManager manager = new ContextManager(1_000, 100, 2, 300, 0.95);
+
+        assertTrue(manager.hasRecoveryCallCapacity(0));
+        assertTrue(manager.hasRecoveryCallCapacity(1));
+        assertFalse(manager.hasRecoveryCallCapacity(2));
+
+        assertTrue(manager.hasRecoveryCharacterCapacity(200, 100));
+        assertFalse(manager.hasRecoveryCharacterCapacity(200, 101));
+    }
+
+    @Test
+    @DisplayName("恢复结果加入后不能超过最大上下文的百分之九十五")
+    void shouldReserveFivePercentOfContextForRecovery() {
+        ContextManager manager = new ContextManager(100, 50, 2, 300, 0.95);
+        List<LlmMessage> currentMessages = List.of(LlmMessage.user("问".repeat(80)));
+
+        assertTrue(manager.fitsRecoverySafetyLimit(
+                currentMessages,
+                LlmMessage.toolResult("c", "结果")
+        ));
+        assertFalse(manager.fitsRecoverySafetyLimit(
+                currentMessages,
+                LlmMessage.toolResult("call_restore", "恢复内容".repeat(10), false)
+        ));
     }
 
     // 仅用于生成与真实 ToolExecutionResult 相同结构的 JSON，避免测试依赖手写转义字符串。

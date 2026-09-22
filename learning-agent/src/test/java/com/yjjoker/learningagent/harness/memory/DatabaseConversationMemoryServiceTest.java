@@ -79,7 +79,7 @@ class DatabaseConversationMemoryServiceTest {
                 null,
                 null
         );
-        when(messageRepository.findBySessionId(10L)).thenReturn(List.of(
+        when(messageRepository.findReplayableBySessionId(10L)).thenReturn(List.of(
                 userMessage,
                 assistantToolCall,
                 toolResult,
@@ -93,6 +93,27 @@ class DatabaseConversationMemoryServiceTest {
         assertEquals("call_1", history.get(1).getToolCalls().getFirst().id());
         assertEquals("call_1", history.get(2).getToolCallId());
         assertEquals("事务是一组不可分割的操作。", history.get(3).getContent());
+        verify(messageRepository).findReplayableBySessionId(10L);
+    }
+
+    @Test
+    @DisplayName("不可重放消息仍会带标记保存到数据库")
+    void shouldPersistNonReplayableMessageForAudit() {
+        when(messageRepository.save(any())).thenReturn(1);
+        DatabaseConversationMemoryService service = service();
+        LlmMessage recoveryResult = LlmMessage.toolResult(
+                "call_restore",
+                "恢复片段",
+                false
+        );
+
+        service.appendMessage(10L, recoveryResult);
+
+        ArgumentCaptor<LearningSessionMessage> captor =
+                ArgumentCaptor.forClass(LearningSessionMessage.class);
+        verify(messageRepository).save(captor.capture());
+        assertFalse(captor.getValue().isContextReplayable());
+        assertEquals("恢复片段", captor.getValue().getContent());
     }
 
     @Test

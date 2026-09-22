@@ -24,20 +24,46 @@ public class ContextManager {
 
     private final int maxContextCharacters;
     private final int maxToolResultCharacters;
+    private final int maxRecoveryCallsPerRun;
+    private final int maxRecoveryCharactersPerRun;
+    private final double recoverySafeContextRatio;
 
     // 存在测试专用构造方法，因此显式告诉 Spring 生产环境应使用配置对象创建组件。
     @Autowired
     public ContextManager(HarnessContextProperties properties) {
-        this(properties.getMaxContextCharacters(), properties.getMaxToolResultCharacters());
+        this(
+                properties.getMaxContextCharacters(),
+                properties.getMaxToolResultCharacters(),
+                properties.getMaxRecoveryCallsPerRun(),
+                properties.getMaxRecoveryCharactersPerRun(),
+                properties.getRecoverySafeContextRatio()
+        );
     }
 
     // 测试可以直接传入较小阈值，验证压缩行为而不需要修改 Spring 配置。
     public ContextManager(int maxContextCharacters, int maxToolResultCharacters) {
-        if (maxContextCharacters <= 0 || maxToolResultCharacters <= 0) {
+        this(maxContextCharacters, maxToolResultCharacters, 2, 600, 0.95);
+    }
+
+    // 完整构造方法供 Harness 预算测试使用，生产参数仍由 application.yml 统一注入。
+    public ContextManager(int maxContextCharacters,
+                          int maxToolResultCharacters,
+                          int maxRecoveryCallsPerRun,
+                          int maxRecoveryCharactersPerRun,
+                          double recoverySafeContextRatio) {
+        if (maxContextCharacters <= 0
+                || maxToolResultCharacters <= 0
+                || maxRecoveryCallsPerRun <= 0
+                || maxRecoveryCharactersPerRun <= 0
+                || recoverySafeContextRatio <= 0
+                || recoverySafeContextRatio >= 1) {
             throw new IllegalArgumentException("上下文限制必须大于 0");
         }
         this.maxContextCharacters = maxContextCharacters;
         this.maxToolResultCharacters = maxToolResultCharacters;
+        this.maxRecoveryCallsPerRun = maxRecoveryCallsPerRun;
+        this.maxRecoveryCharactersPerRun = maxRecoveryCharactersPerRun;
+        this.recoverySafeContextRatio = recoverySafeContextRatio;
     }
 
     // 每次请求模型前调用；如果上下文未超限，只复制列表，不改变消息内容。
@@ -64,6 +90,24 @@ public class ContextManager {
             }
         }
         return total;
+    }
+
+    // 恢复次数达到上限后拒绝继续执行，防止模型反复读取原始结果。
+    public boolean hasRecoveryCallCapacity(int completedRecoveryCalls) {
+        return completedRecoveryCalls < maxRecoveryCallsPerRun;
+    }
+
+    // 累计字符只统计成功恢复并实际准备交给模型的内容。
+    public boolean hasRecoveryCharacterCapacity(int recoveredCharacters, int nextRecoveredCharacters) {
+        return recoveredCharacters + nextRecoveredCharacters <= maxRecoveryCharactersPerRun;
+    }
+
+    // 用完整消息结构估算加入恢复结果后的大小，而不是只比较恢复正文长度。
+    public boolean fitsRecoverySafetyLimit(List<LlmMessage> currentMessages, LlmMessage recoveryResultMessage) {
+        List<LlmMessage> candidateMessages = new ArrayList<>(currentMessages);
+        candidateMessages.add(recoveryResultMessage);
+        int safeLimit = (int) Math.floor(maxContextCharacters * recoverySafeContextRatio);
+        return estimateCharacters(candidateMessages) <= safeLimit;
     }
 
     // 判断工具结果是否超出限制，超出则压缩，没有就返回原列表；如果压缩后仍然超出则抛出异常。
@@ -104,7 +148,12 @@ public class ContextManager {
         }
         // 尝试压缩结构化结果
         String compactedContent = compactStructuredResult(content);
-        return LlmMessage.toolResult(message.getToolCallId(), compactedContent);
+        // 压缩只改变正文，是否允许未来重放的属性必须保持不变。
+        return LlmMessage.toolResult(
+                message.getToolCallId(),
+                compactedContent,
+                message.isContextReplayable()
+        );
     }
 
     // 尝试压缩结构化工具结果，如 JSON 格式，只保留 content 字段。

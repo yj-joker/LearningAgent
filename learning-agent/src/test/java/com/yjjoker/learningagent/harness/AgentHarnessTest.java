@@ -18,6 +18,7 @@ import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
@@ -399,11 +400,12 @@ class AgentHarnessTest {
                 new RecordingTool("find_all_users", largeResult),
                 new GetOriginalToolResultTool(resultStore)
         ));
+        FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
         AgentHarnessService harness = new AgentHarnessServiceImpl(
                 fakeLlmClient,
                 registry,
                 List.of(),
-                new FakeConversationMemoryService(),
+                memoryService,
                 new ActiveLearningSessionRepository(),
                 new ContextManager(2_000, 250),
                 resultStore
@@ -420,6 +422,147 @@ class AgentHarnessTest {
         assertTrue(fakeLlmClient.receivedMessages.get(2).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
                         && message.getContent().contains("ORIGINAL_DETAIL:")));
+
+        // 恢复工具的 assistant/tool 消息完整保存，但标记为不可进入未来上下文。
+        List<LlmMessage> recoveryMessages = memoryService.savedMessages.stream()
+                .filter(message -> !message.isContextReplayable())
+                .toList();
+        assertEquals(List.of("assistant", "tool"),
+                recoveryMessages.stream().map(LlmMessage::getRole).toList());
+    }
+
+    @Test
+    @DisplayName("恢复工具超过单轮调用次数后返回失败")
+    void shouldRejectRecoveryAfterCallLimit() throws Exception {
+        String largeResult = "原始内容".repeat(500);
+        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(new ToolCall("call_source", "source_tool", "{}"))),
+                recoveryResponse("call_restore_1", 0, 20),
+                recoveryResponse("call_restore_2", 20, 20),
+                recoveryResponse("call_restore_3", 40, 20),
+                new TextLlmResponse("恢复次数测试结束")
+        );
+        ToolRegistry registry = new ToolRegistry(List.of(
+                new RecordingTool("source_tool", largeResult),
+                new GetOriginalToolResultTool(resultStore)
+        ));
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                registry,
+                List.of(),
+                new FakeConversationMemoryService(),
+                new ActiveLearningSessionRepository(),
+                new ContextManager(4_000, 300, 2, 1_000, 0.95),
+                resultStore
+        );
+
+        harness.run(SESSION_ID, "测试恢复次数限制");
+
+        JsonNode rejectedResult = findToolResult(fakeLlmClient.receivedMessages.get(4), "call_restore_3");
+        assertFalse(rejectedResult.get("success").asBoolean());
+        assertEquals("RECOVERY_CALL_LIMIT_EXCEEDED", rejectedResult.get("errorCode").asString());
+    }
+
+    @Test
+    @DisplayName("恢复内容超过单轮累计字符数后返回失败")
+    void shouldRejectRecoveryAfterCharacterLimit() throws Exception {
+        String largeResult = "原始内容".repeat(500);
+        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(new ToolCall("call_source", "source_tool", "{}"))),
+                recoveryResponse("call_restore_1", 0, 100),
+                recoveryResponse("call_restore_2", 100, 100),
+                new TextLlmResponse("恢复字符测试结束")
+        );
+        ToolRegistry registry = new ToolRegistry(List.of(
+                new RecordingTool("source_tool", largeResult),
+                new GetOriginalToolResultTool(resultStore)
+        ));
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                registry,
+                List.of(),
+                new FakeConversationMemoryService(),
+                new ActiveLearningSessionRepository(),
+                new ContextManager(4_000, 300, 3, 250, 0.95),
+                resultStore
+        );
+
+        harness.run(SESSION_ID, "测试恢复字符限制");
+
+        JsonNode rejectedResult = findToolResult(fakeLlmClient.receivedMessages.get(3), "call_restore_2");
+        assertFalse(rejectedResult.get("success").asBoolean());
+        assertEquals("RECOVERY_CHARACTER_LIMIT_EXCEEDED", rejectedResult.get("errorCode").asString());
+    }
+
+    @Test
+    @DisplayName("恢复结果超过上下文百分之九十五安全线时返回失败")
+    void shouldRejectRecoveryBeyondSafeContextRatio() throws Exception {
+        String userMessage = "测试恢复安全水位";
+        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        resultStore.save("call_source", "原始资料".repeat(100));
+        GetOriginalToolResultTool recoveryTool = new GetOriginalToolResultTool(resultStore);
+        ToolCall recoveryCall = new ToolCall(
+                "call_restore",
+                "get_original_tool_result",
+                "{\"toolCallId\":\"call_source\",\"offset\":0,\"limit\":100}"
+        );
+
+        // 先按真实消息结构计算成功恢复后的大小，再把它作为硬上限。
+        // 成功结果虽然没有超过 100% 硬上限，但一定超过 95% 安全线。
+        ToolExecutionResult projectedResult = recoveryTool.execute(recoveryCall.arguments());
+        LlmMessage projectedToolMessage = LlmMessage.toolResult(
+                recoveryCall.id(),
+                JSON_MAPPER.writeValueAsString(projectedResult),
+                false
+        );
+        List<LlmMessage> projectedMessages = List.of(
+                LlmMessage.system(AgentSystemPrompt.CONTENT),
+                LlmMessage.user(userMessage),
+                LlmMessage.assistantToolCalls(List.of(recoveryCall), false),
+                projectedToolMessage
+        );
+        int projectedCharacters = new ContextManager(10_000, 500)
+                .estimateCharacters(projectedMessages);
+
+        FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                new ToolCallLlmResponse(List.of(recoveryCall)),
+                new TextLlmResponse("安全水位测试结束")
+        );
+        AgentHarnessService harness = new AgentHarnessServiceImpl(
+                fakeLlmClient,
+                new ToolRegistry(List.of(recoveryTool)),
+                List.of(),
+                new FakeConversationMemoryService(),
+                new ActiveLearningSessionRepository(),
+                new ContextManager(projectedCharacters, 500, 2, 1_000, 0.95),
+                resultStore
+        );
+
+        harness.run(SESSION_ID, userMessage);
+
+        JsonNode rejectedResult = findToolResult(fakeLlmClient.receivedMessages.get(1), "call_restore");
+        assertFalse(rejectedResult.get("success").asBoolean());
+        assertEquals("CONTEXT_RECOVERY_BUDGET_EXCEEDED", rejectedResult.get("errorCode").asString());
+    }
+
+    private ToolCallLlmResponse recoveryResponse(String callId, int offset, int limit) {
+        return new ToolCallLlmResponse(List.of(new ToolCall(
+                callId,
+                "get_original_tool_result",
+                "{\"toolCallId\":\"call_source\",\"offset\":" + offset + ",\"limit\":" + limit + "}"
+        )));
+    }
+
+    private JsonNode findToolResult(List<LlmMessage> messages, String toolCallId) throws Exception {
+        String content = messages.stream()
+                .filter(message -> "tool".equals(message.getRole()))
+                .filter(message -> toolCallId.equals(message.getToolCallId()))
+                .findFirst()
+                .orElseThrow()
+                .getContent();
+        return JSON_MAPPER.readTree(content);
     }
 
     @Test

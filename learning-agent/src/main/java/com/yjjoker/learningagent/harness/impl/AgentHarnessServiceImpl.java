@@ -164,6 +164,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
         // 记录工具轮数，防止模型无限嵌套工具调用
         int completedToolRounds = 0;
+        // 恢复预算只在当前 Agent Loop 内统计，下一次用户请求会重新计算。
+        int completedRecoveryCalls = 0;
+        int recoveredCharacters = 0;
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
             // 得到模型的回复
@@ -189,8 +192,14 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 获取LLM想要调用的工具列表
                 List<ToolCall> toolCalls = toolCallResponse.toolCalls();
 
-                //将本轮LLM的工具请求添加到上下文
-                LlmMessage assistantToolMessage = LlmMessage.assistantToolCalls(toolCalls);
+                // 只要包含恢复工具，整组 assistant/tool 消息就不进入未来上下文，避免调用与结果数量不一致。
+                // TODO 下一阶段要求恢复工具独占一轮：Prompt 负责提示，Harness 负责强制校验。
+                // TODO 如果模型混用工具，则不执行本轮任何工具，并为每个 toolCall 返回可重试失败，让模型重新规划。
+                boolean recoveryRound = containsRecoveryTool(toolCalls);
+                boolean contextReplayable = !recoveryRound;
+
+                //将本轮LLM的工具请求添加到上下文，标记是否可重放
+                LlmMessage assistantToolMessage = LlmMessage.assistantToolCalls(toolCalls, contextReplayable);
                 messages.add(assistantToolMessage);
 
                 // 本轮工具调用先暂存；全部处理完成后才加入待保存消息。
@@ -201,6 +210,27 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 for (ToolCall toolCall : toolCalls) {
                     // 在已经注册的工具中找到对应名称的工具
                     Tool tool = toolRegistry.getRequiredTool(toolCall.name());
+                    boolean recoveryTool = tool.isContextRecoveryTool();
+
+                    // 次数限制在工具执行前检查；被拒绝的请求不执行恢复工具和 afterToolExecution Hook。
+                    if (recoveryTool && !contextManager.hasRecoveryCallCapacity(completedRecoveryCalls)) {
+                        LlmMessage rejectedRecoveryMessage = createToolResultMessage(
+                                toolCall.id(),
+                                recoveryFailure(
+                                        "RECOVERY_CALL_LIMIT_EXCEEDED",
+                                        "本次任务的工具结果恢复次数已达到上限"
+                                ),
+                                false
+                        );
+                        messages.add(rejectedRecoveryMessage);
+                        currentToolRoundMessages.add(rejectedRecoveryMessage);
+                        continue;
+                    }
+
+                    // 只要恢复工具开始执行就计数，即使参数错误或找不到原始结果也会消耗一次机会。
+                    if (recoveryTool) {
+                        completedRecoveryCalls++;
+                    }
 
                     // 顺序执行前置 Hook；第一个拒绝结果会立即停止后续前置 Hook。
                     ToolCallHookResult hookResult = notifyBeforeToolExecution(context, toolCall);
@@ -223,7 +253,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         );
                         LlmMessage rejectedToolMessage = LlmMessage.toolResult(
                                 toolCall.id(),
-                                serializeToolResult(rejectedResult)
+                                serializeToolResult(rejectedResult),
+                                contextReplayable
                         );
                         messages.add(rejectedToolMessage);
                         currentToolRoundMessages.add(rejectedToolMessage);
@@ -236,18 +267,57 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     // 执行工具并获取结果，异常会在这里终止请求。
                     ToolExecutionResult toolResult = executeTool(tool, toolCall.arguments());
 
+                    if (recoveryTool && toolResult.isSuccess()) {
+                        //计算本次恢复工具恢复的文本数
+                        int nextRecoveredCharacters = safeLength(toolResult.getContent());
+
+                        // 累计字符超限时丢弃本次恢复正文，只向模型返回不可重试的结构化失败。
+                        if (!contextManager.hasRecoveryCharacterCapacity(
+                                recoveredCharacters,
+                                nextRecoveredCharacters
+                        )) {
+                            toolResult = recoveryFailure(
+                                    "RECOVERY_CHARACTER_LIMIT_EXCEEDED",
+                                    "本次任务可恢复的工具结果字符数已达到上限"
+                            );
+                        } else {
+                            LlmMessage candidateMessage = createToolResultMessage(
+                                    toolCall.id(),
+                                    toolResult,
+                                    false
+                            );
+
+                            // 恢复结果加入后的完整 messages 必须低于最大上下文的 95%。
+                            if (!contextManager.fitsRecoverySafetyLimit(messages, candidateMessage)) {
+                                // TODO 下一阶段先强制压缩旧工具结果，再重新估算；仍超限时才返回恢复失败。
+                                toolResult = recoveryFailure(
+                                        "CONTEXT_RECOVERY_BUDGET_EXCEEDED",
+                                        "当前上下文剩余空间不足，无法恢复更多工具内容"
+                                );
+                            } else {
+                                recoveredCharacters += nextRecoveredCharacters;
+                            }
+                        }
+                    }
+
                     // 执行全部 afterToolExecution Hook。
                     notifyAfterToolExecution(context, toolCall, toolResult);
 
                     // 将工具结果转换为 JSON 字符串
                     String toolResultJson = serializeToolResult(toolResult);
 
-                    // 压缩前先保存完整结果，恢复工具才能按 toolCallId 读取原文片段。
-                    originalToolResultStore.save(toolCall.id(), toolResultJson);
+                    // 恢复工具自己的结果不进入原文存储，防止模型继续恢复“恢复结果”。
+                    if (!recoveryTool) {
+                        originalToolResultStore.save(toolCall.id(), toolResultJson);
+                    }
 
                     // 使用原始调用 id 建立一一对应关系，不能使用工具名称代替 id。
                     // 同一个工具在一轮中可能被调用两次，而这两次调用会拥有不同的 id。
-                    LlmMessage toolResultMessage = LlmMessage.toolResult(toolCall.id(), toolResultJson);
+                    LlmMessage toolResultMessage = LlmMessage.toolResult(
+                            toolCall.id(),
+                            toolResultJson,
+                            contextReplayable
+                    );
                     messages.add(toolResultMessage);
                     currentToolRoundMessages.add(toolResultMessage);
                 }
@@ -346,6 +416,36 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             log.error("工具执行发生系统异常，toolName={}", tool.name(), exception);
             throw new LearningAgentServiceException("工具执行失败，请稍后重试", exception);
         }
+    }
+
+    // 判断当前 assistant 工具请求中是否包含恢复工具。
+    private boolean containsRecoveryTool(List<ToolCall> toolCalls) {
+        for (ToolCall toolCall : toolCalls) {
+            if (toolRegistry.getRequiredTool(toolCall.name()).isContextRecoveryTool()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 恢复预算失败不是系统异常，模型收到稳定错误码后应停止继续恢复。
+    private ToolExecutionResult recoveryFailure(String errorCode, String message) {
+        return ToolExecutionResult.failure(errorCode, message, false);
+    }
+
+    // 统一完成恢复预算检查所需的“结果对象 -> JSON -> tool 消息”转换。
+    private LlmMessage createToolResultMessage(String toolCallId,
+                                               ToolExecutionResult result,
+                                               boolean contextReplayable) {
+        return LlmMessage.toolResult(
+                toolCallId,
+                serializeToolResult(result),
+                contextReplayable
+        );
+    }
+
+    private int safeLength(String value) {
+        return value == null ? 0 : value.length();
     }
 
     // 序列化工具结果为 JSON 字符串
