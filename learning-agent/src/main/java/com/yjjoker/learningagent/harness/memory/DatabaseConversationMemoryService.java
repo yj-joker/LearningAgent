@@ -129,7 +129,8 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     @Transactional
     public void replaceReplayableHistoryWithSummary(Long sessionId, LlmMessage summaryMessage) {
         requireSessionId(sessionId);
-        if (summaryMessage == null || !"assistant".equals(summaryMessage.getRole())
+        if (summaryMessage == null || !summaryMessage.isSummary()
+                || !"assistant".equals(summaryMessage.getRole())
                 || summaryMessage.getContent() == null || summaryMessage.getContent().isBlank()) {
             throw new LearningAgentServiceException("持久化的上下文摘要不能为空且必须是 assistant 消息");
         }

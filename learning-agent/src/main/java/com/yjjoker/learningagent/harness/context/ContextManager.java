@@ -13,7 +13,9 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // ContextManager 只管理发送给模型的上下文副本，不删除工具原文或数据库历史。
 // 工具结果压缩后仍超限时，可交给摘要器继续压缩旧历史。
@@ -150,6 +152,8 @@ public class ContextManager {
                     estimateCharacters(summarizedMessages), safeContextCharacters);
             throw contextWindowExceeded();
         }
+        // 没有超过，发生摘要，从本轮AgentLoop当中去除已经摘要的工具映射
+        pruneRecoveryReferences(summarizedMessages, referenceRegistry);
         log.info("上下文摘要完成，摘要前字符数={}，摘要后字符数={}，摘要消息数={}",
                 estimateCharacters(compactedMessages),
                 estimateCharacters(summarizedMessages),
@@ -229,6 +233,8 @@ public class ContextManager {
         int compressionTargetCharacters = (int) Math.floor(maxContextCharacters * compressionTargetRatio);
         // 如果当前消息总和未超过安全水位，则无需压缩
         if (estimateCharacters(workingMessages) <= safeContextCharacters) {
+            //
+            pruneRecoveryReferences(workingMessages, referenceRegistry);
             return workingMessages;
         }
 
@@ -247,11 +253,33 @@ public class ContextManager {
             }
             // 旧结果已经释放出足够空间时立即停止，尽量保留较新的工具结果全文。
             if (estimateCharacters(workingMessages) <= compressionTargetCharacters) {
+                //发生摘要，从本轮AgentLoop当中去除已经摘要的工具映射
+                pruneRecoveryReferences(workingMessages, referenceRegistry);
                 return workingMessages;
             }
         }
-
+        // 发生摘要，从本轮AgentLoop当中去除已经摘要的工具映射
+        pruneRecoveryReferences(workingMessages, referenceRegistry);
         return workingMessages;
+    }
+
+    // 当前上下文中没有出现的工具结果，不能继续让模型通过旧引用恢复。
+    private void pruneRecoveryReferences(List<LlmMessage> messages,
+                                         RecoveryReferenceRegistry referenceRegistry) {
+        Set<String> visibleToolCallIds = new HashSet<>();
+        for (LlmMessage message : messages) {
+            if ("tool".equals(message.getRole())
+                    && message.getContextContent() != null
+                    && message.getToolCallId() != null) {
+                visibleToolCallIds.add(message.getToolCallId());
+            }
+        }
+        //
+        int removedCount = referenceRegistry.retainToolCallIds(visibleToolCallIds);
+        if (removedCount > 0) {
+            log.info("已清理过期恢复引用，清理数量={}，当前可用引用={}",
+                    removedCount, referenceRegistry.references());
+        }
     }
 
     // 计算安全水位，即最大字符数乘以安全比例

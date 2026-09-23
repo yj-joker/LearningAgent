@@ -13,6 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -189,6 +190,27 @@ class ContextManagerTest {
         assertTrue(result.get(1).isSummary());
         assertTrue(result.contains(currentUserMessage));
         assertTrue(manager.estimateCharacters(result) <= 114);
+    }
+
+    @Test
+    @DisplayName("摘要移除旧工具后清理过期 recoveryRef")
+    void shouldRemoveRecoveryReferencesForToolsOutsideCurrentContext() {
+        ContextManager manager = new ContextManager(1_000, 100);
+        RecoveryReferenceRegistry registry = new RecoveryReferenceRegistry();
+        assertEquals("result_1", registry.register("call_old"));
+        assertEquals("result_2", registry.register("call_recent"));
+
+        List<LlmMessage> messages = List.of(
+                LlmMessage.system("系统规则"),
+                LlmMessage.summary("旧历史摘要"),
+                LlmMessage.toolResult("call_recent", "最近工具结果")
+                        .withContextContent("最近工具结果的上下文副本")
+        );
+
+        manager.prepareForLlmRequest(messages, registry);
+
+        assertEquals("call_recent", registry.resolve("result_2"));
+        assertNull(registry.resolve("result_1"));
     }
 
     // 仅用于生成与真实 ToolExecutionResult 相同结构的 JSON，避免测试依赖手写转义字符串。

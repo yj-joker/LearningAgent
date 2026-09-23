@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.context;
 
 import java.util.LinkedHashMap;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -9,6 +10,7 @@ import java.util.Map;
 public class RecoveryReferenceRegistry {
 
     private final Map<String, String> toolCallIdByReference = new LinkedHashMap<>();
+    private int nextReferenceNumber = 1;
 
     // 同一个 toolCallId 重复注册时复用原引用，避免一次结果出现多个别名。
     public String register(String toolCallId) {
@@ -20,7 +22,8 @@ public class RecoveryReferenceRegistry {
                 return entry.getKey();
             }
         }
-        String reference = "result_" + (toolCallIdByReference.size() + 1);
+        // 引用被清理后不能按当前 Map 大小重新编号，否则可能覆盖仍在使用的旧引用。
+        String reference = "result_" + nextReferenceNumber++;
         toolCallIdByReference.put(reference, toolCallId);
         return reference;
     }
@@ -29,14 +32,16 @@ public class RecoveryReferenceRegistry {
         return toolCallIdByReference.get(reference);
     }
 
-    // 只有一个候选时，模型传错引用也可以安全兜底到唯一结果。
-    public String onlyToolCallId() {
-        return toolCallIdByReference.size() == 1
-                ? toolCallIdByReference.values().iterator().next()
-                : null;
-    }
-
     public List<String> references() {
         return List.copyOf(toolCallIdByReference.keySet());
+    }
+
+    // 摘要或裁剪后只保留当前上下文仍能看到的工具调用，令旧 recoveryRef 立即失效。
+    public int retainToolCallIds(Collection<String> visibleToolCallIds) {
+        int before = toolCallIdByReference.size();
+        toolCallIdByReference.entrySet().removeIf(
+                entry -> !visibleToolCallIds.contains(entry.getValue())
+        );
+        return before - toolCallIdByReference.size();
     }
 }

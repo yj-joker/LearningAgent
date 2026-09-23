@@ -609,10 +609,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             String reference = referenceNode.asString();
             String toolCallId = registry.resolve(reference);
             if (toolCallId == null) {
-                // 只有一个结果时，即使模型复制错引用也不会导致恢复失败。
-                toolCallId = registry.onlyToolCallId();
-            }
-            if (toolCallId == null) {
                 String available = registry.references().isEmpty()
                         ? "当前没有可恢复结果"
                         : "可用引用：" + String.join("、", registry.references());
