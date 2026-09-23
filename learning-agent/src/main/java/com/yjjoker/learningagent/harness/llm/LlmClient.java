@@ -13,4 +13,10 @@ public interface LlmClient {
     // 模型的下一步既可能是 TextLlmResponse，也可能是 ToolCallLlmResponse，调用方必须区分处理。
     // 传入完整列表是因为工具执行后的第二次请求必须同时带上用户消息、工具请求和工具结果。
     LlmResponse generate(List<LlmMessage> messages);
+
+
+    // 摘要模型等其他用处模型可能不需要工具调用，因此默认实现保持旧测试客户端兼容。
+    default LlmResponse generateWithoutTools(List<LlmMessage> messages) {
+        return generate(messages);
+    }
 }

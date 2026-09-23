@@ -163,6 +163,34 @@ class ContextManagerTest {
         assertEquals(recentToolContent, compacted.get(2).getContent());
     }
 
+    @Test
+    @DisplayName("工具结果压缩后仍超限时摘要旧历史并保留当前问题")
+    void shouldSummarizeOldHistoryAfterToolCompactionStillExceedsLimit() {
+        ContextManager manager = new ContextManager(120, 20);
+        LlmMessage currentUserMessage = LlmMessage.user("当前问题");
+        List<LlmMessage> messages = List.of(
+                LlmMessage.system("系统规则"),
+                LlmMessage.user("旧问题".repeat(30)),
+                LlmMessage.assistant("旧回答".repeat(30)),
+                currentUserMessage
+        );
+
+        List<LlmMessage> result = manager.prepareForLlmRequest(
+                messages,
+                new RecoveryReferenceRegistry(),
+                oldMessages -> {
+                    assertEquals(2, oldMessages.size());
+                    return "用户之前讨论过 Java 学习。";
+                },
+                3
+        );
+
+        assertEquals("系统规则", result.get(0).getContent());
+        assertTrue(result.get(1).getContent().startsWith("历史上下文摘要："));
+        assertTrue(result.contains(currentUserMessage));
+        assertTrue(manager.estimateCharacters(result) <= 114);
+    }
+
     // 仅用于生成与真实 ToolExecutionResult 相同结构的 JSON，避免测试依赖手写转义字符串。
     private static class ToolResultForTest {
 

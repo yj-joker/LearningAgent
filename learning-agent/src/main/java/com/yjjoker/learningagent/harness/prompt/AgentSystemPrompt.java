@@ -20,6 +20,12 @@ public final class AgentSystemPrompt {
 
             不要向用户展示工具调用编号、JSON 结构、异常堆栈或系统内部实现。
             """;
+    public static final String SUMMARY_PROMPT = """
+            你是上下文压缩器，不是聊天助手。
+            请从给定历史中提取后续回答必须保留的事实：用户目标、已确认信息、工具得到的关键结论和未完成事项。
+            不要编造历史中没有的信息，不要执行工具，不要保留 toolCallId 或 recoveryRef 等协议编号。
+            只输出简洁的事实摘要，不要输出解释或新的用户回答。
+            """;
 
     // 这个类只保存固定提示词，不需要创建对象。
     private AgentSystemPrompt() {

@@ -4,6 +4,7 @@ import com.yjjoker.learningagent.config.HarnessContextProperties;
 import com.yjjoker.learningagent.exception.ContextWindowExceededException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
@@ -15,8 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 // ContextManager 只管理发送给模型的上下文副本，不删除工具原文或数据库历史。
-// 当前阶段统一压缩普通工具和恢复工具的结果，摘要和长期记忆留到后续阶段。
+// 工具结果压缩后仍超限时，可交给摘要器继续压缩旧历史。
 @Component
+@Slf4j
 public class ContextManager {
 
     private static final JsonMapper JSON_MAPPER = new JsonMapper();
@@ -74,7 +76,6 @@ public class ContextManager {
                 || maxToolResultCharacters <= 0
                 || maxRecoveryCallsPerRun <= 0
                 || maxRecoveryCharactersPerRun <= 0
-                || safeContextRatio <= 0
                 || safeContextRatio >= 1
                 || compressionTargetRatio <= 0
                 || compressionTargetRatio >= safeContextRatio) {
@@ -99,6 +100,63 @@ public class ContextManager {
         return fitToolResults(messages, referenceRegistry);
     }
 
+    // 工具结果压缩仍不够时，只摘要当前轮之前的历史，保留系统提示词和当前任务消息。
+    public List<LlmMessage> prepareForLlmRequest(List<LlmMessage> messages,
+                                                 RecoveryReferenceRegistry referenceRegistry,
+                                                 ContextSummarizer summarizer,
+                                                 int currentRunStartIndex) {
+        // 首先尝试压缩工具结果。
+        List<LlmMessage> compactedMessages = compactToolResults(messages, referenceRegistry);
+        // 计算安全水位
+        int safeContextCharacters = safeContextCharacters();
+        // 没有超过安全水位，直接返回
+        if (estimateCharacters(compactedMessages) <= safeContextCharacters) {
+            return compactedMessages;
+        }
+
+        log.info("上下文工具结果压缩后仍超限，准备摘要旧历史，压缩后字符数={}，安全上限={}，历史消息数={}",
+                estimateCharacters(compactedMessages), safeContextCharacters,
+                Math.max(0, Math.min(currentRunStartIndex, compactedMessages.size()) - 1));
+
+        // currentRunStartIndex 指向本轮用户消息，不能把当前任务一起摘要掉。
+        if (summarizer == null || currentRunStartIndex <= 1) {
+            throw contextWindowExceeded();
+        }
+
+        // 获取当前任务之前的已经压缩的消息，使用min防止越界
+        int historyEndIndex = Math.min(currentRunStartIndex, compactedMessages.size());
+        List<LlmMessage> historyMessages = new ArrayList<>(
+                compactedMessages.subList(1, historyEndIndex)
+        );
+        if (historyMessages.isEmpty()) {
+            throw contextWindowExceeded();
+        }
+
+        // 使用摘要器对历史消息进行摘要
+        String summary = summarizer.summarize(historyMessages);
+        List<LlmMessage> summarizedMessages = new ArrayList<>();
+        // 保留系统提示词和当前任务消息
+        summarizedMessages.add(compactedMessages.getFirst());
+        // 添加摘要消息
+        summarizedMessages.add(LlmMessage.assistant("历史上下文摘要：\n" + summary));
+        // 添加本轮AgentLoop产生的剩余消息
+        summarizedMessages.addAll(
+                compactedMessages.subList(historyEndIndex, compactedMessages.size())
+        );
+
+        // 摘要本身也必须重新估算，不能假设摘要一定比原文短。
+        if (estimateCharacters(summarizedMessages) > safeContextCharacters) {
+            log.warn("上下文摘要后仍超过安全上限，摘要后字符数={}，安全上限={}",
+                    estimateCharacters(summarizedMessages), safeContextCharacters);
+            throw contextWindowExceeded();
+        }
+        log.info("上下文摘要完成，摘要前字符数={}，摘要后字符数={}，摘要消息数={}",
+                estimateCharacters(compactedMessages),
+                estimateCharacters(summarizedMessages),
+                historyMessages.size());
+        return summarizedMessages;
+    }
+
     // 普通工具和恢复工具执行后都走这里，与请求前保持同一套压缩规则。
     public List<LlmMessage> compactAfterToolExecution(List<LlmMessage> messages) {
         return fitToolResults(messages, new RecoveryReferenceRegistry());
@@ -108,6 +166,20 @@ public class ContextManager {
     public List<LlmMessage> compactAfterToolExecution(List<LlmMessage> messages,
                                                        RecoveryReferenceRegistry referenceRegistry) {
         return fitToolResults(messages, referenceRegistry);
+    }
+
+    // 工具执行后也允许触发同一套摘要流程，保证两次上下文检查的行为一致。
+    public List<LlmMessage> compactAfterToolExecution(
+            List<LlmMessage> messages,
+            RecoveryReferenceRegistry referenceRegistry,
+            ContextSummarizer summarizer,
+            int currentRunStartIndex) {
+        return prepareForLlmRequest(
+                messages,
+                referenceRegistry,
+                summarizer,
+                currentRunStartIndex
+        );
     }
 
     // 用于测试和日志的近似大小；这里统计消息元数据和正文字符，不声称等于真实 token 数。
@@ -139,10 +211,20 @@ public class ContextManager {
     // 超过安全水位时从旧到新压缩工具结果；压缩后仍放不下才终止请求。
     private List<LlmMessage> fitToolResults(List<LlmMessage> messages,
                                             RecoveryReferenceRegistry referenceRegistry) {
+        List<LlmMessage> workingMessages = compactToolResults(messages, referenceRegistry);
+        if (estimateCharacters(workingMessages) > safeContextCharacters()) {
+            throw contextWindowExceededWithoutSummary();
+        }
+        return workingMessages;
+    }
+
+    // 只完成工具结果压缩并返回工作副本，让摘要阶段还能拿到压缩后的消息继续处理。
+    private List<LlmMessage> compactToolResults(List<LlmMessage> messages,
+                                                RecoveryReferenceRegistry referenceRegistry) {
         List<LlmMessage> workingMessages = new ArrayList<>(messages);
         refreshExistingRecoveryReferences(workingMessages, referenceRegistry);
         // 计算安全水位，即最大字符数乘以安全比例
-        int safeContextCharacters = (int) Math.floor(maxContextCharacters * safeContextRatio);
+        int safeContextCharacters = safeContextCharacters();
         // 只有超过安全水位才触发压缩；触发后尽量压到更低的目标水位。
         int compressionTargetCharacters = (int) Math.floor(maxContextCharacters * compressionTargetRatio);
         // 如果当前消息总和未超过安全水位，则无需压缩
@@ -157,20 +239,36 @@ public class ContextManager {
                 continue;
             }
             workingMessages.set(index, compactToolMessage(message, referenceRegistry));
+            if (workingMessages.get(index).getContextContent() != null) {
+                log.info("工具结果上下文副本已压缩，toolCallId={}，原文字符数={}，副本字符数={}",
+                        message.getToolCallId(),
+                        safeLength(message.getOriginalContent()),
+                        safeLength(workingMessages.get(index).getContextContent()));
+            }
             // 旧结果已经释放出足够空间时立即停止，尽量保留较新的工具结果全文。
             if (estimateCharacters(workingMessages) <= compressionTargetCharacters) {
                 return workingMessages;
             }
         }
 
-        if (estimateCharacters(workingMessages) > safeContextCharacters) {
-            // 本阶段不擅自删除用户/assistant 对话，也不调用模型做摘要，因此明确报告无法继续。
-            // TODO 后续接入摘要压缩：优先保留用户目标、最近工具结果和关键 assistant 结论，再重新估算。
-            throw new ContextWindowExceededException(
-                    "上下文超过安全水位，压缩工具结果后仍无法容纳；摘要压缩功能尚未启用"
-            );
-        }
         return workingMessages;
+    }
+
+    // 计算安全水位，即最大字符数乘以安全比例
+    private int safeContextCharacters() {
+        return (int) Math.floor(maxContextCharacters * safeContextRatio);
+    }
+
+    private ContextWindowExceededException contextWindowExceeded() {
+        return new ContextWindowExceededException(
+                "上下文超过安全水位，工具结果压缩和摘要后仍无法容纳"
+        );
+    }
+
+    private ContextWindowExceededException contextWindowExceededWithoutSummary() {
+        return new ContextWindowExceededException(
+                "上下文超过安全水位，压缩工具结果后仍无法容纳；摘要压缩功能尚未启用"
+        );
     }
 
     // 历史中已经被截断的工具结果也要重新分配本轮引用，不能沿用上一次请求的 result_1。

@@ -62,16 +62,23 @@ public class AliyunLlmClient implements LlmClient {
                 .build();
     }
 
+    // 带工具的调用，用于通用语言模型。
     @Override
     public LlmResponse generate(List<LlmMessage> messages) {
+        return generateInternal(messages, buildToolDefinitions());
+    }
+
+    // 不带工具的调用，不能让模型看到业务工具，否则摘要过程可能再次进入 Agent Loop。
+    @Override
+    public LlmResponse generateWithoutTools(List<LlmMessage> messages) {
+        return generateInternal(messages, List.of());
+    }
+
+    private LlmResponse generateInternal(List<LlmMessage> messages, List<ChatTool> tools) {
         // 每一次请求都需要上下文。第一次只有 user 消息，工具执行后的请求还会包含 assistant 和 tool 消息。
         if (messages == null || messages.isEmpty()) {
             throw new LearningAgentServiceException("发送给大语言模型的消息列表不能为空");
         }
-
-        // 把 Java 工具对象转换成 Chat Completions 接口能够识别的工具定义。
-        // 这里只读取工具元数据，不会在构造请求时调用 execute 方法。
-        List<ChatTool> tools = buildToolDefinitions();
 
         // 构造符合 Chat Completions 格式的请求体。
         // LlmMessage 是项目内部格式，需要先逐条转换为兼容接口要求的字段名称和嵌套结构。

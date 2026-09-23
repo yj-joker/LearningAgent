@@ -8,7 +8,7 @@ import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.hook.ToolArgumentValidationHook;
 import com.yjjoker.learningagent.harness.context.ContextManager;
-import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
+import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.tool.impl.GetOriginalToolResultTool;
 import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
@@ -383,7 +383,7 @@ class AgentHarnessTest {
     @DisplayName("模型可以通过工具按片段恢复被截断的原始结果")
     void shouldRestoreOriginalToolResultWhenModelRequestsIt() {
         String largeResult = "ORIGINAL_DETAIL:" + "原始资料".repeat(500);
-        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        InMemoryOriginalToolResultStoreImpl resultStore = new InMemoryOriginalToolResultStoreImpl();
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
                 new ToolCallLlmResponse(List.of(
                         new ToolCall("call_large", "find_all_users", "{}")
@@ -438,7 +438,7 @@ class AgentHarnessTest {
     @DisplayName("恢复工具超过单轮调用次数后返回失败")
     void shouldRejectRecoveryAfterCallLimit() throws Exception {
         String largeResult = "原始内容".repeat(500);
-        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        InMemoryOriginalToolResultStoreImpl resultStore = new InMemoryOriginalToolResultStoreImpl();
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
                 new ToolCallLlmResponse(List.of(new ToolCall("call_source", "source_tool", "{}"))),
                 recoveryResponse("call_restore_1", 0, 20),
@@ -471,7 +471,7 @@ class AgentHarnessTest {
     @DisplayName("恢复内容超过单轮累计字符数后返回失败")
     void shouldRejectRecoveryAfterCharacterLimit() throws Exception {
         String largeResult = "原始内容".repeat(500);
-        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        InMemoryOriginalToolResultStoreImpl resultStore = new InMemoryOriginalToolResultStoreImpl();
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
                 new ToolCallLlmResponse(List.of(new ToolCall("call_source", "source_tool", "{}"))),
                 recoveryResponse("call_restore_1", 0, 100),
@@ -503,7 +503,7 @@ class AgentHarnessTest {
     @DisplayName("恢复工具和普通工具使用同一套上下文压缩流程")
     void shouldCompactRecoveryWithSharedContextPolicy() throws Exception {
         String userMessage = "测试恢复安全水位";
-        InMemoryOriginalToolResultStore resultStore = new InMemoryOriginalToolResultStore();
+        InMemoryOriginalToolResultStoreImpl resultStore = new InMemoryOriginalToolResultStoreImpl();
         resultStore.save("call_source", "原始资料".repeat(100));
         GetOriginalToolResultTool recoveryTool = new GetOriginalToolResultTool(resultStore);
         ToolCall recoveryCall = new ToolCall(

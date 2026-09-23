@@ -1,10 +1,9 @@
 package com.yjjoker.learningagent.harness.tool.impl;
 
-import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
+import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,7 +17,7 @@ class GetOriginalToolResultToolTest {
     @Test
     @DisplayName("可以按调用 ID 和偏移量读取原始片段")
     void shouldReadOriginalResultByChunk() throws Exception {
-        InMemoryOriginalToolResultStore store = new InMemoryOriginalToolResultStore();
+        InMemoryOriginalToolResultStoreImpl store = new InMemoryOriginalToolResultStoreImpl();
         store.save("call_rag", "ABCDEFGHIJKL");
         GetOriginalToolResultTool tool = new GetOriginalToolResultTool(store);
 
@@ -35,7 +34,7 @@ class GetOriginalToolResultToolTest {
     @DisplayName("读取不存在的调用 ID 时返回不可重试错误")
     void shouldReportMissingOriginalResult() throws Exception {
         GetOriginalToolResultTool tool = new GetOriginalToolResultTool(
-                new InMemoryOriginalToolResultStore()
+                new InMemoryOriginalToolResultStoreImpl()
         );
 
         ToolExecutionResult result = tool.execute("{\"toolCallId\":\"missing\"}");

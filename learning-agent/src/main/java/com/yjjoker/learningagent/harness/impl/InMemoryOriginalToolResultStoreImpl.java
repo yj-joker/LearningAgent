@@ -1,5 +1,6 @@
-package com.yjjoker.learningagent.harness.context;
+package com.yjjoker.learningagent.harness.impl;
 
+import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -8,7 +9,7 @@ import java.util.Map;
 // 保存当前 Agent Loop 刚产生的完整工具结果。
 // 内存读取避免工具刚执行完就立刻访问数据库；数据库仍保存最终完整历史，负责跨请求恢复。
 @Component
-public class InMemoryOriginalToolResultStore implements OriginalToolResultStore {
+public class InMemoryOriginalToolResultStoreImpl implements OriginalToolResultStore {
 
     // 每个请求线程拥有独立 Map，因此不同用户不能通过这份临时缓存互相读取结果。
     // ConcurrentHashMap 让同一请求内未来出现并发工具调用时也能安全写入。

@@ -1,6 +1,7 @@
-package com.yjjoker.learningagent.harness.context;
+package com.yjjoker.learningagent.harness.impl;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
+import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.context.annotation.Primary;
@@ -10,10 +11,10 @@ import org.springframework.stereotype.Component;
 @Primary
 @Component
 @AllArgsConstructor
-public class DatabaseOriginalToolResultStore implements OriginalToolResultStore {
+public class DatabaseOriginalToolResultStoreImpl implements OriginalToolResultStore {
 
     // 注入内存工具结果存储类
-    private final InMemoryOriginalToolResultStore memoryStore;
+    private final InMemoryOriginalToolResultStoreImpl memoryStore;
 
     private final LearningSessionMessageRepository messageRepository;
 

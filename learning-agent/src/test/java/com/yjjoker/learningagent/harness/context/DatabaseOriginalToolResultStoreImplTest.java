@@ -1,6 +1,8 @@
 package com.yjjoker.learningagent.harness.context;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
+import com.yjjoker.learningagent.harness.impl.DatabaseOriginalToolResultStoreImpl;
+import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -16,7 +18,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("数据库原始工具结果存储测试")
-class DatabaseOriginalToolResultStoreTest {
+class DatabaseOriginalToolResultStoreImplTest {
 
     @Mock
     private LearningSessionMessageRepository messageRepository;
@@ -30,8 +32,8 @@ class DatabaseOriginalToolResultStoreTest {
         message.setContent("原始数据库结果");
         when(messageRepository.findToolResult(10L, "call_old")).thenReturn(message);
 
-        DatabaseOriginalToolResultStore store = new DatabaseOriginalToolResultStore(
-                new InMemoryOriginalToolResultStore(), messageRepository
+        DatabaseOriginalToolResultStoreImpl store = new DatabaseOriginalToolResultStoreImpl(
+                new InMemoryOriginalToolResultStoreImpl(), messageRepository
         );
         store.beginSession(10L);
 
@@ -43,8 +45,8 @@ class DatabaseOriginalToolResultStoreTest {
     @Test
     @DisplayName("没有会话上下文时不执行跨会话数据库读取")
     void shouldReturnMissingWhenSessionIsNotSet() {
-        DatabaseOriginalToolResultStore store = new DatabaseOriginalToolResultStore(
-                new InMemoryOriginalToolResultStore(), messageRepository
+        DatabaseOriginalToolResultStoreImpl store = new DatabaseOriginalToolResultStoreImpl(
+                new InMemoryOriginalToolResultStoreImpl(), messageRepository
         );
 
         assertEquals(-1, store.length("call_missing"));

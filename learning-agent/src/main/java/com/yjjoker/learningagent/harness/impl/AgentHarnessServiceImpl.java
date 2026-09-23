@@ -10,7 +10,7 @@ import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.context.ContextManager;
-import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
+import com.yjjoker.learningagent.harness.context.ContextSummarizer;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.context.RecoveryReferenceRegistry;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
@@ -70,6 +70,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 保存本轮工具的完整结果，供 get_original_tool_result 在同一轮中按片段读取。
     private final OriginalToolResultStore originalToolResultStore;
 
+    // 工具结果压缩后仍超限时，负责提炼旧历史；摘要阶段不执行业务工具。
+    private final ContextSummarizer contextSummarizer;
+
     // Spring 注入配置化的 ContextManager；其他依赖仍通过接口接入，便于测试替换。
     @org.springframework.beans.factory.annotation.Autowired
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
@@ -79,7 +82,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    ConversationMemoryService conversationMemoryService,
                                    LearningSessionRepository learningSessionRepository,
                                    ContextManager contextManager,
-                                   OriginalToolResultStore originalToolResultStore) {
+                                   OriginalToolResultStore originalToolResultStore,
+                                   ContextSummarizer contextSummarizer) {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
         this.hooks = List.copyOf(hooks);
@@ -87,6 +91,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.learningSessionRepository = learningSessionRepository;
         this.contextManager = contextManager;
         this.originalToolResultStore = originalToolResultStore;
+        this.contextSummarizer = contextSummarizer;
     }
 
     // 保留测试和旧调用方的五参数构造方法；生产环境使用上面的 Spring 构造方法读取配置。
@@ -97,7 +102,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    LearningSessionRepository learningSessionRepository) {
         this(llmClient, toolRegistry, hooks, conversationMemoryService,
                 learningSessionRepository, new ContextManager(40_000, 8_000),
-                new InMemoryOriginalToolResultStore());
+                new InMemoryOriginalToolResultStoreImpl(), null);
     }
 
     // 测试可以替换上下文限制，但不需要额外准备原文存储实现。
@@ -108,7 +113,21 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    LearningSessionRepository learningSessionRepository,
                                    ContextManager contextManager) {
         this(llmClient, toolRegistry, hooks, conversationMemoryService,
-                learningSessionRepository, contextManager, new InMemoryOriginalToolResultStore());
+                learningSessionRepository, contextManager,
+                new InMemoryOriginalToolResultStoreImpl(), null);
+    }
+
+    // 保留带原文存储的测试构造方法；未显式传入摘要器时沿用旧的压缩行为。
+    public AgentHarnessServiceImpl(LlmClient llmClient,
+                                   ToolRegistry toolRegistry,
+                                   List<AgentHook> hooks,
+                                   ConversationMemoryService conversationMemoryService,
+                                   LearningSessionRepository learningSessionRepository,
+                                   ContextManager contextManager,
+                                   OriginalToolResultStore originalToolResultStore) {
+        this(llmClient, toolRegistry, hooks, conversationMemoryService,
+                learningSessionRepository, contextManager,
+                originalToolResultStore, null);
     }
 
     @Override
@@ -168,11 +187,22 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         int completedRecoveryCalls = 0;
         int recoveredCharacters = 0;
         RecoveryReferenceRegistry recoveryReferences = new RecoveryReferenceRegistry();
+        // 一次 Agent Loop 最多摘要一次，避免把刚生成的摘要再次送去摘要。
+        boolean summaryUsed = false;
+        //Agent Loop核心
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
             // 得到模型的回复
-            // 请求前先检查上下文；超限时只压缩工具结果，用户和 assistant 消息保持不变。
-            messages = contextManager.prepareForLlmRequest(messages, recoveryReferences);
+            // 请求前先压缩工具结果；仍超限时只摘要旧历史，当前用户消息保持不变。
+            messages = prepareMessagesForLlmRequest(
+                    messages,
+                    recoveryReferences,
+                    currentRunStartIndex,
+                    !summaryUsed
+            );
+            // 摘要会减少历史消息数量；重新定位当前用户消息，避免后续子列表边界失效。
+            currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
+            summaryUsed = summaryUsed || containsContextSummary(messages);
             // 保存工具结果被压缩之后的上下文
             conversationMemoryService.updateToolContextCopies(
                     sessionId,
@@ -279,9 +309,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         RecoveryArgumentResolution resolution = resolveRecoveryArguments(
                                 toolCall.arguments(), recoveryReferences
                         );
-                        toolResult = resolution.isResolved()
-                                ? executeTool(tool, resolution.getArguments())
-                                : resolution.getFailure();
+                        toolResult = resolution.resolved()
+                                ? executeTool(tool, resolution.arguments())
+                                : resolution.failure();
                     } else {
                         // 普通工具仍然直接接收模型生成的参数。
                         toolResult = executeTool(tool, toolCall.arguments());
@@ -327,8 +357,15 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     messages.add(toolResultMessage);
                 }
 
-                // 普通工具和恢复工具都在这里执行 95% 安全水位检查，并且只压缩上下文副本。
-                messages = contextManager.compactAfterToolExecution(messages, recoveryReferences);
+                // 普通工具和恢复工具都在这里执行安全水位检查，必要时摘要旧历史。
+                messages = compactMessagesAfterToolExecution(
+                        messages,
+                        recoveryReferences,
+                        currentRunStartIndex,
+                        !summaryUsed
+                );
+                currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
+                summaryUsed = summaryUsed || containsContextSummary(messages);
                 conversationMemoryService.updateToolContextCopies(
                         sessionId,
                         messages.subList(1, currentRunStartIndex)
@@ -342,6 +379,73 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // LlmResponse 是 sealed 类型，正常情况下只有上面两种实现；这个检查用于防御空返回值。
             throw new IllegalStateException("LLM 客户端返回了无法识别的结果");
         }
+    }
+
+    // 摘要器存在于生产 Spring 容器时启用摘要；旧测试构造器仍只验证工具压缩流程。
+    private List<LlmMessage> prepareMessagesForLlmRequest(
+            List<LlmMessage> messages,
+            RecoveryReferenceRegistry recoveryReferences,
+            int currentRunStartIndex,
+        boolean allowSummary) {
+        if (contextSummarizer == null || !allowSummary) {
+            // 未配置摘要器或本轮已摘要时，保持原有的工具结果压缩流程。
+            return contextManager.prepareForLlmRequest(
+                    messages,
+                recoveryReferences
+            );
+        }
+        // 只有工具结果压缩后仍超限，ContextManager 才会真正调用摘要器。
+        return contextManager.prepareForLlmRequest(
+                messages,
+                recoveryReferences,
+                contextSummarizer,
+                currentRunStartIndex
+        );
+    }
+
+    // 工具执行后的检查与请求前检查共用摘要器；没有摘要器时保持原有压缩流程。
+    private List<LlmMessage> compactMessagesAfterToolExecution(
+            List<LlmMessage> messages,
+            RecoveryReferenceRegistry recoveryReferences,
+            int currentRunStartIndex,
+        boolean allowSummary) {
+        if (contextSummarizer == null || !allowSummary) {
+            // 未配置摘要器或本轮已摘要时，保持原有的工具结果压缩流程。
+            return contextManager.compactAfterToolExecution(
+                    messages,
+                recoveryReferences
+            );
+        }
+        // 工具执行后的上下文检查也必须使用同一个摘要器和当前轮边界。
+        return contextManager.compactAfterToolExecution(
+                messages,
+                recoveryReferences,
+                contextSummarizer,
+                currentRunStartIndex
+        );
+    }
+
+    // 使用对象身份定位本轮用户消息；摘要会替换历史对象，但不会替换当前用户消息对象。
+    private int findMessageIndex(List<LlmMessage> messages,
+                                 LlmMessage targetMessage) {
+        for (int index = 0; index < messages.size(); index++) {
+            if (messages.get(index) == targetMessage) {
+                return index;
+            }
+        }
+        throw new IllegalStateException("当前用户消息不在 Agent 上下文中");
+    }
+
+    // 摘要替换一条历史消息时列表长度可能不变，因此不能只靠 size 判断是否已摘要。
+    private boolean containsContextSummary(List<LlmMessage> messages) {
+        for (LlmMessage message : messages) {
+            if ("assistant".equals(message.getRole())
+                    && message.getContent() != null
+                    && message.getContent().startsWith("历史上下文摘要：")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // 会话必须存在、属于当前登录用户，并且仍处于进行中状态。
@@ -415,6 +519,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             if (result == null) {
                 throw new IllegalStateException("工具返回结果不能为空");
             }
+            // 记录工具是否成功和结果大小，便于观察执行链路；不输出工具正文，避免日志泄露业务数据。
+            log.info("工具执行完成，toolName={}，successful={}，contentCharacters={}",
+                    tool.name(), result.isSuccess(), safeLength(result.getContent()));
             return result;
         } catch (RuntimeException exception) {
             // 完整异常只写入服务端日志，避免把数据库或代码内部信息暴露给 LLM。
@@ -504,40 +611,16 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 保存解析后的参数或失败结果，避免主循环混入多层异常分支。
-    private static class RecoveryArgumentResolution {
-
-        private final boolean resolved;
-        private final String arguments;
-        private final ToolExecutionResult failure;
-
-        private RecoveryArgumentResolution(boolean resolved,
-                                           String arguments,
-                                           ToolExecutionResult failure) {
-            this.resolved = resolved;
-            this.arguments = arguments;
-            this.failure = failure;
-        }
+        private record RecoveryArgumentResolution(boolean resolved, String arguments, ToolExecutionResult failure) {
 
         private static RecoveryArgumentResolution success(String arguments) {
-            return new RecoveryArgumentResolution(true, arguments, null);
-        }
+                return new RecoveryArgumentResolution(true, arguments, null);
+            }
 
-        private static RecoveryArgumentResolution failure(ToolExecutionResult failure) {
-            return new RecoveryArgumentResolution(false, null, failure);
+            private static RecoveryArgumentResolution failure(ToolExecutionResult failure) {
+                return new RecoveryArgumentResolution(false, null, failure);
+            }
         }
-
-        private boolean isResolved() {
-            return resolved;
-        }
-
-        private String getArguments() {
-            return arguments;
-        }
-
-        private ToolExecutionResult getFailure() {
-            return failure;
-        }
-    }
 
     // 统一完成恢复预算检查所需的“结果对象 -> JSON -> tool 消息”转换。
     private LlmMessage createToolResultMessage(String toolCallId,
