@@ -34,6 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 // Harness 的业务实现类，负责安排模型调用流程，而不是负责拼接厂商 HTTP 请求。
 // 完整流程是“请求模型 -> 判断结果类型 -> 必要时执行工具 -> 回传工具结果 -> 再请求模型”。
@@ -193,7 +194,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
             // 得到模型的回复
-            // 请求前先压缩工具结果；仍超限时只摘要旧历史，当前用户消息保持不变。
+            //查找到本轮AgentLoop当中的历史摘要，一轮AgentLoop当中只会存在一个
+            String summaryBeforeRequest = findContextSummaryContent(messages);
             messages = prepareMessagesForLlmRequest(
                     messages,
                     recoveryReferences,
@@ -202,7 +204,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             );
             // 摘要会减少历史消息数量；重新定位当前用户消息，避免后续子列表边界失效。
             currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
-            summaryUsed = summaryUsed || containsContextSummary(messages);
+            //
+            boolean summaryGenerated = persistNewSummaryIfNeeded(
+                    sessionId, summaryBeforeRequest, messages
+            );
+            summaryUsed = summaryUsed || summaryGenerated;
             // 保存工具结果被压缩之后的上下文
             conversationMemoryService.updateToolContextCopies(
                     sessionId,
@@ -358,6 +364,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 }
 
                 // 普通工具和恢复工具都在这里执行安全水位检查，必要时摘要旧历史。
+                String summaryBeforeToolCheck = findContextSummaryContent(messages);
                 messages = compactMessagesAfterToolExecution(
                         messages,
                         recoveryReferences,
@@ -365,7 +372,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         !summaryUsed
                 );
                 currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
-                summaryUsed = summaryUsed || containsContextSummary(messages);
+                // 工具执行完毕后判断是否产生了新摘要
+                boolean summaryGeneratedAfterTools = persistNewSummaryIfNeeded(
+                        sessionId, summaryBeforeToolCheck, messages
+                );
+                // 目前只允许在一次AgentLoop当中生成一次摘要
+                summaryUsed = summaryUsed || summaryGeneratedAfterTools;
                 conversationMemoryService.updateToolContextCopies(
                         sessionId,
                         messages.subList(1, currentRunStartIndex)
@@ -436,16 +448,33 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         throw new IllegalStateException("当前用户消息不在 Agent 上下文中");
     }
 
-    // 摘要替换一条历史消息时列表长度可能不变，因此不能只靠 size 判断是否已摘要。
-    private boolean containsContextSummary(List<LlmMessage> messages) {
+    // 返回当前上下文中的摘要正文；摘要身份由消息字段明确标记。
+    private String findContextSummaryContent(List<LlmMessage> messages) {
         for (LlmMessage message : messages) {
-            if ("assistant".equals(message.getRole())
-                    && message.getContent() != null
-                    && message.getContent().startsWith("历史上下文摘要：")) {
-                return true;
+            if (message.isSummary()) {
+                return message.getContent();
             }
         }
-        return false;
+        return null;
+    }
+
+    // 只有摘要正文发生变化时才写数据库，避免每轮重复归档和插入相同摘要。
+    private boolean persistNewSummaryIfNeeded(Long sessionId,
+                                              String summaryBefore,
+                                              List<LlmMessage> messages) {
+        String summaryAfter = findContextSummaryContent(messages);
+        //对比检查摘要是否发生变化
+        if (summaryAfter == null || Objects.equals(summaryBefore, summaryAfter)) {
+            return false;
+        }
+        //发生变化，保存最新摘要
+        conversationMemoryService.replaceReplayableHistoryWithSummary(
+                sessionId,
+                LlmMessage.summary(summaryAfter)
+        );
+        log.info("检测到新的上下文摘要并完成持久化，sessionId={}，摘要字符数={}",
+                sessionId, summaryAfter.length());
+        return true;
     }
 
     // 会话必须存在、属于当前登录用户，并且仍处于进行中状态。

@@ -186,7 +186,7 @@ class ContextManagerTest {
         );
 
         assertEquals("系统规则", result.get(0).getContent());
-        assertTrue(result.get(1).getContent().startsWith("历史上下文摘要："));
+        assertTrue(result.get(1).isSummary());
         assertTrue(result.contains(currentUserMessage));
         assertTrue(manager.estimateCharacters(result) <= 114);
     }

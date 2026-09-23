@@ -31,6 +31,23 @@ public interface LearningSessionMessageRepository {
             "WHERE session_id = #{sessionId} AND context_replayable = TRUE ORDER BY id")
     List<LearningSessionMessage> findReplayableBySessionId(@Param("sessionId") Long sessionId);
 
+    // 有摘要时只加载摘要覆盖位置之后的新消息，避免旧原文再次进入模型上下文。
+    @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
+            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
+            "context_replayable AS contextReplayable, created_at AS createdAt " +
+            "FROM learning_session_messages " +
+            "WHERE session_id = #{sessionId} AND context_replayable = TRUE " +
+            "AND id > #{coveredUntilMessageId} ORDER BY id")
+    List<LearningSessionMessage> findReplayableAfterMessageId(
+            @Param("sessionId") Long sessionId,
+            @Param("coveredUntilMessageId") Long coveredUntilMessageId
+    );
+
+    // 摘要覆盖的是当前已经持久化的历史，当前请求产生的消息尚未保存，不会被错误纳入摘要范围。
+    @Select("SELECT COALESCE(MAX(id), 0) FROM learning_session_messages " +
+            "WHERE session_id = #{sessionId}")
+    Long findMaxMessageId(@Param("sessionId") Long sessionId);
+
     // 恢复工具结果时只允许查询当前会话中对应调用 ID 的 TOOL 消息。
     @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
@@ -50,4 +67,5 @@ public interface LearningSessionMessageRepository {
     int updateToolContextContent(@Param("sessionId") Long sessionId,
                                  @Param("toolCallId") String toolCallId,
                                  @Param("contextContent") String contextContent);
+
 }

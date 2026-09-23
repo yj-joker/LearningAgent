@@ -1,12 +1,15 @@
 package com.yjjoker.learningagent.harness.memory;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
+import com.yjjoker.learningagent.entity.LearningSessionSummary;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
+import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -19,6 +22,7 @@ import java.util.List;
 // 数据库会话记忆实现：负责 LlmMessage 与数据库消息实体之间的转换。
 @Service
 @AllArgsConstructor
+@Slf4j
 public class DatabaseConversationMemoryService implements ConversationMemoryService {
 
     // 工具调用是对象列表，需要转换成 JSON 才能写入 tool_calls 字段。
@@ -26,6 +30,7 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
 
     // Repository 只负责 SQL，本类负责消息格式和业务校验。
     private final LearningSessionMessageRepository messageRepository;
+    private final LearningSessionSummaryRepository summaryRepository;
 
 
     // 按数据库中的消息顺序加载历史，并转换成 LLM 能直接使用的消息。
@@ -33,11 +38,27 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     public List<LlmMessage> loadHistory(Long sessionId) {
         // 先阻止非法 ID 进入数据库查询。
         requireSessionId(sessionId);
-        return messageRepository.findReplayableBySessionId(sessionId)
+        LearningSessionSummary latestSummary = summaryRepository.findLatestBySessionId(sessionId);
+        List<LearningSessionMessage> storedMessages = latestSummary == null
+                ? messageRepository.findReplayableBySessionId(sessionId)
+                : messageRepository.findReplayableAfterMessageId(
+                        sessionId, latestSummary.getCoveredUntilMessageId()
+                );
+
+        List<LlmMessage> history = storedMessages
                 .stream()
                 // 数据库实体不能直接发给模型，需要逐条还原成 LlmMessage。
                 .map(this::toLlmMessage)
                 .toList();
+        if (latestSummary != null) {
+            history = prependSummary(latestSummary, history);
+        }
+        log.info("加载会话上下文，sessionId={}，使用摘要={}，摘要覆盖消息ID={}，消息数={}",
+                sessionId,
+                latestSummary != null,
+                latestSummary == null ? null : latestSummary.getCoveredUntilMessageId(),
+                history.size());
+        return history;
     }
 
     // 把 Agent Loop 中新产生的一条消息追加到指定会话。
@@ -101,6 +122,39 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
                     message.getContextContent()
             );
         }
+    }
+
+    // 摘要单独保存，原始消息不改写；覆盖点决定下一次 loadHistory 从哪里继续读取。
+    @Override
+    @Transactional
+    public void replaceReplayableHistoryWithSummary(Long sessionId, LlmMessage summaryMessage) {
+        requireSessionId(sessionId);
+        if (summaryMessage == null || !"assistant".equals(summaryMessage.getRole())
+                || summaryMessage.getContent() == null || summaryMessage.getContent().isBlank()) {
+            throw new LearningAgentServiceException("持久化的上下文摘要不能为空且必须是 assistant 消息");
+        }
+
+        Long coveredUntilMessageId = messageRepository.findMaxMessageId(sessionId);
+        LearningSessionSummary summary = new LearningSessionSummary();
+        summary.setSessionId(sessionId);
+        summary.setSummaryContent(summaryMessage.getContent());
+        summary.setCoveredUntilMessageId(coveredUntilMessageId == null ? 0L : coveredUntilMessageId);
+        summary.setCreatedAt(LocalDateTime.now());
+        if (summaryRepository.save(summary) != 1) {
+            throw new LearningAgentServiceException("保存上下文摘要失败，请稍后重试");
+        }
+        log.info("上下文摘要已持久化，sessionId={}，覆盖到消息ID={}，摘要字符数={}",
+                sessionId, summary.getCoveredUntilMessageId(), summaryMessage.getContent().length());
+    }
+
+    // 摘要作为第一条历史消息返回，后面的消息仍按原始数据库顺序追加。
+    private List<LlmMessage> prependSummary(LearningSessionSummary summary,
+                                             List<LlmMessage> messages) {
+        return java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(LlmMessage.summary(summary.getSummaryContent())),
+                        messages.stream()
+                )
+                .toList();
     }
 
     // 将 Harness 消息转换成数据库实体。

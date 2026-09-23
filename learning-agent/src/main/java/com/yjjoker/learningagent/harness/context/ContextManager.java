@@ -138,7 +138,7 @@ public class ContextManager {
         // 保留系统提示词和当前任务消息
         summarizedMessages.add(compactedMessages.getFirst());
         // 添加摘要消息
-        summarizedMessages.add(LlmMessage.assistant("历史上下文摘要：\n" + summary));
+        summarizedMessages.add(LlmMessage.summary(summary));
         // 添加本轮AgentLoop产生的剩余消息
         summarizedMessages.addAll(
                 compactedMessages.subList(historyEndIndex, compactedMessages.size())

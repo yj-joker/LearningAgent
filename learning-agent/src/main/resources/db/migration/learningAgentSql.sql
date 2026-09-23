@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话消息表';
 
+-- 学习会话摘要表；原始消息不删除，摘要只记录覆盖边界和当前压缩结果。
+CREATE TABLE IF NOT EXISTS learning_session_summaries (
+                                                        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '摘要主键',
+                                                        session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
+                                                        summary_content LONGTEXT NOT NULL COMMENT '发送给模型的历史摘要',
+                                                        covered_until_message_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '摘要覆盖到的消息主键',
+                                                        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '摘要生成时间',
+
+                                                        PRIMARY KEY (id),
+                                                        KEY idx_session_summaries_session_id_id (session_id, id)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '学习会话上下文摘要表';
+
 -- 章节表
 CREATE TABLE IF NOT EXISTS chapters (
                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT

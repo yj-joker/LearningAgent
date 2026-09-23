@@ -18,4 +18,7 @@ public interface ConversationMemoryService {
 
     // 将历史工具消息本轮产生的压缩副本回写数据库，避免后续请求重复加载完整原文再压缩。
     void updateToolContextCopies(Long sessionId, List<LlmMessage> messages);
+
+    // 保存摘要覆盖点；旧消息保留在原表，由 loadHistory 按覆盖点排除。
+    void replaceReplayableHistoryWithSummary(Long sessionId, LlmMessage summaryMessage);
 }

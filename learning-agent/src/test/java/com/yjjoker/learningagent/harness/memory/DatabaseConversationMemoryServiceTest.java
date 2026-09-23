@@ -1,11 +1,13 @@
 package com.yjjoker.learningagent.harness.memory;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
+import com.yjjoker.learningagent.entity.LearningSessionSummary;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
+import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,10 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.InOrder;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("数据库会话记忆服务测试")
@@ -30,6 +34,9 @@ class DatabaseConversationMemoryServiceTest {
 
     @Mock
     private LearningSessionMessageRepository messageRepository;
+
+    @Mock
+    private LearningSessionSummaryRepository summaryRepository;
 
     @Test
     @DisplayName("工具调用消息会转换成 JSON 后保存")
@@ -101,6 +108,40 @@ class DatabaseConversationMemoryServiceTest {
     }
 
     @Test
+    @DisplayName("存在摘要时只加载摘要和覆盖点之后的新消息")
+    void shouldLoadLatestSummaryAndRecentMessages() {
+        LearningSessionSummary summary = new LearningSessionSummary();
+        summary.setSummaryContent("用户正在学习事务");
+        summary.setCoveredUntilMessageId(20L);
+        when(summaryRepository.findLatestBySessionId(10L)).thenReturn(summary);
+
+        LearningSessionMessage recentMessage = storedMessage(
+                LearningSessionMessageRoleEnum.USER,
+                "继续讲锁",
+                null,
+                null
+        );
+        when(messageRepository.findReplayableAfterMessageId(10L, 20L))
+                .thenReturn(List.of(recentMessage));
+
+        List<LlmMessage> history = service().loadHistory(10L);
+
+        assertEquals(2, history.size());
+        assertEquals("用户正在学习事务", history.getFirst().getContent());
+        assertTrue(history.getFirst().isSummary());
+        assertEquals("继续讲锁", history.get(1).getContent());
+        verify(messageRepository).findReplayableAfterMessageId(10L, 20L);
+        verify(messageRepository, never()).findReplayableBySessionId(10L);
+    }
+
+    @Test
+    @DisplayName("普通 assistant 消息不会因为正文前缀而被标记为摘要")
+    void shouldDistinguishSummaryByMessageType() {
+        assertFalse(LlmMessage.assistant("历史上下文摘要：这只是普通回答").isSummary());
+        assertTrue(LlmMessage.summary("这是真正的摘要").isSummary());
+    }
+
+    @Test
     @DisplayName("工具原文和上下文副本会分别保存")
     void shouldPersistOriginalAndContextToolContentSeparately() {
         when(messageRepository.save(any())).thenReturn(1);
@@ -156,6 +197,24 @@ class DatabaseConversationMemoryServiceTest {
     }
 
     @Test
+    @DisplayName("摘要会归档旧历史并保存为新的可重放消息")
+    void shouldArchiveHistoryAndPersistSummary() {
+        when(messageRepository.findMaxMessageId(10L)).thenReturn(42L);
+        when(summaryRepository.save(any())).thenReturn(1);
+
+        service().replaceReplayableHistoryWithSummary(
+                10L,
+                LlmMessage.summary("用户正在学习事务")
+        );
+
+        ArgumentCaptor<LearningSessionSummary> captor =
+                ArgumentCaptor.forClass(LearningSessionSummary.class);
+        verify(summaryRepository).save(captor.capture());
+        assertEquals(10L, captor.getValue().getSessionId());
+        assertEquals(42L, captor.getValue().getCoveredUntilMessageId());
+    }
+
+    @Test
     @DisplayName("System Prompt 不允许保存到会话历史")
     void shouldRejectSystemMessage() {
         DatabaseConversationMemoryService service = service();
@@ -170,7 +229,7 @@ class DatabaseConversationMemoryServiceTest {
     }
 
     private DatabaseConversationMemoryService service() {
-        return new DatabaseConversationMemoryService(messageRepository);
+        return new DatabaseConversationMemoryService(messageRepository, summaryRepository);
     }
 
     private LearningSessionMessage storedMessage(LearningSessionMessageRoleEnum role,

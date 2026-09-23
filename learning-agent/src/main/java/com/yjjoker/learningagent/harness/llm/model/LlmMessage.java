@@ -28,12 +28,16 @@ public class LlmMessage {
     // true 表示后续请求可以从数据库重新加载；false 表示只在当前 Agent Loop 使用。
     private final boolean contextReplayable;
 
+    // 只有上下文摘要消息为 true，避免通过正文前缀猜测消息类型。
+    private final boolean summary;
+
     private LlmMessage(String role,
                        String originalContent,
                        String contextContent,
                        List<ToolCall> toolCalls,
                        String toolCallId,
-                       boolean contextReplayable) {
+                       boolean contextReplayable,
+                       boolean summary) {
         this.role = role;
         this.originalContent = originalContent;
         this.contextContent = contextContent;
@@ -42,21 +46,27 @@ public class LlmMessage {
         this.toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
         this.toolCallId = toolCallId;
         this.contextReplayable = contextReplayable;
+        this.summary = summary;
     }
 
     // system 消息保存智能体的统一规则，必须放在用户消息之前发送给模型。
     public static LlmMessage system(String content) {
-        return new LlmMessage("system", content, null, List.of(), null, true);
+        return new LlmMessage("system", content, null, List.of(), null, true, false);
     }
 
     // 创建用户消息。role=user 告诉模型这段文字来自最终用户。
     public static LlmMessage user(String content) {
-        return new LlmMessage("user", content, null, List.of(), null, true);
+        return new LlmMessage("user", content, null, List.of(), null, true, false);
     }
 
     // 创建模型的普通文本回答，与包含工具调用的 assistant 消息区分开。
     public static LlmMessage assistant(String content) {
-        return new LlmMessage("assistant", content, null, List.of(), null, true);
+        return new LlmMessage("assistant", content, null, List.of(), null, true, false);
+    }
+
+    // 创建历史摘要消息；摘要身份由字段标记，不依赖正文格式。
+    public static LlmMessage summary(String content) {
+        return new LlmMessage("assistant", content, null, List.of(), null, true, true);
     }
 
     // 保存模型刚才返回的工具调用要求。
@@ -67,7 +77,7 @@ public class LlmMessage {
 
     // 恢复工具调用使用 contextReplayable=false：当前循环可见，但后续加载历史时会被过滤。
     public static LlmMessage assistantToolCalls(List<ToolCall> toolCalls, boolean contextReplayable) {
-        return new LlmMessage("assistant", null, null, toolCalls, null, contextReplayable);
+        return new LlmMessage("assistant", null, null, toolCalls, null, contextReplayable, false);
     }
 
     // 保存 Java 工具的执行结果。toolCallId 必须与模型原始工具调用中的 id 完全一致。
@@ -78,7 +88,7 @@ public class LlmMessage {
 
     // contextReplayable 与对应的 assistant 工具请求保持一致，避免未来上下文只剩半组工具消息。
     public static LlmMessage toolResult(String toolCallId, String content, boolean contextReplayable) {
-        return new LlmMessage("tool", content, null, List.of(), toolCallId, contextReplayable);
+        return new LlmMessage("tool", content, null, List.of(), toolCallId, contextReplayable, false);
     }
 
     // 从数据库恢复工具消息时，同时带回完整原文和已经持久化的上下文副本。
@@ -92,7 +102,8 @@ public class LlmMessage {
                 contextContent,
                 List.of(),
                 toolCallId,
-                contextReplayable
+                contextReplayable,
+                false
         );
     }
 
@@ -112,7 +123,8 @@ public class LlmMessage {
                 compactedContextContent,
                 toolCalls,
                 toolCallId,
-                contextReplayable
+                contextReplayable,
+                summary
         );
     }
 
