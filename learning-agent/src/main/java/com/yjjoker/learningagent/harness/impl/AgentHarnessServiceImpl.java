@@ -12,6 +12,7 @@ import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.InMemoryOriginalToolResultStore;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
+import com.yjjoker.learningagent.harness.context.RecoveryReferenceRegistry;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -166,11 +167,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         // 恢复预算只在当前 Agent Loop 内统计，下一次用户请求会重新计算。
         int completedRecoveryCalls = 0;
         int recoveredCharacters = 0;
+        RecoveryReferenceRegistry recoveryReferences = new RecoveryReferenceRegistry();
         while (true) {
             // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
             // 得到模型的回复
             // 请求前先检查上下文；超限时只压缩工具结果，用户和 assistant 消息保持不变。
-            messages = contextManager.prepareForLlmRequest(messages);
+            messages = contextManager.prepareForLlmRequest(messages, recoveryReferences);
             // 保存工具结果被压缩之后的上下文
             conversationMemoryService.updateToolContextCopies(
                     sessionId,
@@ -271,8 +273,19 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     //全部before Hook执行完才记录为已执行；如果未来安全 Hook 拒绝，这里不会运行。
                     context.recordToolExecution(toolCall.name());
 
-                    // 执行工具并获取结果，异常会在这里终止请求。
-                    ToolExecutionResult toolResult = executeTool(tool, toolCall.arguments());
+                    // 恢复工具先把模型的短引用解析成真实 toolCallId，再执行统一工具逻辑。
+                    ToolExecutionResult toolResult;
+                    if (recoveryTool) {
+                        RecoveryArgumentResolution resolution = resolveRecoveryArguments(
+                                toolCall.arguments(), recoveryReferences
+                        );
+                        toolResult = resolution.isResolved()
+                                ? executeTool(tool, resolution.getArguments())
+                                : resolution.getFailure();
+                    } else {
+                        // 普通工具仍然直接接收模型生成的参数。
+                        toolResult = executeTool(tool, toolCall.arguments());
+                    }
 
                     if (recoveryTool && toolResult.isSuccess()) {
                         //计算本次恢复工具恢复的文本数
@@ -315,7 +328,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 }
 
                 // 普通工具和恢复工具都在这里执行 95% 安全水位检查，并且只压缩上下文副本。
-                messages = contextManager.compactAfterToolExecution(messages);
+                messages = contextManager.compactAfterToolExecution(messages, recoveryReferences);
                 conversationMemoryService.updateToolContextCopies(
                         sessionId,
                         messages.subList(1, currentRunStartIndex)
@@ -423,6 +436,107 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 恢复预算失败不是系统异常，模型收到稳定错误码后应停止继续恢复。
     private ToolExecutionResult recoveryFailure(String errorCode, String message) {
         return ToolExecutionResult.failure(errorCode, message, false);
+    }
+
+    // recoveryRef 是模型可读的短引用，真实 toolCallId 只在 Harness 内部解析。
+    private RecoveryArgumentResolution resolveRecoveryArguments(String arguments,
+                                                                RecoveryReferenceRegistry registry) {
+        try {
+            tools.jackson.databind.JsonNode node = JSON_MAPPER.readTree(arguments);
+            if (node == null || !node.isObject()) {
+                return RecoveryArgumentResolution.failure(
+                        ToolExecutionResult.failure(
+                                "INVALID_RECOVERY_REFERENCE",
+                                "恢复工具参数必须是 JSON 对象",
+                                true
+                        )
+                );
+            }
+
+            tools.jackson.databind.node.ObjectNode objectNode =
+                    (tools.jackson.databind.node.ObjectNode) node;
+            tools.jackson.databind.JsonNode referenceNode = objectNode.get("recoveryRef");
+            if (referenceNode == null) {
+                // 保留旧格式兼容能力，便于已有测试和历史调用平滑过渡。
+                return RecoveryArgumentResolution.success(arguments);
+            }
+            if (!referenceNode.isTextual() || referenceNode.asString().isBlank()) {
+                return RecoveryArgumentResolution.failure(
+                        ToolExecutionResult.failure(
+                                "INVALID_RECOVERY_REFERENCE",
+                                "recoveryRef 必须是非空字符串",
+                                true
+                        )
+                );
+            }
+
+            String reference = referenceNode.asString();
+            String toolCallId = registry.resolve(reference);
+            if (toolCallId == null) {
+                // 只有一个结果时，即使模型复制错引用也不会导致恢复失败。
+                toolCallId = registry.onlyToolCallId();
+            }
+            if (toolCallId == null) {
+                String available = registry.references().isEmpty()
+                        ? "当前没有可恢复结果"
+                        : "可用引用：" + String.join("、", registry.references());
+                return RecoveryArgumentResolution.failure(
+                        ToolExecutionResult.failure(
+                                "INVALID_RECOVERY_REFERENCE",
+                                "找不到恢复引用 " + reference + "。" + available,
+                                !registry.references().isEmpty()
+                        )
+                );
+            }
+
+            objectNode.remove("recoveryRef");
+            objectNode.put("toolCallId", toolCallId);
+            return RecoveryArgumentResolution.success(JSON_MAPPER.writeValueAsString(objectNode));
+        } catch (JacksonException exception) {
+            return RecoveryArgumentResolution.failure(
+                    ToolExecutionResult.failure(
+                            "INVALID_ARGUMENT",
+                            "恢复工具参数不是有效的 JSON",
+                            true
+                    )
+            );
+        }
+    }
+
+    // 保存解析后的参数或失败结果，避免主循环混入多层异常分支。
+    private static class RecoveryArgumentResolution {
+
+        private final boolean resolved;
+        private final String arguments;
+        private final ToolExecutionResult failure;
+
+        private RecoveryArgumentResolution(boolean resolved,
+                                           String arguments,
+                                           ToolExecutionResult failure) {
+            this.resolved = resolved;
+            this.arguments = arguments;
+            this.failure = failure;
+        }
+
+        private static RecoveryArgumentResolution success(String arguments) {
+            return new RecoveryArgumentResolution(true, arguments, null);
+        }
+
+        private static RecoveryArgumentResolution failure(ToolExecutionResult failure) {
+            return new RecoveryArgumentResolution(false, null, failure);
+        }
+
+        private boolean isResolved() {
+            return resolved;
+        }
+
+        private String getArguments() {
+            return arguments;
+        }
+
+        private ToolExecutionResult getFailure() {
+            return failure;
+        }
     }
 
     // 统一完成恢复预算检查所需的“结果对象 -> JSON -> tool 消息”转换。

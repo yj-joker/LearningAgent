@@ -15,6 +15,7 @@ public final class AgentSystemPrompt {
             retryable=false 表示当前操作无法继续，应向用户说明无法完成。
 
             如果工具结果出现“工具结果已截断”，且回答确实需要原始细节，使用 get_original_tool_result 按片段读取；
+            必须原样复制截断结果中的 recoveryRef（例如 result_1），不要生成或猜测 toolCallId；
             不要一次请求过大的 limit，也不要为了没有用处的细节反复读取。
 
             不要向用户展示工具调用编号、JSON 结构、异常堆栈或系统内部实现。

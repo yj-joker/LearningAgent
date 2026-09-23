@@ -37,7 +37,7 @@ public class GetOriginalToolResultTool implements Tool {
 
     @Override
     public String description() {
-        return "当工具结果显示已截断且需要更多细节时，按 toolCallId 和 offset 读取原始结果片段。每次最多读取 300 个字符。";
+        return "当工具结果显示已截断且需要更多细节时，使用截断结果中的 recoveryRef 读取原始结果片段。每次最多读取 300 个字符。";
     }
 
     @Override
@@ -52,9 +52,13 @@ public class GetOriginalToolResultTool implements Tool {
         return Map.of(
                 "type", "object",
                 "properties", Map.of(
+                        "recoveryRef", Map.of(
+                                "type", "string",
+                                "description", "截断结果中的恢复引用，例如 result_1；必须原样复制"
+                        ),
                         "toolCallId", Map.of(
                                 "type", "string",
-                                "description", "被截断工具结果中的 toolCallId"
+                                "description", "旧格式兼容字段，正常情况下不要填写"
                         ),
                         "offset", Map.of(
                                 "type", "integer",
@@ -65,7 +69,7 @@ public class GetOriginalToolResultTool implements Tool {
                                 "description", "本次读取字符数，最大 300，省略时默认 200"
                         )
                 ),
-                "required", List.of("toolCallId"),
+                "required", List.of("recoveryRef"),
                 "additionalProperties", false
         );
     }

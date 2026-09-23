@@ -392,7 +392,7 @@ class AgentHarnessTest {
                         new ToolCall(
                                 "call_restore",
                                 "get_original_tool_result",
-                                "{\"toolCallId\":\"call_large\",\"offset\":0,\"limit\":100}"
+                                "{\"recoveryRef\":\"result_1\",\"offset\":0,\"limit\":100}"
                         )
                 )),
                 new TextLlmResponse("我已读取原始资料片段。")
@@ -419,7 +419,8 @@ class AgentHarnessTest {
         // 第二次请求仍然只看到压缩后的第一次工具结果。
         assertTrue(fakeLlmClient.receivedMessages.get(1).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
-                        && message.getContent().contains("工具结果已截断")));
+                        && message.getContent().contains("工具结果已截断")
+                        && message.getContent().contains("恢复引用=result_1")));
         // 第三次请求包含恢复工具返回的原始片段。
         assertTrue(fakeLlmClient.receivedMessages.get(2).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())

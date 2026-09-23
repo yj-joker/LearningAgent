@@ -20,7 +20,7 @@ import java.util.List;
 public class ContextManager {
 
     private static final JsonMapper JSON_MAPPER = new JsonMapper();
-    private static final String TRUNCATED_MARKER = "\n[工具结果已截断，原始结果未删除]";
+    private static final String TRUNCATED_MARKER_PREFIX = "\n[工具结果已截断，原始结果未删除；恢复引用=";
 
     private final int maxContextCharacters;
     private final int maxToolResultCharacters;
@@ -90,12 +90,24 @@ public class ContextManager {
 
     // 每次请求模型前都使用安全水位检查，避免普通工具结果占满模型窗口。
     public List<LlmMessage> prepareForLlmRequest(List<LlmMessage> messages) {
-        return fitToolResults(messages);
+        return fitToolResults(messages, new RecoveryReferenceRegistry());
+    }
+
+    // Agent Loop 使用此重载，让请求前和工具执行后的压缩共享同一张引用表。
+    public List<LlmMessage> prepareForLlmRequest(List<LlmMessage> messages,
+                                                 RecoveryReferenceRegistry referenceRegistry) {
+        return fitToolResults(messages, referenceRegistry);
     }
 
     // 普通工具和恢复工具执行后都走这里，与请求前保持同一套压缩规则。
     public List<LlmMessage> compactAfterToolExecution(List<LlmMessage> messages) {
-        return fitToolResults(messages);
+        return fitToolResults(messages, new RecoveryReferenceRegistry());
+    }
+
+    // 工具结果刚产生后继续使用同一张表，模型下一轮才能使用刚看到的 result_1。
+    public List<LlmMessage> compactAfterToolExecution(List<LlmMessage> messages,
+                                                       RecoveryReferenceRegistry referenceRegistry) {
+        return fitToolResults(messages, referenceRegistry);
     }
 
     // 用于测试和日志的近似大小；这里统计消息元数据和正文字符，不声称等于真实 token 数。
@@ -125,8 +137,10 @@ public class ContextManager {
     }
 
     // 超过安全水位时从旧到新压缩工具结果；压缩后仍放不下才终止请求。
-    private List<LlmMessage> fitToolResults(List<LlmMessage> messages) {
+    private List<LlmMessage> fitToolResults(List<LlmMessage> messages,
+                                            RecoveryReferenceRegistry referenceRegistry) {
         List<LlmMessage> workingMessages = new ArrayList<>(messages);
+        refreshExistingRecoveryReferences(workingMessages, referenceRegistry);
         // 计算安全水位，即最大字符数乘以安全比例
         int safeContextCharacters = (int) Math.floor(maxContextCharacters * safeContextRatio);
         // 只有超过安全水位才触发压缩；触发后尽量压到更低的目标水位。
@@ -142,7 +156,7 @@ public class ContextManager {
             if (!"tool".equals(message.getRole())) {
                 continue;
             }
-            workingMessages.set(index, compactToolMessage(message));
+            workingMessages.set(index, compactToolMessage(message, referenceRegistry));
             // 旧结果已经释放出足够空间时立即停止，尽量保留较新的工具结果全文。
             if (estimateCharacters(workingMessages) <= compressionTargetCharacters) {
                 return workingMessages;
@@ -159,27 +173,52 @@ public class ContextManager {
         return workingMessages;
     }
 
+    // 历史中已经被截断的工具结果也要重新分配本轮引用，不能沿用上一次请求的 result_1。
+    private void refreshExistingRecoveryReferences(List<LlmMessage> messages,
+                                                   RecoveryReferenceRegistry referenceRegistry) {
+        for (int index = 0; index < messages.size(); index++) {
+            LlmMessage message = messages.get(index);
+            if (!"tool".equals(message.getRole())
+                    || message.getContextContent() == null
+                    || message.getToolCallId() == null) {
+                continue;
+            }
+            String reference = referenceRegistry.register(message.getToolCallId());
+            messages.set(index, message.withContextContent(
+                    addRecoveryReference(message.getContextContent(), reference)
+            ));
+        }
+    }
+
     // 压缩单个工具结果消息，如果超出限制则截断结构化结果，否则返回原消息。
-    private LlmMessage compactToolMessage(LlmMessage message) {
+    private LlmMessage compactToolMessage(LlmMessage message,
+                                          RecoveryReferenceRegistry referenceRegistry) {
+        String reference = referenceRegistry.register(message.getToolCallId());
+        if (message.getContextContent() != null) {
+            return message.withContextContent(
+                    addRecoveryReference(message.getContextContent(), reference)
+            );
+        }
         String content = message.getContent();
         if (content == null || content.length() <= maxToolResultCharacters) {
             return message;
         }
         // 尝试压缩结构化结果
-        String compactedContent = compactStructuredResult(content);
+        String compactedContent = compactStructuredResult(content, reference);
         // 新消息只替换上下文副本，完整原文和是否允许重放的标记保持不变。
         return message.withContextContent(compactedContent);
     }
 
     // 尝试压缩结构化工具结果，如 JSON 格式，只保留 content 字段。
-    private String compactStructuredResult(String content) {
+    private String compactStructuredResult(String content, String reference) {
         try {
             JsonNode node = JSON_MAPPER.readTree(content);
             if (node != null && node.isObject()) {
                 ObjectNode objectNode = (ObjectNode) node;
                 JsonNode resultContent = objectNode.get("content");
                 if (resultContent != null && resultContent.isTextual()) {
-                    objectNode.put("content", truncate(resultContent.asString(), maxToolResultCharacters));
+                    objectNode.put("content", truncate(resultContent.asString(), maxToolResultCharacters, reference));
+                    objectNode.put("recoveryRef", reference);
                     return JSON_MAPPER.writeValueAsString(objectNode);
                 }
             }
@@ -188,19 +227,46 @@ public class ContextManager {
         }
 
         // 旧工具或异常工具返回的普通文本没有 content 字段，只能安全截断原文。
-        return truncate(content, maxToolResultCharacters);
+        return truncate(content, maxToolResultCharacters, reference);
     }
 
     // 截断文本，保留指定长度，末尾添加省略标记。
-    private String truncate(String text, int maxCharacters) {
+    private String truncate(String text, int maxCharacters, String reference) {
         if (text.length() <= maxCharacters) {
             return text;
         }
+        String marker = TRUNCATED_MARKER_PREFIX + reference + "]";
         // 如果设置的最大tool结果长度小于等于省略标记长度，则按照设置的长度进行截断
-        if (maxCharacters <= TRUNCATED_MARKER.length()) {
+        if (maxCharacters <= marker.length()) {
             return text.substring(0, maxCharacters);
         }
-        return text.substring(0, maxCharacters - TRUNCATED_MARKER.length()) + TRUNCATED_MARKER;
+        return text.substring(0, maxCharacters - marker.length()) + marker;
+    }
+
+    // 为已经截断的历史副本替换当前请求的短引用；结构化结果写入 recoveryRef 字段。
+    private String addRecoveryReference(String content, String reference) {
+        try {
+            JsonNode node = JSON_MAPPER.readTree(content);
+            if (node != null && node.isObject()) {
+                ObjectNode objectNode = (ObjectNode) node;
+                objectNode.put("recoveryRef", reference);
+                return JSON_MAPPER.writeValueAsString(objectNode);
+            }
+        } catch (JacksonException ignored) {
+            // 普通文本结果使用下面的标记方式，不影响恢复流程。
+        }
+
+        String markerStart = "\n[工具结果已截断";
+        int start = content.indexOf(markerStart);
+        if (start >= 0) {
+            int end = content.indexOf(']', start);
+            if (end >= 0) {
+                return content.substring(0, start)
+                        + TRUNCATED_MARKER_PREFIX + reference + "]"
+                        + content.substring(end + 1);
+            }
+        }
+        return content + TRUNCATED_MARKER_PREFIX + reference + "]";
     }
 
     // 安全获取字符串长度，避免空指针异常

@@ -42,7 +42,7 @@ class ContextManagerTest {
     @Test
     @DisplayName("超限时只截断结构化工具结果中的 content")
     void shouldCompactOnlyStructuredToolContent() throws Exception {
-        ContextManager manager = new ContextManager(260, 80);
+        ContextManager manager = new ContextManager(360, 80);
         String largeToolResult = JSON_MAPPER.writeValueAsString(
                 new ToolResultForTest(true, "资料".repeat(100), null, null, false)
         );
@@ -63,6 +63,7 @@ class ContextManagerTest {
         assertTrue(compactedJson.get("success").asBoolean());
         assertFalse(compactedJson.get("retryable").asBoolean());
         assertTrue(compactedJson.get("content").asString().contains("工具结果已截断"));
+        assertEquals("result_1", compactedJson.get("recoveryRef").asString());
         assertTrue(compactedJson.get("content").asString().length() <= 80);
 
         // 用户问题和 assistant 工具请求不能因为压缩而丢失。
