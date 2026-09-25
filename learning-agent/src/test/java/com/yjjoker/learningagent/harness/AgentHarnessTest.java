@@ -10,7 +10,6 @@ import com.yjjoker.learningagent.harness.hook.ToolArgumentValidationHook;
 import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.tool.impl.GetOriginalToolResultTool;
-import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -351,7 +350,7 @@ class AgentHarnessTest {
         );
         RecordingTool tool = new RecordingTool("find_all_users", largeResult);
         FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 new ToolRegistry(List.of(tool)),
                 List.of(),
@@ -403,7 +402,7 @@ class AgentHarnessTest {
                 new GetOriginalToolResultTool(resultStore)
         ));
         FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 registry,
                 List.of(),
@@ -450,7 +449,7 @@ class AgentHarnessTest {
                 new RecordingTool("source_tool", largeResult),
                 new GetOriginalToolResultTool(resultStore)
         ));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 registry,
                 List.of(),
@@ -482,7 +481,7 @@ class AgentHarnessTest {
                 new RecordingTool("source_tool", largeResult),
                 new GetOriginalToolResultTool(resultStore)
         ));
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 registry,
                 List.of(),
@@ -532,7 +531,7 @@ class AgentHarnessTest {
                 new ToolCallLlmResponse(List.of(recoveryCall)),
                 new TextLlmResponse("安全水位测试结束")
         );
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 new ToolRegistry(List.of(recoveryTool)),
                 List.of(),
@@ -575,7 +574,7 @@ class AgentHarnessTest {
                 new TextLlmResponse("不应该返回")
         );
         FakeConversationMemoryService memoryService = new FakeConversationMemoryService();
-        AgentHarnessService harness = new AgentHarnessServiceImpl(
+        AgentHarnessService harness = AgentHarnessTestFactory.create(
                 fakeLlmClient,
                 new ToolRegistry(List.of()),
                 List.of(),
@@ -603,7 +602,7 @@ class AgentHarnessTest {
                                                ToolRegistry toolRegistry,
                                                List<AgentHook> hooks,
                                                FakeConversationMemoryService memoryService) {
-        return new AgentHarnessServiceImpl(
+        return AgentHarnessTestFactory.create(
                 llmClient,
                 toolRegistry,
                 hooks,

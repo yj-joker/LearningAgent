@@ -77,6 +77,54 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话表';
 
+-- 用户长期记忆；只保存结构化事实，不替代完整会话消息。
+CREATE TABLE IF NOT EXISTS user_memories (
+                                             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '长期记忆主键',
+                                             user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户 ID，逻辑外键',
+                                             memory_key VARCHAR(128) NOT NULL COMMENT '稳定记忆名称，例如 learning_language',
+                                             memory_topic VARCHAR(128) NOT NULL COMMENT '记忆主题，例如 learning_preference',
+                                             memory_summary VARCHAR(1000) NOT NULL COMMENT '轻量索引摘要',
+                                             memory_content LONGTEXT NOT NULL COMMENT '需要时召回的完整记忆正文',
+                                             status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '记忆状态：ACTIVE、DELETED',
+                                             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                                             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                 ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+                                             PRIMARY KEY (id),
+                                             KEY idx_user_memories_user_status_topic (user_id, status, memory_topic),
+                                             UNIQUE KEY uk_user_memories_user_key (user_id, memory_key),
+
+                                             CONSTRAINT chk_user_memories_status
+                                                 CHECK (status IN ('ACTIVE', 'DELETED'))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '用户长期记忆表';
+
+-- 会话级结构化记忆；只服务于当前学习会话，不保存完整聊天记录。
+CREATE TABLE IF NOT EXISTS session_memories (
+                                                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '会话记忆主键',
+                                                session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
+                                                memory_key VARCHAR(128) NOT NULL COMMENT '稳定记忆名称，例如 current_goal',
+                                                memory_topic VARCHAR(128) NOT NULL COMMENT '记忆主题，例如 task_state',
+                                                memory_summary VARCHAR(1000) NOT NULL COMMENT '轻量索引摘要',
+                                                memory_content LONGTEXT NOT NULL COMMENT '需要时召回的完整记忆正文',
+                                                status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '记忆状态：ACTIVE、DELETED',
+                                                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                                                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                    ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+
+                                                PRIMARY KEY (id),
+                                                KEY idx_session_memories_session_status_topic (session_id, status, memory_topic),
+                                                UNIQUE KEY uk_session_memories_session_key (session_id, memory_key),
+
+                                                CONSTRAINT chk_session_memories_status
+                                                    CHECK (status IN ('ACTIVE', 'DELETED'))
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '学习会话结构化记忆表';
+
 -- 学习会话消息表
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',
@@ -150,31 +198,22 @@ CREATE TABLE IF NOT EXISTS chapters (
 CREATE TABLE IF NOT EXISTS knowledge_points (
                                                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
                                                     COMMENT '知识点主键',
-
                                                 course_id BIGINT UNSIGNED NOT NULL
                                                     COMMENT '课程 ID，逻辑外键；有意的反范式冗余，可由 chapter_id 推导，便于按课程直接过滤，也便于第 5 周 RAG 权限过滤时避免 JOIN',
-
                                                 chapter_id BIGINT UNSIGNED NOT NULL
                                                     COMMENT '章节 ID，逻辑外键，关联 chapters.id',
-
                                                 name VARCHAR(255) NOT NULL
                                                     COMMENT '知识点名称',
-
                                                 sort_order INT UNSIGNED NOT NULL
                                                     COMMENT '知识点展示顺序，同章节内必须唯一，初始值*1000，重排阀值为100',
-
                                                 description TEXT
                                                     COMMENT '知识点描述',
-
                                                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                     COMMENT '创建时间',
-
                                                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                     ON UPDATE CURRENT_TIMESTAMP
                                                     COMMENT '更新时间',
-
                                                 PRIMARY KEY (id),
-
     -- 同一章节内，知识点名称不能重复
                                                 UNIQUE KEY uk_knowledge_points_chapter_name (chapter_id, name),
                                                 UNIQUE KEY uk_knowledge_points_course_sort_order (chapter_id, sort_order),
@@ -189,39 +228,29 @@ ALTER TABLE knowledge_points ADD COLUMN created_by BIGINT COMMENT '创建者用�
 CREATE TABLE IF NOT EXISTS knowledge_point_relations (
                                                          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
                                                              COMMENT '知识点关系主键',
-
                                                          from_point_id BIGINT UNSIGNED NOT NULL
                                                              COMMENT '起始知识点 ID，逻辑外键，关联 knowledge_points.id',
-
                                                          to_point_id BIGINT UNSIGNED NOT NULL
                                                              COMMENT '目标知识点 ID，逻辑外键，关联 knowledge_points.id',
-
                                                          relation_type VARCHAR(20) NOT NULL
                                                              COMMENT '关系类型：PREREQUISITE-前置关系，CONFUSABLE-易混淆关系',
-
                                                          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                              COMMENT '创建时间',
-
                                                          PRIMARY KEY (id),
-
     -- 防止完全相同的关系重复出现
                                                          UNIQUE KEY uk_kpr_relation (
                                                                                      from_point_id,
                                                                                      to_point_id,
                                                                                      relation_type
                                                              ),
-
     -- 为反向查询单独建立索引
                                                          KEY idx_kpr_to_point_id (to_point_id),
-
     -- 关系类型只能是指定值
                                                          CONSTRAINT chk_kpr_relation_type
                                                              CHECK (relation_type IN ('PREREQUISITE', 'CONFUSABLE')),
-
     -- 防止知识点指向自己
                                                          CONSTRAINT chk_kpr_no_self_loop
                                                              CHECK (from_point_id <> to_point_id),
-
     -- CONFUSABLE 是无向关系，统一要求较小 ID 放在 from_point_id
                                                          CONSTRAINT chk_kpr_confusable_order
                                                              CHECK (

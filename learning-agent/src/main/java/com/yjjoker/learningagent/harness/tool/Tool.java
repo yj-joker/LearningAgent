@@ -20,6 +20,11 @@ public interface Tool {
         return false;
     }
 
+    // 当前请求专属工具的参数依赖本轮上下文，调用记录不能被未来请求直接重放。
+    default boolean isContextScopedTool() {
+        return false;
+    }
+
     // 返回工具输入参数的 JSON Schema，也就是“参数应该长什么样”的结构说明。
     // 模型不会读取 Java 方法签名，因此必须通过这个结构知道参数名称、类型以及哪些参数必填。
     // 当前默认结构表示工具不接收任何参数，find_all_users 正好可以直接使用这个默认实现。

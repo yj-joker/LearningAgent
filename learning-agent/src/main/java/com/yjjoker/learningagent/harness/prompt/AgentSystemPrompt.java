@@ -18,6 +18,10 @@ public final class AgentSystemPrompt {
             必须原样复制截断结果中的 recoveryRef（例如 result_1），不要生成或猜测 toolCallId；
             不要一次请求过大的 limit，也不要为了没有用处的细节反复读取。
 
+            结构化记忆索引中的 memoryRef（例如 memory_1）只在当前 AgentLoop 有效，必须原样复制给 recall_memory；
+            不要自行生成 memoryRef、memoryId 或用户/会话 ID。记忆摘要已经足够回答时可以直接使用；
+            只有摘要缺少必要细节时才调用 recall_memory，不要根据摘要猜测正文中没有的信息。
+
             不要向用户展示工具调用编号、JSON 结构、异常堆栈或系统内部实现。
             """;
     public static final String SUMMARY_PROMPT = """

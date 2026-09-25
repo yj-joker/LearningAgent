@@ -2,7 +2,6 @@ package com.yjjoker.learningagent.harness;
 
 import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.harness.context.ContextManager;
-import com.yjjoker.learningagent.harness.impl.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
@@ -42,7 +41,7 @@ class AgentHarnessSessionDeletionTest {
         when(repository.findSessionById(10L)).thenReturn(Optional.of(session));
         when(repository.updateSession(any())).thenReturn(1);
 
-        AgentHarnessService service = new AgentHarnessServiceImpl(
+        AgentHarnessService service = AgentHarnessTestFactory.create(
                 mock(LlmClient.class),
                 new ToolRegistry(List.of()),
                 List.of(),
