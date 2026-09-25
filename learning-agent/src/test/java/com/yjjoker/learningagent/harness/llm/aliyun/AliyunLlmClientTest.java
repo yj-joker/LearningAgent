@@ -4,11 +4,13 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.yjjoker.learningagent.client.AliyunLlmClient;
 import com.yjjoker.learningagent.config.AliyunLlmProperties;
+import com.yjjoker.learningagent.config.HarnessLlmRetryProperties;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
+import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
@@ -22,6 +24,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -230,6 +233,109 @@ class AliyunLlmClientTest {
         assertTrue(!requestException.getError().isRetryable());
     }
 
+    @Test
+    @DisplayName("读取模型响应超时时，应转换为可重试的超时错误")
+    void shouldClassifyReadTimeoutAsRetryableError() throws IOException {
+        // 服务端故意等待超过客户端读取超时时间，模拟模型迟迟不返回响应。
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            try {
+                // 先发送响应头和半截 JSON，让客户端进入“读取响应体”的阶段。
+                byte[] partialResponse = "{\"choices\":[".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, partialResponse.length + 100);
+                exchange.getResponseBody().write(partialResponse);
+                exchange.getResponseBody().flush();
+                // 长时间不继续发送剩余内容，触发客户端 read timeout。
+                Thread.sleep(1_500);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+
+        AliyunLlmClient client = createClient(new ToolRegistry(List.of()), 1);
+
+        HarnessException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> client.generate(List.of(LlmMessage.user("测试读取超时")))
+        );
+
+        assertEquals("LLM_TIMEOUT", exception.getErrorCode());
+        assertTrue(exception.getError().isRetryable());
+    }
+
+    @Test
+    @DisplayName("连接没有监听服务时，应转换为可重试的请求失败")
+    void shouldClassifyConnectionRefusedAsRetryableError() throws IOException {
+        // 先申请一个真实端口，再停止监听，确保后续请求得到连接拒绝而不是 DNS 错误。
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        int unusedPort = server.getAddress().getPort();
+        server.start();
+        server.stop(0);
+
+        AliyunLlmClient client = createClientAt(
+                "http://127.0.0.1:" + unusedPort + "/chat/completions",
+                new ToolRegistry(List.of()),
+                1
+        );
+
+        HarnessException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> client.generate(List.of(LlmMessage.user("测试连接拒绝")))
+        );
+
+        assertEquals("LLM_REQUEST_FAILED", exception.getErrorCode());
+        assertTrue(exception.getError().isRetryable());
+    }
+
+    @Test
+    @DisplayName("真实 HTTP 请求第一次失败后，重试器应再次请求并成功返回")
+    void shouldRetryRealHttpFailureAndThenReturnSuccess() throws IOException {
+        AtomicInteger requestCount = new AtomicInteger();
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            if (requestCount.incrementAndGet() == 1) {
+                // 第一次返回服务端错误，验证 AliyunLlmClient 的错误分类和重试器的衔接。
+                exchange.sendResponseHeaders(503, -1);
+                exchange.close();
+                return;
+            }
+            sendResponse(exchange, """
+                    {
+                      "choices": [
+                        {
+                          "message": {
+                            "role": "assistant",
+                            "content": "重试成功"
+                          }
+                        }
+                      ]
+                    }
+                    """);
+        });
+        server.start();
+
+        AliyunLlmClient client = createClient(new ToolRegistry(List.of()));
+        HarnessLlmRetryProperties properties = new HarnessLlmRetryProperties();
+        properties.setMaxAttempts(2);
+        // 测试只验证真实请求次数，不等待退避时间。
+        properties.setInitialBackoffMillis(0);
+        properties.setMaxBackoffMillis(0);
+
+        LlmResponse response = new LlmRetryExecutor(properties).generate(
+                client,
+                List.of(LlmMessage.user("测试真实重试"))
+        );
+
+        TextLlmResponse textResponse = assertInstanceOf(TextLlmResponse.class, response);
+        assertEquals("重试成功", textResponse.content());
+        assertEquals(2, requestCount.get());
+    }
+
     // 启动本地模拟接口并记录客户端实际发送的鉴权请求头和 JSON 请求体。
     private void startServer(
             String responseJson,
@@ -255,14 +361,31 @@ class AliyunLlmClientTest {
         server.start();
     }
 
-    // 构造客户端时把 baseUrl 指向本地模拟服务器，其他配置保持与真实运行时相同的使用方式。
+    // 构造客户端时把 baseUrl 指向本地模拟服务器，其他配置保持真实运行时的使用方式。
     private AliyunLlmClient createClient(ToolRegistry toolRegistry) {
+        return createClient(toolRegistry, 2);
+    }
+
+    // 允许超时测试单独缩短读取等待时间，避免测试等待过久。
+    private AliyunLlmClient createClient(ToolRegistry toolRegistry, int readTimeoutSeconds) {
+        return createClientAt(
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/chat/completions",
+                toolRegistry,
+                readTimeoutSeconds
+        );
+    }
+
+    // 允许连接拒绝测试使用已经停止监听的端口。
+    private AliyunLlmClient createClientAt(
+            String baseUrl,
+            ToolRegistry toolRegistry,
+            int readTimeoutSeconds) {
         AliyunLlmProperties properties = new AliyunLlmProperties();
         properties.setApiKey("test-api-key");
         properties.setModel("qwen-plus");
-        properties.setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/chat/completions");
+        properties.setBaseUrl(baseUrl);
         properties.setConnectTimeoutSeconds(2);
-        properties.setReadTimeoutSeconds(2);
+        properties.setReadTimeoutSeconds(readTimeoutSeconds);
         return new AliyunLlmClient(properties, toolRegistry);
     }
 

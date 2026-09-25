@@ -18,6 +18,7 @@ import com.yjjoker.learningagent.harness.error.HarnessErrorCode;
 import com.yjjoker.learningagent.harness.error.HarnessErrorSource;
 import com.yjjoker.learningagent.harness.error.HarnessException;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
+import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
@@ -78,7 +79,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 工具结果压缩后仍超限时，负责提炼旧历史；摘要阶段不执行业务工具。
     private final ContextSummarizer contextSummarizer;
 
-    // Spring 注入配置化的 ContextManager；其他依赖仍通过接口接入，便于测试替换。
+    // 统一执行模型请求；它根据 HarnessError.retryable 决定是否重试。
+    private final LlmRetryExecutor llmRetryExecutor;
+
+    // Spring 注入生产依赖；重试器也从这里进入主 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
     public AgentHarnessServiceImpl(LlmClient llmClient,
@@ -88,7 +92,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    LearningSessionRepository learningSessionRepository,
                                    ContextManager contextManager,
                                    OriginalToolResultStore originalToolResultStore,
-                                   ContextSummarizer contextSummarizer) {
+                                   ContextSummarizer contextSummarizer,
+                                   LlmRetryExecutor llmRetryExecutor) {
         this.llmClient = llmClient;
         this.toolRegistry = toolRegistry;
         this.hooks = List.copyOf(hooks);
@@ -97,6 +102,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.contextManager = contextManager;
         this.originalToolResultStore = originalToolResultStore;
         this.contextSummarizer = contextSummarizer;
+        this.llmRetryExecutor = llmRetryExecutor;
     }
 
     // 保留测试和旧调用方的五参数构造方法；生产环境使用上面的 Spring 构造方法读取配置。
@@ -107,7 +113,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    LearningSessionRepository learningSessionRepository) {
         this(llmClient, toolRegistry, hooks, conversationMemoryService,
                 learningSessionRepository, new ContextManager(40_000, 8_000),
-                new InMemoryOriginalToolResultStoreImpl(), null);
+                new InMemoryOriginalToolResultStoreImpl(), null, new LlmRetryExecutor());
     }
 
     // 测试可以替换上下文限制，但不需要额外准备原文存储实现。
@@ -119,7 +125,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    ContextManager contextManager) {
         this(llmClient, toolRegistry, hooks, conversationMemoryService,
                 learningSessionRepository, contextManager,
-                new InMemoryOriginalToolResultStoreImpl(), null);
+                new InMemoryOriginalToolResultStoreImpl(), null, new LlmRetryExecutor());
     }
 
     // 保留带原文存储的测试构造方法；未显式传入摘要器时沿用旧的压缩行为。
@@ -132,7 +138,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    OriginalToolResultStore originalToolResultStore) {
         this(llmClient, toolRegistry, hooks, conversationMemoryService,
                 learningSessionRepository, contextManager,
-                originalToolResultStore, null);
+                originalToolResultStore, null, new LlmRetryExecutor());
     }
 
     @Override
@@ -247,7 +253,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     sessionId,
                     messages.subList(1, currentRunStartIndex)
             );
-            LlmResponse response = llmClient.generate(messages);
+            // 网络暂时失败由重试器处理；成功后这里仍只接收一个正常 LlmResponse。
+            LlmResponse response = llmRetryExecutor.generate(llmClient, messages);
 
             //是最终结果？
             if (response instanceof TextLlmResponse textResponse) {

@@ -137,6 +137,16 @@ public class AliyunLlmClient implements LlmClient {
                     exception
             );
         } catch (RestClientException exception) {
+            // 响应体解析阶段的读取超时可能被 Spring 包装成普通 RestClientException。
+            // 仍需沿着 cause 链识别超时，不能因为包装类型变化而丢失错误语义。
+            if (containsTimeout(exception)) {
+                throw llmError(
+                        HarnessErrorCode.LLM_TIMEOUT,
+                        "调用大语言模型超时，请稍后重试",
+                        true,
+                        exception
+                );
+            }
             // 其他客户端异常仍归入通用请求失败，保留后续重试的可能性。
             throw llmError(
                     HarnessErrorCode.LLM_REQUEST_FAILED,

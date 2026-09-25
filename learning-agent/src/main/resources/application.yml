@@ -78,6 +78,14 @@ aliyun:
     read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
 
 harness:
+  llm:
+    retry:
+      # 最大尝试次数包含第一次请求；3 表示首次请求失败后最多再重试两次。
+      max-attempts: ${HARNESS_LLM_MAX_ATTEMPTS:3}
+      # 第一次重试前等待 200 毫秒，后续使用指数退避。
+      initial-backoff-millis: ${HARNESS_LLM_INITIAL_BACKOFF_MILLIS:200}
+      # 单次退避等待最多 2 秒，避免限流时线程长时间占用。
+      max-backoff-millis: ${HARNESS_LLM_MAX_BACKOFF_MILLIS:2000}
   context:
     # 当前测试阶段用字符数近似上下文大小，不等于模型厂商统计的真实 token 数。
     max-context-characters: ${HARNESS_MAX_CONTEXT_CHARACTERS:2000}

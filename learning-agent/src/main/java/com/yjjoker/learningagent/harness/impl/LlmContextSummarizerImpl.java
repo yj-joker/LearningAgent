@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.impl;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.context.ContextSummarizer;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
+import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
@@ -22,7 +23,10 @@ import java.util.StringJoiner;
 @Slf4j
 public class LlmContextSummarizerImpl implements ContextSummarizer {
 
+    // 摘要仍使用项目统一的 LlmClient，不直接依赖阿里云实现。
     private final LlmClient llmClient;
+    // 摘要失败时复用与主循环相同的重试规则。
+    private final LlmRetryExecutor llmRetryExecutor;
 
     @Override
     public String summarize(List<LlmMessage> messages) {
@@ -33,8 +37,8 @@ public class LlmContextSummarizerImpl implements ContextSummarizer {
 
         // 将旧消息整理成一条输入文本，避免摘要请求中出现不完整的工具协议消息。
         LlmMessage history = LlmMessage.user(formatMessages(messages));
-        // 摘要请求使用无工具接口，防止摘要模型重新进入工具调用循环。
-        LlmResponse response = llmClient.generateWithoutTools(
+        // 摘要请求使用无工具接口，并通过重试器处理临时网络或服务端失败。
+        LlmResponse response = llmRetryExecutor.generateWithoutTools(llmClient,
                 List.of(LlmMessage.system(AgentSystemPrompt.SUMMARY_PROMPT), history)
         );
 
@@ -56,15 +60,17 @@ public class LlmContextSummarizerImpl implements ContextSummarizer {
         throw new LearningAgentServiceException("上下文摘要请求没有返回文本");
     }
 
-    // 将消息列表格式化为单个字符串
+    // 将消息列表格式化为摘要模型能理解的一段文本。
     private String formatMessages(List<LlmMessage> messages) {
         StringJoiner joiner = new StringJoiner("\n\n");
         for (LlmMessage message : messages) {
+            // 历史列表中的空元素没有业务意义，直接跳过。
             if (message == null) {
                 continue;
             }
             StringBuilder block = new StringBuilder();
             block.append("角色：").append(message.getRole()).append("\n");
+            // 保留工具名称和参数结构，但不额外发起工具执行。
             if (!message.getToolCalls().isEmpty()) {
                 block.append("工具请求：");
                 for (ToolCall toolCall : message.getToolCalls()) {
@@ -75,6 +81,7 @@ public class LlmContextSummarizerImpl implements ContextSummarizer {
                 }
                 block.append("\n");
             }
+            // 工具结果只标记其角色，正文仍由下面的 content 统一追加。
             if (message.getToolCallId() != null) {
                 block.append("工具结果：\n");
             }
