@@ -13,6 +13,10 @@ import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.ContextSummarizer;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.context.RecoveryReferenceRegistry;
+import com.yjjoker.learningagent.harness.error.HarnessError;
+import com.yjjoker.learningagent.harness.error.HarnessErrorCode;
+import com.yjjoker.learningagent.harness.error.HarnessErrorSource;
+import com.yjjoker.learningagent.harness.error.HarnessException;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -158,6 +162,35 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 原文只在当前 Agent Loop 内提供恢复能力，任务结束后立即释放内存缓存。
             originalToolResultStore.clear();
         }
+    }
+
+    // 假删除只修改会话状态，保留会话消息和摘要，便于审计和后续恢复能力扩展。
+    @Override
+    public void deleteSession(Long sessionId) {
+        if (sessionId == null || sessionId <= 0) {
+            throw new LearningSessionStatusException("学习会话 ID 不合法");
+        }
+        if (BaseContext.isCurrentIdNull()) {
+            throw new LearningSessionStatusException("当前用户未登录");
+        }
+
+        LearningSession session = learningSessionRepository.findSessionById(sessionId)
+                .orElseThrow(() -> new NotFountException("学习会话不存在"));
+        if (!session.getUserId().equals(BaseContext.getCurrentId())) {
+            throw new LearningSessionStatusException("无权删除该学习会话");
+        }
+        if (session.getStatus() == LearningSessionStatusEnum.CANCELED) {
+            throw new LearningSessionStatusException("学习会话已经删除");
+        }
+
+        LearningSessionStatusEnum originalStatus = session.getStatus();
+        session.setStatus(LearningSessionStatusEnum.CANCELED);
+        session.setUpdatedAt(java.time.LocalDateTime.now());
+        if (learningSessionRepository.updateSession(session) != 1) {
+            throw new LearningAgentServiceException("删除学习会话失败，请稍后重试");
+        }
+        log.info("学习会话假删除成功，sessionId={}，userId={}，原状态={}",
+                sessionId, BaseContext.getCurrentId(), originalStatus);
     }
 
     // Controller 之外的代码也可能调用 Harness，因此服务层仍需校验用户输入。
@@ -506,6 +539,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             }
             // 如果某个 Hook 拒绝了工具调用，立即返回结果，不再执行后续 Hook。
             if (!result.isAllowed()) {
+                log.warn("工具前置 Hook 拒绝调用，runId={}，toolName={}，errorCode={}，retryable={}",
+                        context.getRunId(),
+                        toolCall.name(),
+                        result.getErrorCode(),
+                        result.isRetryable());
                 return result;
             }
         }
@@ -551,11 +589,23 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 记录工具是否成功和结果大小，便于观察执行链路；不输出工具正文，避免日志泄露业务数据。
             log.info("工具执行完成，toolName={}，successful={}，contentCharacters={}",
                     tool.name(), result.isSuccess(), safeLength(result.getContent()));
+            if (!result.isSuccess()) {
+                log.warn("工具返回业务失败，toolName={}，errorCode={}，retryable={}",
+                        tool.name(), result.getErrorCode(), result.isRetryable());
+            }
             return result;
         } catch (RuntimeException exception) {
             // 完整异常只写入服务端日志，避免把数据库或代码内部信息暴露给 LLM。
             log.error("工具执行发生系统异常，toolName={}", tool.name(), exception);
-            throw new LearningAgentServiceException("工具执行失败，请稍后重试", exception);
+            throw new HarnessException(
+                    HarnessError.of(
+                            HarnessErrorCode.TOOL_EXECUTION_FAILED,
+                            "工具执行失败，请稍后重试",
+                            true,
+                            HarnessErrorSource.TOOL
+                    ),
+                    exception
+            );
         }
     }
 

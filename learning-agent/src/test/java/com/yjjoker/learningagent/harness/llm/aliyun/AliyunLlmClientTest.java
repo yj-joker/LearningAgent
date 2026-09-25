@@ -12,6 +12,7 @@ import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
+import com.yjjoker.learningagent.harness.error.HarnessException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -179,6 +180,56 @@ class AliyunLlmClientTest {
         assertTrue(requestBody.get().contains("张三, 李四"));
     }
 
+    @Test
+    @DisplayName("429 和 5xx 错误转换为可重试的统一 LLM 错误")
+    void shouldClassifyRetryableHttpErrors() throws IOException {
+        startErrorServer(429);
+
+        AliyunLlmClient rateLimitClient = createClient(new ToolRegistry(List.of()));
+        HarnessException rateLimitException = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> rateLimitClient.generate(List.of(LlmMessage.user("测试限流")))
+        );
+        assertEquals("LLM_RATE_LIMITED", rateLimitException.getErrorCode());
+        assertTrue(rateLimitException.getError().isRetryable());
+
+        server.stop(0);
+        startErrorServer(503);
+        AliyunLlmClient serverErrorClient = createClient(new ToolRegistry(List.of()));
+
+        HarnessException serverException = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> serverErrorClient.generate(List.of(LlmMessage.user("测试服务端异常")))
+        );
+        assertEquals("LLM_SERVER_ERROR", serverException.getErrorCode());
+        assertTrue(serverException.getError().isRetryable());
+    }
+
+    @Test
+    @DisplayName("鉴权和请求参数错误不可自动重试")
+    void shouldClassifyNonRetryableHttpErrors() throws IOException {
+        startErrorServer(401);
+
+        AliyunLlmClient authClient = createClient(new ToolRegistry(List.of()));
+        HarnessException authException = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> authClient.generate(List.of(LlmMessage.user("测试鉴权错误")))
+        );
+        assertEquals("LLM_AUTHENTICATION_FAILED", authException.getErrorCode());
+        assertTrue(!authException.getError().isRetryable());
+
+        server.stop(0);
+        startErrorServer(400);
+        AliyunLlmClient requestErrorClient = createClient(new ToolRegistry(List.of()));
+
+        HarnessException requestException = org.junit.jupiter.api.Assertions.assertThrows(
+                HarnessException.class,
+                () -> requestErrorClient.generate(List.of(LlmMessage.user("测试请求错误")))
+        );
+        assertEquals("LLM_INVALID_REQUEST", requestException.getErrorCode());
+        assertTrue(!requestException.getError().isRetryable());
+    }
+
     // 启动本地模拟接口并记录客户端实际发送的鉴权请求头和 JSON 请求体。
     private void startServer(
             String responseJson,
@@ -189,6 +240,17 @@ class AliyunLlmClientTest {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             sendResponse(exchange, responseJson);
+        });
+        server.start();
+    }
+
+    // 启动只返回指定状态码的本地服务，验证客户端不会依赖异常文本判断错误类型。
+    private void startErrorServer(int statusCode) throws IOException {
+        server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            exchange.sendResponseHeaders(statusCode, -1);
+            exchange.close();
         });
         server.start();
     }

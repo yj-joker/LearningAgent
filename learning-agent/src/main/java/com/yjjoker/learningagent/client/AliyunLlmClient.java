@@ -3,7 +3,10 @@ package com.yjjoker.learningagent.client;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.yjjoker.learningagent.config.AliyunLlmProperties;
-import com.yjjoker.learningagent.exception.LearningAgentServiceException;
+import com.yjjoker.learningagent.harness.error.HarnessError;
+import com.yjjoker.learningagent.harness.error.HarnessErrorCode;
+import com.yjjoker.learningagent.harness.error.HarnessErrorSource;
+import com.yjjoker.learningagent.harness.error.HarnessException;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -21,7 +24,11 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -77,7 +84,11 @@ public class AliyunLlmClient implements LlmClient {
     private LlmResponse generateInternal(List<LlmMessage> messages, List<ChatTool> tools) {
         // 每一次请求都需要上下文。第一次只有 user 消息，工具执行后的请求还会包含 assistant 和 tool 消息。
         if (messages == null || messages.isEmpty()) {
-            throw new LearningAgentServiceException("发送给大语言模型的消息列表不能为空");
+            throw llmError(
+                    HarnessErrorCode.INVALID_ARGUMENT,
+                    "发送给大语言模型的消息列表不能为空",
+                    false
+            );
         }
 
         // 构造符合 Chat Completions 格式的请求体。
@@ -105,9 +116,34 @@ public class AliyunLlmClient implements LlmClient {
                     .retrieve()
                     // Spring 根据 ChatResponse 的字段和 getter/setter，把响应 JSON 反序列化成 Java 对象。
                     .body(ChatResponse.class);
+        } catch (RestClientResponseException exception) {
+            // HTTP 状态码比异常文本稳定，先把限流、服务端和客户端请求错误分开。
+            int statusCode = exception.getStatusCode().value();
+            throw httpError(statusCode, exception);
+        } catch (ResourceAccessException exception) {
+            // 连接或读取阶段失败没有 HTTP 响应，需要从原因链识别是否超时。
+            if (containsTimeout(exception)) {
+                throw llmError(
+                        HarnessErrorCode.LLM_TIMEOUT,
+                        "调用大语言模型超时，请稍后重试",
+                        true,
+                        exception
+                );
+            }
+            throw llmError(
+                    HarnessErrorCode.LLM_REQUEST_FAILED,
+                    "调用大语言模型失败，请稍后重试",
+                    true,
+                    exception
+            );
         } catch (RestClientException exception) {
-            // 在客户端边界统一转换网络、超时和 HTTP 错误，避免上层 Harness 依赖 Spring HTTP 异常。
-            throw new LearningAgentServiceException("调用大语言模型失败，请稍后重试", exception);
+            // 其他客户端异常仍归入通用请求失败，保留后续重试的可能性。
+            throw llmError(
+                    HarnessErrorCode.LLM_REQUEST_FAILED,
+                    "调用大语言模型失败，请稍后重试",
+                    true,
+                    exception
+            );
         }
 
         // HTTP 请求成功不等于本轮一定是文本回答，还可能是模型生成的工具调用要求。
@@ -118,7 +154,11 @@ public class AliyunLlmClient implements LlmClient {
     // 这样 Harness 不需要认识 tool_calls、tool_call_id 等阿里云兼容接口字段。
     private ChatMessage toChatMessage(LlmMessage message) {
         if (message == null || message.getRole() == null || message.getRole().isBlank()) {
-            throw new LearningAgentServiceException("消息角色不能为空");
+            throw llmError(
+                    HarnessErrorCode.INVALID_ARGUMENT,
+                    "消息角色不能为空",
+                    false
+            );
         }
 
         List<ChatToolCall> chatToolCalls = null;
@@ -160,13 +200,21 @@ public class AliyunLlmClient implements LlmClient {
     private LlmResponse extractResponse(ChatResponse response) {
         // choices 为空说明服务器没有返回任何候选答案，不能继续向上层返回一个含义不明的 null。
         if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
-            throw new LearningAgentServiceException("大语言模型没有返回可用结果");
+            throw llmError(
+                    HarnessErrorCode.LLM_INVALID_RESPONSE,
+                    "大语言模型没有返回可用结果",
+                    false
+            );
         }
 
         // 当前只使用第一个候选结果。
         ChatMessage message = response.getChoices().getFirst().getMessage();
         if (message == null) {
-            throw new LearningAgentServiceException("大语言模型返回的消息为空");
+            throw llmError(
+                    HarnessErrorCode.LLM_INVALID_RESPONSE,
+                    "大语言模型返回的消息为空",
+                    false
+            );
         }
 
         if (message.getToolCalls() != null && !message.getToolCalls().isEmpty()) {
@@ -181,7 +229,11 @@ public class AliyunLlmClient implements LlmClient {
         }
 
         // 没有文本也没有工具调用时，Harness 不知道下一步应该做什么，因此把它视为响应格式异常。
-        throw new LearningAgentServiceException("大语言模型既没有返回文本，也没有返回工具调用");
+        throw llmError(
+                HarnessErrorCode.LLM_INVALID_RESPONSE,
+                "大语言模型既没有返回文本，也没有返回工具调用",
+                false
+        );
     }
 
     // 把厂商响应中的工具调用结构转换成项目内部结构，并在边界处检查执行所需的关键字段。
@@ -192,7 +244,11 @@ public class AliyunLlmClient implements LlmClient {
                 || chatToolCall.getFunction() == null
                 || chatToolCall.getFunction().getName() == null
                 || chatToolCall.getFunction().getName().isBlank()) {
-            throw new LearningAgentServiceException("大语言模型返回了不完整的工具调用");
+            throw llmError(
+                    HarnessErrorCode.LLM_INVALID_RESPONSE,
+                    "大语言模型返回了不完整的工具调用",
+                    false
+            );
         }
 
         // 无参数工具通常返回字符串形式的空 JSON 对象 {}。
@@ -202,6 +258,87 @@ public class AliyunLlmClient implements LlmClient {
             arguments = "{}";
         }
         return new ToolCall(chatToolCall.getId(), chatToolCall.getFunction().getName(), arguments);
+    }
+
+    // 统一创建 LLM 边界错误；这里只记录错误类型，不把请求正文或密钥写入日志。
+    private HarnessException llmError(HarnessErrorCode errorCode,
+                                      String message,
+                                      boolean retryable) {
+        return new HarnessException(HarnessError.of(
+                errorCode,
+                message,
+                retryable,
+                HarnessErrorSource.LLM
+        ));
+    }
+
+    private HarnessException llmError(HarnessErrorCode errorCode,
+                                      String message,
+                                      boolean retryable,
+                                      Throwable cause) {
+        return new HarnessException(HarnessError.of(
+                errorCode,
+                message,
+                retryable,
+                HarnessErrorSource.LLM
+        ), cause);
+    }
+
+    // 按 HTTP 状态码转换稳定错误；响应正文不写入日志也不返回，避免泄露厂商内部细节。
+    private HarnessException httpError(int statusCode, RestClientResponseException cause) {
+        if (statusCode == 401 || statusCode == 403) {
+            return llmError(
+                    HarnessErrorCode.LLM_AUTHENTICATION_FAILED,
+                    "大语言模型鉴权失败，请检查 API Key 配置",
+                    false,
+                    cause
+            );
+        }
+        if (statusCode == 429) {
+            return llmError(
+                    HarnessErrorCode.LLM_RATE_LIMITED,
+                    "大语言模型请求频率受限，请稍后重试",
+                    true,
+                    cause
+            );
+        }
+        if (statusCode >= 500 && statusCode <= 599) {
+            return llmError(
+                    HarnessErrorCode.LLM_SERVER_ERROR,
+                    "大语言模型服务暂时不可用，请稍后重试",
+                    true,
+                    cause
+            );
+        }
+        if (statusCode >= 400 && statusCode <= 499) {
+            return llmError(
+                    HarnessErrorCode.LLM_INVALID_REQUEST,
+                    "大语言模型请求参数无效，请检查模型配置和消息格式",
+                    false,
+                    cause
+            );
+        }
+        return llmError(
+                HarnessErrorCode.LLM_REQUEST_FAILED,
+                "调用大语言模型失败，请稍后重试",
+                true,
+                cause
+        );
+    }
+
+    // 不依赖具体 HTTP 客户端实现，通过原因链兼容连接超时和读取超时。
+    private boolean containsTimeout(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException
+                    || current instanceof java.net.http.HttpTimeoutException
+                    || current instanceof IOException
+                    && current.getClass().getSimpleName().contains("Timeout")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     // 描述发送给兼容接口的 JSON：模型名称、消息列表和本轮允许使用的工具列表。

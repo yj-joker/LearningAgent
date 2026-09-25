@@ -6,4 +6,6 @@ public interface AgentHarnessService {
 
     // sessionId 用于读取同一学习会话的历史，userMessage 是本轮用户输入。
     String run(Long sessionId, String userMessage);
+
+    void deleteSession(Long sessionId);
 }

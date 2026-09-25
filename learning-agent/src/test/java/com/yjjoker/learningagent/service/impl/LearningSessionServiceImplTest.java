@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.service.impl;
 import com.yjjoker.learningagent.dto.LearningSessionDTO;
 import com.yjjoker.learningagent.entity.Courses;
 import com.yjjoker.learningagent.entity.LearningSession;
+import com.yjjoker.learningagent.entity.LearningSessionMessage;
 import com.yjjoker.learningagent.exception.CreateErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.exception.LearningSessionStatusException;
@@ -11,6 +12,7 @@ import com.yjjoker.learningagent.projectenum.CoursesTypeEnum;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.CoursesRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.LearningSessionVO;
 import org.junit.jupiter.api.AfterEach;
@@ -24,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -36,6 +39,8 @@ class LearningSessionServiceImplTest {
     private CoursesRepository coursesRepository;
     @Mock
     private LearningSessionRepository learningSessionRepository;
+    @Mock
+    private LearningSessionMessageRepository learningSessionMessageRepository;
     @InjectMocks
     private LearningSessionServiceImpl learningSessionServiceImpl;
 
@@ -163,6 +168,47 @@ class LearningSessionServiceImplTest {
         assertThrows(LearningSessionStatusException.class,
                 () ->learningSessionServiceImpl.changeSessionStatus(2222L));
         verify(learningSessionRepository,never()).updateSession(any());
+    }
+
+    @Test
+    @DisplayName("用户查看自己的会话时，应按顺序返回展示消息")
+    void shouldReturnAllSessionMessagesForOwner() {
+        LearningSession session = new LearningSession();
+        session.setId(2222L);
+        session.setUserId(2222L);
+        session.setStatus(LearningSessionStatusEnum.COMPLETED);
+        LearningSessionMessage first = new LearningSessionMessage();
+        first.setId(1L);
+        first.setSessionId(2222L);
+        LearningSessionMessage second = new LearningSessionMessage();
+        second.setId(2L);
+        second.setSessionId(2222L);
+
+        BaseContext.setCurrentId(2222L);
+        when(learningSessionRepository.findSessionById(2222L)).thenReturn(Optional.of(session));
+        when(learningSessionMessageRepository.findDisplayMessagesBySessionId(2222L))
+                .thenReturn(List.of(first, second));
+
+        List<LearningSessionMessage> result = learningSessionServiceImpl.findSessionMessages(2222L);
+
+        assertEquals(List.of(first, second), result);
+        verify(learningSessionMessageRepository).findDisplayMessagesBySessionId(2222L);
+    }
+
+    @Test
+    @DisplayName("用户查看别人的会话时，应拒绝查询消息")
+    void shouldRejectMessagesFromAnotherUser() {
+        LearningSession session = new LearningSession();
+        session.setId(2222L);
+        session.setUserId(9999L);
+        session.setStatus(LearningSessionStatusEnum.ACTIVE);
+
+        BaseContext.setCurrentId(2222L);
+        when(learningSessionRepository.findSessionById(2222L)).thenReturn(Optional.of(session));
+
+        assertThrows(LearningSessionStatusException.class,
+                () -> learningSessionServiceImpl.findSessionMessages(2222L));
+        verifyNoInteractions(learningSessionMessageRepository);
     }
 
 

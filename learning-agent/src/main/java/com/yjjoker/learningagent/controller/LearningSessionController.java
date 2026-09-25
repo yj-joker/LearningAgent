@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.controller;
 
 import com.yjjoker.learningagent.dto.LearningSessionDTO;
+import com.yjjoker.learningagent.entity.LearningSessionMessage;
 import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.service.LearningSessionService;
 import com.yjjoker.learningagent.vo.LearningSessionVO;
@@ -10,6 +11,8 @@ import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/learning-agent/learning")
@@ -28,5 +31,12 @@ public class LearningSessionController {
     public Result<LearningSessionVO> completeSession(@NonNull @PathVariable Long learningSessionId){
         LearningSessionVO learningSessionVO = LearningSessionService.changeSessionStatus(learningSessionId);
         return Result.success(learningSessionVO);
+    }
+
+    @GetMapping("/session/{learningSessionId}/messages")
+    @Operation(summary = "获取学习会话历史消息")
+    public Result<List<LearningSessionMessage>> findSessionMessages(
+            @NonNull @PathVariable Long learningSessionId) {
+        return Result.success(LearningSessionService.findSessionMessages(learningSessionId));
     }
 }
