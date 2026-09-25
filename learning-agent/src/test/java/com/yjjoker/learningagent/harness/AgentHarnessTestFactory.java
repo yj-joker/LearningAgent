@@ -8,6 +8,9 @@ import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImp
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.memory.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
@@ -128,8 +131,21 @@ public final class AgentHarnessTestFactory {
                 null,
                 new LlmRetryExecutor(),
                 structuredMemoryService,
-                referenceRegistry
+                referenceRegistry,
+                new NoopMemoryExtractionService(),
+                new MemoryCandidatePersistenceService(structuredMemoryService)
         );
+    }
+
+    // 现有 Harness 循环测试只关注工具流程，不额外消耗一次模型响应。
+    private static class NoopMemoryExtractionService implements MemoryExtractionService {
+
+        @Override
+        public List<MemoryCandidate> extract(Long sessionId,
+                                              String userMessage,
+                                              String assistantAnswer) {
+            return List.of();
+        }
     }
 
     // 默认测试不关注结构化记忆时，返回两个空索引。

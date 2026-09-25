@@ -28,6 +28,9 @@ import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.memory.MemoryIndexSnapshot;
+import com.yjjoker.learningagent.harness.memory.MemoryExtractionService;
+import com.yjjoker.learningagent.harness.memory.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.harness.memory.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
@@ -93,6 +96,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 为当前 AgentLoop 保存 memoryRef 到数据库 ID 的服务端映射。
     private final MemoryReferenceRegistry memoryReferenceRegistry;
 
+    // 在最终回答生成后提取候选记忆，结果交给后续持久化服务。
+    private final MemoryExtractionService memoryExtractionService;
+
+    // 把候选按 USER/SESSION 作用域新增到对应记忆表，暂不做更新和去重。
+    private final MemoryCandidatePersistenceService memoryCandidatePersistenceService;
+
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
@@ -106,7 +115,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    ContextSummarizer contextSummarizer,
                                    LlmRetryExecutor llmRetryExecutor,
                                    StructuredMemoryService structuredMemoryService,
-                                   MemoryReferenceRegistry memoryReferenceRegistry) {
+                                   MemoryReferenceRegistry memoryReferenceRegistry,
+                                   MemoryExtractionService memoryExtractionService,
+                                   MemoryCandidatePersistenceService memoryCandidatePersistenceService) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -129,6 +140,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.structuredMemoryService = structuredMemoryService;
         // 引用注册表保证模型只能使用本次请求分配的 memoryRef。
         this.memoryReferenceRegistry = memoryReferenceRegistry;
+        // 记忆提取服务独立于主循环，后续可以替换为规则提取或异步任务。
+        this.memoryExtractionService = memoryExtractionService;
+        // 持久化服务只负责新增，更新和去重留给后续阶段。
+        this.memoryCandidatePersistenceService = memoryCandidatePersistenceService;
     }
 
     @Override
@@ -261,6 +276,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         sessionId,
                         new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()))
                 );
+                // 提取记忆候选并保存
+                extractMemoryCandidates(sessionId, userMessage, textResponse.content());
                 return textResponse.content();
             }
 
@@ -427,6 +444,23 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
             // LlmResponse 是 sealed 类型，正常情况下只有上面两种实现；这个检查用于防御空返回值。
             throw new IllegalStateException("LLM 客户端返回了无法识别的结果");
+        }
+    }
+
+    // 提取失败不能覆盖已经生成的正常回答，因此这里隔离异常并只记录可观测信息。
+    private void extractMemoryCandidates(Long sessionId,
+                                         String userMessage,
+                                         String assistantAnswer) {
+        try {
+            List<MemoryCandidate> candidates = memoryExtractionService.extract(
+                    sessionId, userMessage, assistantAnswer
+            );
+            memoryCandidatePersistenceService.persist(
+                    BaseContext.getCurrentId(), sessionId, candidates
+            );
+        } catch (RuntimeException exception) {
+            log.warn("记忆候选提取或持久化失败，不影响本轮回答，sessionId={}，reason={}",
+                    sessionId, exception.getMessage());
         }
     }
 

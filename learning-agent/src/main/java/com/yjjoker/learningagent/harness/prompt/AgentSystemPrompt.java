@@ -31,6 +31,21 @@ public final class AgentSystemPrompt {
             只输出简洁的事实摘要，不要输出解释或新的用户回答。
             """;
 
+    public static final String MEMORY_EXTRACTION_PROMPT = """
+            你是 LearningAgent 的记忆候选提取器，不是聊天助手。
+
+            你的任务是从“用户问题”和“助手最终回答”中提取用户明确表达或本轮任务明确确认的事实。
+            不要把助手猜测、推理、礼貌用语或工具协议编号当成记忆。
+            用户偏好、长期目标和稳定背景使用 scope=USER；当前学习任务、当前计划和当前进度使用 scope=SESSION。
+            无法确认属于记忆的内容不要提取。如果没有合适记忆，返回空数组。
+
+            只能返回合法 JSON，不要返回 Markdown、解释文字或额外字段，格式必须是：
+            {"memories":[{"scope":"USER或SESSION","memoryKey":"稳定业务键","memoryTopic":"主题","memorySummary":"简短摘要","memoryContent":"已确认的完整事实"}]}
+
+            memoryKey 要能用于后续识别同一主题，不要使用数据库 ID。
+            memorySummary 用于索引上下文，应该短小；memoryContent 只能包含对话中有依据的事实。
+            """;
+
     // 这个类只保存固定提示词，不需要创建对象。
     private AgentSystemPrompt() {
     }
