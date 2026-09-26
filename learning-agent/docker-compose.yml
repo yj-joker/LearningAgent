@@ -1,80 +1,128 @@
+# 只运行中间件；不包含前后端服务，不执行 Dockerfile，也没有 build。
+# Compose 和本机 Spring Boot 共用 learning-agent 目录内的 .env。
+name: learning-agent-infra
+
 services:
   mysql:
-    image: mysql:8
+    image: mysql:8.0.34
+    restart: unless-stopped
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-learning_agent}
+      # 对应项目当前 MYSQL_USER=root，不使用官方镜像禁止的 MYSQL_USER=root。
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      MYSQL_ROOT_HOST: "%"
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     volumes:
       - mysql-data:/var/lib/mysql
+      # 仅全新数据卷首次启动时执行，不重复执行 ALTER TABLE。
+      - type: bind
+        source: ./src/main/resources/db/migration/learningAgentSql.sql
+        target: /docker-entrypoint-initdb.d/01-schema.sql
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
-      test:
-        [
-          "CMD-SHELL"
-        ]
+      # $$ 留给容器内 shell 展开。用 TCP 避免把初始化临时服务判为就绪。
+      test: ["CMD-SHELL", 'MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}" mysql --protocol=TCP -h 127.0.0.1 -uroot --database="$${MYSQL_DATABASE}" --execute="SELECT 1" >/dev/null 2>&1']
       interval: 5s
       timeout: 5s
-      retries: 20
+      start_period: 60s
+      retries: 30
 
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: learning-agent:0.0.1
-    ports:
-      - "8080:8080"
+  minio:
+    # Coollabs 基于 MinIO 官方源码构建的社区镜像；固定已实测的版本和摘要。
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9
+    restart: unless-stopped
     environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_EXPIRATION_MILLIS: ${JWT_EXPIRATION_MILLIS}
-      SNOWFLAKE_WORKER_ID: ${SNOWFLAKE_WORKER_ID:-0}
-    depends_on:
-      mysql:
-        condition: service_healthy
-  milvus:
-    image: milvusdb/milvus:v2.3.4
-    container_name: milvus-standalone
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?请在 .env 中设置 MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?请在 .env 中设置 MINIO_SECRET_KEY}
     ports:
-      - "19530:19530"  # gRPC 端口
-      - "9091:9091"    # Metrics 端口
-    environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
+      # 本机 MINIO_ENDPOINT 应指向这个宿主机 API 端口。
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
-      - milvus-data:/var/lib/milvus
-    depends_on:
-      - etcd
-      - minio
+      - minio-data:/minio_data
+    command: ["minio", "server", "/minio_data", "--console-address", ":9001"]
+    healthcheck:
+      # 新镜像含 mc，不含 curl；$$ 让认证变量在容器内展开。
+      test:
+        - CMD-SHELL
+        - >-
+          mc alias set local http://127.0.0.1:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null 2>&1 && mc ready local
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 20
 
   etcd:
     image: quay.io/coreos/etcd:v3.5.5
+    restart: unless-stopped
     environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command:
+      - etcd
+      - --name=etcd
+      - --data-dir=/etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
     volumes:
       - etcd-data:/etcd
-  minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    volumes:
-      - minio-data:/minio_data
-    command: minio server /minio_data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 20
 
+  milvus:
+    image: milvusdb/milvus:v2.3.4
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      # 容器互连使用服务名，不使用本机 Java 配置中的 localhost。
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:?请在 .env 中设置 MINIO_ACCESS_KEY}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:?请在 .env 中设置 MINIO_SECRET_KEY}
+    ports:
+      - "127.0.0.1:${MILVUS_PORT:-19530}:19530"
+      - "127.0.0.1:${MILVUS_METRICS_PORT:-9091}:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 10s
+      start_period: 90s
+      retries: 30
+
+  # Milvus 管理界面，使用已有镜像，不是本项目的前端。
+  attu:
+    image: zilliz/attu:v2.3.4
+    restart: unless-stopped
+    environment:
+      MILVUS_URL: milvus:19530
+    ports:
+      - "127.0.0.1:${ATTU_PORT:-8000}:3000"
+    depends_on:
+      milvus:
+        condition: service_healthy
+
+# 新电脑上自动创建空数据卷，无须迁移旧元数据。
 volumes:
   mysql-data:
-  milvus-data:
-  etcd-data:
   minio-data:
+  etcd-data:
+  milvus-data:
