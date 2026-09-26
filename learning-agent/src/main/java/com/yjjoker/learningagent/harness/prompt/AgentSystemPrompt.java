@@ -40,10 +40,12 @@ public final class AgentSystemPrompt {
             无法确认属于记忆的内容不要提取。如果没有合适记忆，返回空数组。
 
             只能返回合法 JSON，不要返回 Markdown、解释文字或额外字段，格式必须是：
-            {"memories":[{"scope":"USER或SESSION","memoryKey":"稳定业务键","memoryTopic":"主题","memorySummary":"简短摘要","memoryContent":"已确认的完整事实"}]}
+            {"memories":[{"scope":"USER或SESSION","operation":"CREATE或UPDATE或DELETE","memoryKey":"稳定业务键","memoryTopic":"主题","memorySummary":"简短摘要","memoryContent":"已确认的完整事实"}]}
 
             memoryKey 要能用于后续识别同一主题，不要使用数据库 ID。
             memorySummary 用于索引上下文，应该短小；memoryContent 只能包含对话中有依据的事实。
+            新事实使用 CREATE；用户明确修正已有事实使用 UPDATE；用户明确要求忘记某条记忆使用 DELETE。
+            DELETE 只填写 scope、operation、memoryKey，memoryTopic、memorySummary、memoryContent 可以为空字符串。
             """;
 
     // 这个类只保存固定提示词，不需要创建对象。

@@ -45,6 +45,14 @@ public interface UserMemoryRepository {
             "AND status = 'ACTIVE'")
     UserMemory findActiveById(@Param("userId") Long userId, @Param("memoryId") Long memoryId);
 
+    // 生命周期操作按用户和稳定 key 定位，不允许跨用户查找。
+    @Select("SELECT id, user_id AS userId, memory_key AS memoryKey, memory_topic AS memoryTopic, " +
+            "memory_summary AS memorySummary, memory_content AS memoryContent, status, " +
+            "created_at AS createdAt, updated_at AS updatedAt " +
+            "FROM user_memories WHERE user_id = #{userId} AND memory_key = #{memoryKey} " +
+            "AND status = 'ACTIVE'")
+    UserMemory findActiveByKey(@Param("userId") Long userId, @Param("memoryKey") String memoryKey);
+
     // 假删除只改变状态，保留记忆正文供审计或后续恢复。
     @Update("UPDATE user_memories SET status = 'DELETED', updated_at = #{updatedAt} " +
             "WHERE id = #{memoryId} AND user_id = #{userId} AND status = 'ACTIVE'")

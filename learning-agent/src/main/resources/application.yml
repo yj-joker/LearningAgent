@@ -99,6 +99,11 @@ harness:
     safe-context-ratio: ${HARNESS_SAFE_CONTEXT_RATIO:0.95}
     # 触发压缩后尽量回落到 80%；全部工具压缩后仍低于 95% 时仍允许请求继续。
     compression-target-ratio: ${HARNESS_COMPRESSION_TARGET_RATIO:0.80}
+  memory:
+    extraction:
+      retry:
+        # 记忆提取格式错误时最多请求两次，次数包含第一次请求。
+        max-attempts: ${HARNESS_MEMORY_EXTRACTION_MAX_ATTEMPTS:2}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}

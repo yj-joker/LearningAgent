@@ -1,14 +1,12 @@
 package com.yjjoker.learningagent.entity;
 
 import com.yjjoker.learningagent.projectenum.MemoryStatusEnum;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
 import java.time.LocalDateTime;
 
 // 会话级结构化记忆；只属于一个学习会话，不替代完整消息历史。
-@Getter
-@Setter
+@Data
 public class SessionMemory {
 
     private Long id;

@@ -1,14 +1,13 @@
 package com.yjjoker.learningagent.entity;
 
 import com.yjjoker.learningagent.projectenum.MemoryStatusEnum;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
+
 
 import java.time.LocalDateTime;
 
 // 用户长期记忆；通过 userId 关联，可以跨多个学习会话使用。
-@Getter
-@Setter
+@Data
 public class UserMemory {
 
     private Long id;
