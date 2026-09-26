@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.memory.service;
 
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 
 import java.util.List;
 
@@ -9,5 +10,5 @@ import java.util.List;
 public interface MemoryExtractionService {
 
     // 返回本轮可能需要保存的记忆；没有合适内容时返回空列表。
-    List<MemoryCandidate> extract(Long sessionId, String userMessage, String assistantAnswer);
+    List<MemoryCandidate> extract(MemoryExtractionContext context, String userMessage, String assistantAnswer);
 }

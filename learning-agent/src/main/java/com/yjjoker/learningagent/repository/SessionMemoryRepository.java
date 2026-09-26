@@ -45,6 +45,13 @@ public interface SessionMemoryRepository {
             "AND status = 'ACTIVE'")
     SessionMemory findActiveById(@Param("sessionId") Long sessionId, @Param("memoryId") Long memoryId);
 
+    // 写入事务中锁定当前会话的目标，锁持续到整批操作结束。
+    @Select("SELECT id, session_id AS sessionId, memory_key AS memoryKey, memory_topic AS memoryTopic, " +
+            "memory_summary AS memorySummary, memory_content AS memoryContent, status, " +
+            "created_at AS createdAt, updated_at AS updatedAt FROM session_memories " +
+            "WHERE id = #{memoryId} AND session_id = #{sessionId} AND status = 'ACTIVE' FOR UPDATE")
+    SessionMemory findActiveByIdForUpdate(@Param("sessionId") Long sessionId, @Param("memoryId") Long memoryId);
+
     // 生命周期操作按会话和稳定 key 定位，防止误更新其他会话的记忆。
     @Select("SELECT id, session_id AS sessionId, memory_key AS memoryKey, memory_topic AS memoryTopic, " +
             "memory_summary AS memorySummary, memory_content AS memoryContent, status, " +

@@ -29,6 +29,7 @@ import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryServic
 import com.yjjoker.learningagent.harness.memory.model.MemoryIndexSnapshot;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
@@ -451,12 +452,18 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                          String userMessage,
                                          String assistantAnswer) {
         try {
+            // 回答完成后重新加载有效索引，提取和保存共用这一份引用快照。
+            MemoryExtractionContext extractionContext = new MemoryExtractionContext(
+                    BaseContext.getCurrentId(), sessionId, loadMemoryIndex(sessionId));
             List<MemoryCandidate> candidates = memoryExtractionService.extract(
-                    sessionId, userMessage, assistantAnswer
+                    extractionContext, userMessage, assistantAnswer
             );
+            // 模型选择引用，数据库归属和主键只从服务端快照读取。
             memoryCandidatePersistenceService.persist(
-                    BaseContext.getCurrentId(), sessionId, candidates
+                    extractionContext, userMessage, candidates
             );
+            // 事务代理正常返回，表示这批候选已经完成数据库提交。
+            log.info("记忆处理返回成功，sessionId={}，candidateCount={}", sessionId, candidates.size());
         } catch (RuntimeException exception) {
             log.warn("记忆候选提取或持久化失败，不影响本轮回答，sessionId={}，reason={}",
                     sessionId, exception.getMessage());

@@ -29,11 +29,17 @@ public interface StructuredMemoryService {
     // 根据用户范围按需召回一条长期记忆正文。
     UserMemory recallUserMemory(Long userId, Long memoryId);
 
+    // 在已有写入事务中锁定长期记忆，避免校验与更新之间发生变化。
+    UserMemory lockUserMemory(Long userId, Long memoryId);
+
     // 按稳定 memoryKey 查找用户范围内的有效记忆，用于生命周期更新和删除。
     UserMemory findActiveUserMemoryByKey(Long userId, String memoryKey);
 
     // 根据会话范围按需召回一条会话记忆正文。
     SessionMemory recallSessionMemory(Long sessionId, Long memoryId);
+
+    // 在已有写入事务中锁定会话记忆。
+    SessionMemory lockSessionMemory(Long sessionId, Long memoryId);
 
     // 按稳定 memoryKey 查找当前会话内的有效记忆，用于生命周期更新和删除。
     SessionMemory findActiveSessionMemoryByKey(Long sessionId, String memoryKey);

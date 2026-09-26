@@ -11,6 +11,7 @@ import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryServic
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
+import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.service.AgentHarnessService;
@@ -142,7 +143,8 @@ public final class AgentHarnessTestFactory {
     private static class NoopMemoryExtractionService implements MemoryExtractionService {
 
         @Override
-        public List<MemoryCandidate> extract(Long sessionId,
+        // 普通循环测试不提取记忆，避免额外消耗假模型响应。
+        public List<MemoryCandidate> extract(MemoryExtractionContext context,
                                               String userMessage,
                                               String assistantAnswer) {
             return List.of();

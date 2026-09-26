@@ -6,6 +6,10 @@ import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
+import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
+import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
@@ -34,6 +38,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 
 class AgentHarnessStructuredMemoryIntegrationTest {
 
@@ -165,6 +173,86 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         assertTrue(llmClient.messages.get(1).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
                         && message.getContent().contains("用户喜欢篮球")));
+    }
+
+    // 主循环结束后使用最新索引提取，不能沿用回答开始时的旧映射。
+    @Test
+    void shouldExtractAndPersistWithFreshIndexAfterAnswer() {
+        BaseContext.setCurrentId(USER_ID);
+        UserMemory oldMemory = indexedMemory(1L, "oldSport");
+        UserMemory currentMemory = indexedMemory(2L, "favoriteSport");
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        // 第一次加载供主模型回答，第二次加载供后置提取使用。
+        when(store.loadUserMemoryIndex(USER_ID)).thenReturn(List.of(oldMemory), List.of(currentMemory));
+        when(store.loadSessionMemoryIndex(SESSION_ID)).thenReturn(List.of());
+        when(store.lockUserMemory(USER_ID, 2L)).thenReturn(currentMemory);
+        LlmClient client = mock(LlmClient.class);
+        when(client.generate(anyList())).thenReturn(new TextLlmResponse("了解你的新偏好。"));
+        when(client.generateWithoutTools(anyList())).thenReturn(new TextLlmResponse("""
+                {"memories":[{"scope":"USER","operation":"UPDATE",
+                "targetMemoryRefs":["memory_1"],"userEvidence":"现在最喜欢足球",
+                "memoryTopic":"运动偏好","memorySummary":"最喜欢足球","memoryContent":"现在最喜欢足球"}]}
+                """));
+        ConversationMemoryService history = mock(ConversationMemoryService.class);
+
+        String answer = extractionHarness(client, store, history).run(SESSION_ID, "现在最喜欢足球");
+
+        assertEquals("了解你的新偏好。", answer);
+        assertEquals("现在最喜欢足球", currentMemory.getMemoryContent());
+        assertEquals("favoriteSport", currentMemory.getMemoryKey());
+        verify(store).updateUserMemory(currentMemory);
+        verify(store, never()).lockUserMemory(USER_ID, 1L);
+    }
+
+    // 引用修复失败时仍返回主模型的回答，不允许错误候选进入数据库。
+    @Test
+    void shouldKeepAnswerWhenExtractionReferencesRemainInvalid() {
+        BaseContext.setCurrentId(USER_ID);
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        when(store.loadUserMemoryIndex(USER_ID)).thenReturn(List.of(indexedMemory(1L, "sport")));
+        when(store.loadSessionMemoryIndex(SESSION_ID)).thenReturn(List.of());
+        LlmClient client = mock(LlmClient.class);
+        when(client.generate(anyList())).thenReturn(new TextLlmResponse("这是正常回答。"));
+        when(client.generateWithoutTools(anyList())).thenReturn(new TextLlmResponse("""
+                {"memories":[{"scope":"USER","operation":"DELETE",
+                "targetMemoryRefs":["memory_999"],"userEvidence":"忘记运动"}]}
+                """));
+
+        String answer = extractionHarness(client, store, mock(ConversationMemoryService.class))
+                .run(SESSION_ID, "忘记运动");
+
+        assertEquals("这是正常回答。", answer);
+        verify(client, org.mockito.Mockito.times(2)).generateWithoutTools(anyList());
+        verify(store, never()).updateUserMemory(any());
+        verify(store, never()).deleteUserMemory(any(), any());
+    }
+
+    // 使用生产构造器接入真实提取和保存服务，模型和数据库由测试替代。
+    private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
+                                                  ConversationMemoryService history) {
+        LearningSessionRepository repository = mock(LearningSessionRepository.class);
+        LearningSession session = new LearningSession();
+        session.setId(SESSION_ID);
+        session.setUserId(USER_ID);
+        session.setStatus(LearningSessionStatusEnum.ACTIVE);
+        when(repository.findSessionById(SESSION_ID)).thenReturn(Optional.of(session));
+        LlmRetryExecutor retry = new LlmRetryExecutor();
+        return new AgentHarnessServiceImpl(client, new ToolRegistry(List.of()), List.of(), history, repository,
+                new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
+                store, new MemoryReferenceRegistry(), new LlmMemoryExtractionService(client, retry),
+                new MemoryCandidatePersistenceService(store));
+    }
+
+    // 创建属于当前用户的运动记忆，供主循环与提取索引使用。
+    private UserMemory indexedMemory(Long id, String key) {
+        UserMemory memory = new UserMemory();
+        memory.setId(id);
+        memory.setUserId(USER_ID);
+        memory.setMemoryKey(key);
+        memory.setMemoryTopic("运动偏好");
+        memory.setMemorySummary("最喜欢羽毛球");
+        memory.setMemoryContent("最喜欢羽毛球");
+        return memory;
     }
 
     // 假模型只返回文本，测试重点放在 Harness 发出的第一份上下文。

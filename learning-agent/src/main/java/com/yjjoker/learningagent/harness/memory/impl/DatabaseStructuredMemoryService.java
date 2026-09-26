@@ -12,6 +12,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -201,6 +202,34 @@ public class DatabaseStructuredMemoryService implements StructuredMemoryService 
             throw new NotFountException("有效的会话记忆不存在");
         }
         log.info("会话记忆假删除成功，sessionId={}，memoryId={}", sessionId, memoryId);
+    }
+
+    // 锁定长期记忆；调用方必须先开启事务，避免锁在查询后立即释放。
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public UserMemory lockUserMemory(Long userId, Long memoryId) {
+        requirePositiveId(userId, "用户 ID");
+        requirePositiveId(memoryId, "记忆 ID");
+        UserMemory memory = userMemoryRepository.findActiveByIdForUpdate(userId, memoryId);
+        if (memory == null) {
+            throw new NotFountException("目标长期记忆已删除或不属于当前用户");
+        }
+        log.debug("已锁定长期记忆，userId={}，memoryId={}", userId, memoryId);
+        return memory;
+    }
+
+    // 锁定会话记忆，保证一批目标在校验后不会被并发修改。
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public SessionMemory lockSessionMemory(Long sessionId, Long memoryId) {
+        requirePositiveId(sessionId, "会话 ID");
+        requirePositiveId(memoryId, "记忆 ID");
+        SessionMemory memory = sessionMemoryRepository.findActiveByIdForUpdate(sessionId, memoryId);
+        if (memory == null) {
+            throw new NotFountException("目标会话记忆已删除或不属于当前会话");
+        }
+        log.debug("已锁定会话记忆，sessionId={}，memoryId={}", sessionId, memoryId);
+        return memory;
     }
 
     // 长期记忆至少需要稳定 key、主题、索引摘要和完整正文。

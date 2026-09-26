@@ -7,6 +7,8 @@ import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
+import com.yjjoker.learningagent.harness.memory.service.MemoryCandidateValidator;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionFormatException;
 import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
@@ -56,7 +58,7 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
 
     @Override
     // 从用户问题和助手回答中提取结构化记忆候选。
-    public List<MemoryCandidate> extract(Long sessionId,
+    public List<MemoryCandidate> extract(MemoryExtractionContext context,
                                          String userMessage,
                                          String assistantAnswer) {
         if (userMessage == null || userMessage.isBlank()
@@ -65,9 +67,11 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
             return List.of();
         }
 
-        // 只把本轮问题和最终回答交给提取模型。
-        String extractionInput = "用户问题：\n" + userMessage
-                + "\n\n助手最终回答：\n" + assistantAnswer;
+        // 只发送本轮对话和索引，不发送历史聊天、数据库主键或记忆正文。
+        Long sessionId = context.getSessionId();
+        String extractionInput = buildExtractionInput(context, userMessage, assistantAnswer);
+        log.info("记忆提取索引已准备，sessionId={}，indexCount={}，inputCharacters={}",
+                sessionId, context.getTargets().size(), extractionInput.length());
 
         // 格式错误最多修复有限次数，避免提取模型无限循环。
         int maxAttempts = Math.max(1, retryProperties.getMaxAttempts());
@@ -79,6 +83,8 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
 
                 // 解析并校验模型返回的 JSON。
                 List<MemoryCandidate> candidates = parseCandidates(responseText);
+                // 未知引用或错误范围也允许有限修复；每次都使用同一份索引。
+                MemoryCandidateValidator.validate(context, userMessage, candidates);
                 log.info("记忆候选提取完成，sessionId={}，attempt={}，maxAttempts={}，candidateCount={}，responseCharacters={}",
                         sessionId, attempt, maxAttempts, candidates.size(), responseText.length());
                 logCandidates(sessionId, candidates);
@@ -99,6 +105,25 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
 
         // 循环必然在成功或抛出异常时结束，这里只是防止未来修改循环后静默返回空结果。
         throw new IllegalStateException("记忆提取修复流程异常结束");
+    }
+
+    // 用 JSON 区分用户依据、助手参考和旧索引，避免把旧内容误当成本轮新事实。
+    private String buildExtractionInput(MemoryExtractionContext context,
+                                        String userMessage, String assistantAnswer) {
+        var input = JSON_MAPPER.createObjectNode();
+        input.put("userMessage", userMessage);
+        input.put("assistantAnswer", assistantAnswer);
+        var index = input.putArray("existingMemories");
+        for (var target : context.getTargets()) {
+            // 手动选择发送字段，防止实体序列化时带出真实 ID 和归属。
+            var entry = index.addObject();
+            entry.put("memoryRef", target.getMemoryRef());
+            entry.put("scope", target.getScope().name());
+            entry.put("memoryKey", target.getMemoryKey());
+            entry.put("memoryTopic", target.getMemoryTopic());
+            entry.put("memorySummary", target.getMemorySummary());
+        }
+        return input.toString();
     }
 
     // 请求一次无工具记忆提取，不处理格式错误。
@@ -134,12 +159,12 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
     // 记录候选数量和字段长度，不记录完整记忆正文。
     private void logCandidates(Long sessionId, List<MemoryCandidate> candidates) {
         for (MemoryCandidate candidate : candidates) {
-            log.info("记忆候选已识别，sessionId={}，scope={}，operation={}，memoryKey={}，topic={}，summaryCharacters={}，contentCharacters={}",
+            log.info("记忆候选已识别，sessionId={}，scope={}，operation={}，targetCount={}，evidenceCharacters={}，summaryCharacters={}，contentCharacters={}",
                     sessionId,
                     candidate.getScope(),
                     candidate.getOperation(),
-                    candidate.getMemoryKey(),
-                    candidate.getMemoryTopic(),
+                    candidate.getTargetMemoryRefs().size(),
+                    safeLength(candidate.getUserEvidence()),
                     safeLength(candidate.getMemorySummary()),
                     safeLength(candidate.getMemoryContent()));
         }
@@ -160,7 +185,10 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
                 candidates.add(parseCandidate(node));
             }
             return List.copyOf(candidates);
-        } catch (JacksonException | IllegalArgumentException exception) {
+        } catch (JacksonException exception) {
+            // JSON 解析异常可能包含正文片段，只返回固定原因。
+            throw new MemoryExtractionFormatException("记忆提取结果不是合法 JSON");
+        } catch (IllegalArgumentException exception) {
             log.warn("记忆候选解析失败，responseCharacters={}，reason={}",
                     responseText.length(), exception.getMessage());
             throw new MemoryExtractionFormatException(
@@ -190,10 +218,13 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("operation 必须是 CREATE、UPDATE 或 DELETE");
         }
-        candidate.setMemoryKey(requiredText(node, "memoryKey"));
+        candidate.setUserEvidence(requiredText(node, "userEvidence"));
+        candidate.setTargetMemoryRefs(parseTargetRefs(node));
+        candidate.setMemoryKey(candidate.getOperation() == MemoryOperation.CREATE
+                ? requiredText(node, "memoryKey") : optionalText(node, "memoryKey"));
         validateLength("memoryKey", candidate.getMemoryKey(), MAX_MEMORY_KEY_LENGTH);
 
-        // 删除只需要定位目标，避免模型为了凑字段而编造摘要和正文。
+        // 删除只需要目标和本轮依据，不要求补写摘要和正文。
         if (candidate.getOperation() == MemoryOperation.DELETE) {
             candidate.setMemoryTopic(optionalText(node, "memoryTopic"));
             candidate.setMemorySummary(optionalText(node, "memorySummary"));
@@ -210,6 +241,23 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
         return candidate;
     }
 
+    // 读取目标数组，保留重复引用供统一校验拒绝。
+    private List<String> parseTargetRefs(JsonNode node) {
+        JsonNode references = node.get("targetMemoryRefs");
+        if (references == null || !references.isArray()) {
+            throw new IllegalArgumentException("targetMemoryRefs 必须是数组");
+        }
+        List<String> refs = new ArrayList<>();
+        for (JsonNode reference : references) {
+            if (!reference.isTextual() || reference.asString().isBlank()) {
+                throw new IllegalArgumentException("targetMemoryRefs 只能包含非空字符串");
+            }
+            refs.add(reference.asString().trim());
+        }
+        return List.copyOf(refs);
+    }
+
+    // 读取必填字符串字段。
     private String requiredText(JsonNode node, String fieldName) {
         // 读取必填字符串字段。
         JsonNode value = node.get(fieldName);
@@ -219,12 +267,14 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
         return value.asString().trim();
     }
 
+    // 读取可以省略的文本字段。
     private String optionalText(JsonNode node, String fieldName) {
         // 读取删除操作中可以省略的字段。
         JsonNode value = node.get(fieldName);
         return value == null || !value.isTextual() ? "" : value.asString().trim();
     }
 
+    // 检查文本是否超过允许长度。
     private void validateLength(String fieldName, String value, int maximum) {
         // 限制模型返回字段的长度，避免异常大文本进入数据库。
         if (value.length() > maximum) {
