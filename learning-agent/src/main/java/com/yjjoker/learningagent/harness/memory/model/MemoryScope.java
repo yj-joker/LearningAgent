@@ -1,4 +1,4 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.model;
 
 // 区分记忆属于用户，还是只属于当前学习会话。
 public enum MemoryScope {

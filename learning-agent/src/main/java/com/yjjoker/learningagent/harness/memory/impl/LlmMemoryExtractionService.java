@@ -1,4 +1,4 @@
-package com.yjjoker.learningagent.harness.impl;
+package com.yjjoker.learningagent.harness.memory.impl;
 
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
@@ -6,11 +6,11 @@ import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
-import com.yjjoker.learningagent.harness.memory.MemoryCandidate;
-import com.yjjoker.learningagent.harness.memory.MemoryExtractionService;
-import com.yjjoker.learningagent.harness.memory.MemoryExtractionFormatException;
-import com.yjjoker.learningagent.harness.memory.MemoryOperation;
-import com.yjjoker.learningagent.harness.memory.MemoryScope;
+import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
+import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionFormatException;
+import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
+import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.config.MemoryExtractionRetryProperties;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import lombok.extern.slf4j.Slf4j;

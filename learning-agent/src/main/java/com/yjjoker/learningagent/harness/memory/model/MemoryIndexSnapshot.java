@@ -1,12 +1,14 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.model;
 
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
+import lombok.Getter;
 
 import java.util.List;
 
 // 保存一次 Agent 请求开始时读取到的两类记忆索引快照。
 // 它只负责承载索引，不负责查询正文或决定是否召回。
+@Getter
 public class MemoryIndexSnapshot {
 
     private final List<UserMemory> userMemories;
@@ -19,11 +21,4 @@ public class MemoryIndexSnapshot {
         this.sessionMemories = List.copyOf(sessionMemories);
     }
 
-    public List<UserMemory> getUserMemories() {
-        return userMemories;
-    }
-
-    public List<SessionMemory> getSessionMemories() {
-        return sessionMemories;
-    }
 }

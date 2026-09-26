@@ -2,6 +2,11 @@ package com.yjjoker.learningagent.harness.memory;
 
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
+import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
+import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
+import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

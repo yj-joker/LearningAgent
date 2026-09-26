@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.memory;
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
+import com.yjjoker.learningagent.harness.memory.impl.DatabaseStructuredMemoryService;
 import com.yjjoker.learningagent.projectenum.MemoryStatusEnum;
 import com.yjjoker.learningagent.repository.SessionMemoryRepository;
 import com.yjjoker.learningagent.repository.UserMemoryRepository;

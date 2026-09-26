@@ -1,4 +1,4 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.model;
 
 // 描述候选记忆希望执行的生命周期操作。
 public enum MemoryOperation {

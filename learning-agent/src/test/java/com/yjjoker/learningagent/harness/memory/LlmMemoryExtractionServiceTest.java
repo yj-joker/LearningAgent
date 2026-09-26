@@ -1,11 +1,13 @@
 package com.yjjoker.learningagent.harness.memory;
 
-import com.yjjoker.learningagent.harness.impl.LlmMemoryExtractionService;
+import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
+import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
+import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

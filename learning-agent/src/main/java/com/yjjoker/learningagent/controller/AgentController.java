@@ -2,7 +2,7 @@ package com.yjjoker.learningagent.controller;
 
 import com.yjjoker.learningagent.dto.AgentChatRequest;
 import com.yjjoker.learningagent.entity.Result;
-import com.yjjoker.learningagent.harness.AgentHarnessService;
+import com.yjjoker.learningagent.harness.service.AgentHarnessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;

@@ -1,8 +1,8 @@
 package com.yjjoker.learningagent.harness.context;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
-import com.yjjoker.learningagent.harness.impl.DatabaseOriginalToolResultStoreImpl;
-import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
+import com.yjjoker.learningagent.harness.context.impl.DatabaseOriginalToolResultStoreImpl;
+import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import org.junit.jupiter.api.DisplayName;

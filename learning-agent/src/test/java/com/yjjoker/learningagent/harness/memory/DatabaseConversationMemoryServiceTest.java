@@ -5,6 +5,7 @@ import com.yjjoker.learningagent.entity.LearningSessionSummary;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.memory.impl.DatabaseConversationMemoryService;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;
@@ -26,7 +27,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import org.mockito.InOrder;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("数据库会话记忆服务测试")

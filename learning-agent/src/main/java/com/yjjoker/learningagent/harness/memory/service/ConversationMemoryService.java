@@ -1,4 +1,4 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.service;
 
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 

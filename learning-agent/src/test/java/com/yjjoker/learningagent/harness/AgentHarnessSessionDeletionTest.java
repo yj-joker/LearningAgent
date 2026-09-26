@@ -1,9 +1,9 @@
 package com.yjjoker.learningagent.harness;
 
 import com.yjjoker.learningagent.entity.LearningSession;
-import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
-import com.yjjoker.learningagent.harness.memory.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.service.AgentHarnessService;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;

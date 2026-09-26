@@ -1,10 +1,11 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.impl;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
 import com.yjjoker.learningagent.entity.LearningSessionSummary;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;

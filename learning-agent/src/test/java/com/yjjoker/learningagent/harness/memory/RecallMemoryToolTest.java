@@ -1,6 +1,8 @@
 package com.yjjoker.learningagent.harness.memory;
 
 import com.yjjoker.learningagent.entity.UserMemory;
+import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
+import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.impl.RecallMemoryTool;
 import org.junit.jupiter.api.Test;

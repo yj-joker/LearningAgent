@@ -1,6 +1,6 @@
 package com.yjjoker.learningagent.harness.tool.impl;
 
-import com.yjjoker.learningagent.harness.impl.InMemoryOriginalToolResultStoreImpl;
+import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

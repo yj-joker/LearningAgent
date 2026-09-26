@@ -1,4 +1,4 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.model;
 
 import lombok.Getter;
 import lombok.NoArgsConstructor;

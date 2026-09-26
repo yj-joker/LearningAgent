@@ -1,10 +1,11 @@
-package com.yjjoker.learningagent.harness.memory;
+package com.yjjoker.learningagent.harness.memory.impl;
 
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.exception.NotFountException;
+import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import com.yjjoker.learningagent.repository.SessionMemoryRepository;
 import com.yjjoker.learningagent.repository.UserMemoryRepository;
 import lombok.AllArgsConstructor;
