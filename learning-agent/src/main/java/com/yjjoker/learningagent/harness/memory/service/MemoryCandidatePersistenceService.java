@@ -27,7 +27,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 // 按本次索引中的引用执行操作；同义目标一起更新或删除，不再猜 memoryKey。
-// TODO 后续为显式写入工具接入审批；本阶段不增加审批或自动过期。
+// 主模型和审批批准都通过这里写入，保证校验、加锁、计数逻辑只有一份。
 // 正常记忆变更在这里计数；批量整理交给独立服务，不混入当前写入事务。
 @Service
 @AllArgsConstructor

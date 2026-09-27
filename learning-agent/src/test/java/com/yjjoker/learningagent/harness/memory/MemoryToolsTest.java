@@ -27,7 +27,8 @@ class MemoryToolsTest {
     private final StructuredMemoryService store = mock(StructuredMemoryService.class);
     private final MemoryCandidatePersistenceService persistence = mock(MemoryCandidatePersistenceService.class);
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
-    private final MemoryToolService service = new MemoryToolService(refs, store, persistence, sessions);
+    private final MemoryApprovalService approvals = mock(MemoryApprovalService.class);
+    private final MemoryToolService service = new MemoryToolService(refs, store, sessions, approvals);
 
     // 用固定用户和活动会话建立服务端请求范围。
     @BeforeEach
@@ -60,16 +61,18 @@ class MemoryToolsTest {
         assertTrue(new ListMemoriesTool(service).isContextScopedTool());
     }
 
-    // 新增范围来自当前请求，成功时保留真实保存服务返回的凭据。
+    // 写工具只创建审批申请，不在用户确认前触碰记忆持久化服务。
     @Test
-    void shouldCreateWithServerOwnedReceipt() {
-        var receipt = new MemoryWriteReceipt(CREATE, USER, USER_ID, List.of(1L), List.of("sport"));
-        when(persistence.persistToolCandidate(any(), any(), any())).thenReturn(receipt);
+    void shouldCreatePendingApproval() {
+        var request = new MemoryApprovalRequest();
+        request.setId(8L);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenReturn(request);
         var result = new CreateMemoryTool(service).execute(createArguments("请记住我喜欢篮球"));
         assertTrue(result.isSuccess());
-        assertSame(receipt, result.memoryWriteReceipt());
-        verify(persistence).persistToolCandidate(argThat(context -> context.getUserId().equals(USER_ID)),
-                eq("请记住我喜欢篮球"), argThat(candidate -> candidate.getOperation() == CREATE));
+        assertNull(result.memoryWriteReceipt());
+        assertTrue(result.getContent().contains("PENDING_APPROVAL"));
+        verify(approvals).create(eq(USER_ID), eq(SESSION_ID), any(), any());
+        verifyNoInteractions(persistence);
     }
 
     // 模型试图添加用户 ID 等越权字段时，不能只依赖 Schema 提示。
@@ -137,56 +140,58 @@ class MemoryToolsTest {
         verifyNoInteractions(persistence);
     }
 
-    // 同义目标可以一次处理，凭据完整保留所有已确认的目标。
+    // 删除同样先进入审批，不因操作类型不同而绕过确认。
     @Test
     void shouldDeleteAliasesTogether() {
         begin("请删除运动偏好");
         String first = refs.registerUserMemory(user(1, "sport", "喜欢篮球"));
         String second = refs.registerUserMemory(user(2, "favoriteSport", "喜欢篮球"));
-        var receipt = new MemoryWriteReceipt(DELETE, USER, USER_ID, List.of(1L, 2L), List.of("sport", "favoriteSport"));
-        when(persistence.persistToolCandidate(any(), any(), any())).thenReturn(receipt);
+        var request = new MemoryApprovalRequest();
+        request.setId(9L);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenReturn(request);
         var result = new DeleteMemoryTool(service).execute(deletion(List.of(first, second)));
         assertTrue(result.isSuccess());
-        assertEquals(2, result.memoryWriteReceipt().getMemoryIds().size());
-        assertNull(refs.resolve(first));
-        assertNull(refs.resolve(second));
+        assertNull(result.memoryWriteReceipt());
+        assertNotNull(refs.resolve(first));
+        assertNotNull(refs.resolve(second));
+        verifyNoInteractions(persistence);
     }
 
-    // 已提交后的索引查询失败，只提示刷新，不能伪报本次写入失败。
+    // 审批申请创建成功后，工具只返回申请编号。
     @Test
-    void shouldKeepReceiptWhenRefreshFailsAfterCommit() {
-        var receipt = new MemoryWriteReceipt(CREATE, USER, USER_ID, List.of(1L), List.of("sport"));
-        when(persistence.persistToolCandidate(any(), any(), any())).thenReturn(receipt);
-        when(store.recallUserMemory(USER_ID, 1L)).thenThrow(new IllegalStateException("刷新失败"));
+    void shouldReturnApprovalId() {
+        var request = new MemoryApprovalRequest();
+        request.setId(10L);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenReturn(request);
         var result = service.write(CREATE, createArguments("请记住我喜欢篮球"));
         assertTrue(result.isSuccess());
-        assertSame(receipt, result.memoryWriteReceipt());
-        assertTrue(result.getContent().contains("refreshRequired"));
+        assertTrue(result.getContent().contains("10"));
+        verifyNoInteractions(persistence);
     }
 
-    // 提交后只刷新写入目标，其他记忆仍保留模型此前看见的版本。
+    // 审批前不会刷新或改变模型已经看到的记忆索引。
     @Test
     void shouldNotRefreshUnrelatedSnapshotsSilently() {
         begin("请修改运动偏好为足球");
         String ref = refs.registerUserMemory(user(1, "sport", "喜欢篮球"));
         String untouched = refs.registerUserMemory(user(2, "nickname", "称呼小林"));
-        when(persistence.persistToolCandidate(any(), any(), any())).thenReturn(
-                new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(1L), List.of("sport")));
-        when(store.recallUserMemory(USER_ID, 1L)).thenReturn(user(1, "sport", "喜欢足球"));
+        var request = new MemoryApprovalRequest();
+        request.setId(11L);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenReturn(request);
         String input = json.writeValueAsString(Map.of("targetMemoryRefs", List.of(ref),
                 "userEvidence", "请修改运动偏好为足球", "memoryTopic", "运动",
                 "memorySummary", "喜欢足球", "memoryContent", "喜欢足球"));
         var result = new UpdateMemoryTool(service).execute(input);
         assertTrue(result.isSuccess());
-        assertTrue(result.getContent().contains("喜欢足球"));
+        assertTrue(result.getContent().contains("PENDING_APPROVAL"));
         assertEquals("称呼小林", refs.toolContext().resolve(untouched).getMemorySummary());
         verify(store, never()).loadUserMemoryIndex(any());
     }
 
-    // 数据库结果不明确时，不给出成功凭据，也不鼓励模型盲目重复操作。
+    // 审批申请保存失败时，不能伪造待审批编号或写入成功。
     @Test
-    void shouldNotIssueReceiptOnDatabaseFailure() {
-        when(persistence.persistToolCandidate(any(), any(), any()))
+    void shouldNotIssueReceiptOnApprovalFailure() {
+        when(approvals.create(anyLong(), anyLong(), any(), any()))
                 .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("数据库故障"));
         var result = service.write(CREATE, createArguments("请记住我喜欢篮球"));
         assertFalse(result.isSuccess());

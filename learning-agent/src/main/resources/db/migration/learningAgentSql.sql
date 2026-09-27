@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS session_memories (
     COMMENT = '学习会话结构化记忆表';
 
 -- 记忆整理进度；已有数据库可单独执行 memoryConsolidation.sql。
-CREATE TABLE IF NOT EXISTS memory_consolidation_state (
+  CREATE TABLE IF NOT EXISTS memory_consolidation_state (
     scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION，两类记忆分别整理',
     owner_id BIGINT UNSIGNED NOT NULL COMMENT '对应的用户 ID 或会话 ID',
     change_count BIGINT NOT NULL DEFAULT 0 COMMENT '初始有效记录数加正常记忆变更次数',
@@ -137,7 +137,32 @@ CREATE TABLE IF NOT EXISTS memory_consolidation_state (
     CONSTRAINT chk_memory_consolidation_scope CHECK (scope IN ('USER', 'SESSION')),
     CONSTRAINT chk_memory_consolidation_counts CHECK (processed_count >= 0 AND change_count >= processed_count)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
-    COMMENT = '记忆整理触发与完成进度';
+      COMMENT = '记忆整理触发与完成进度';
+
+  -- 记忆写入审批申请；先保存候选和快照，用户批准后才修改记忆表。
+  CREATE TABLE IF NOT EXISTS memory_approval_requests (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审批申请主键',
+      user_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属用户',
+      session_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属学习会话',
+      operation VARCHAR(20) NOT NULL COMMENT 'CREATE、UPDATE 或 DELETE',
+      scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION',
+      candidate_json JSON NOT NULL COMMENT '后端校验后的记忆候选',
+      target_snapshot_json JSON NOT NULL COMMENT '申请创建时的 memoryRef 目标快照',
+      status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING、APPROVED 或 REJECTED',
+      decision_reason VARCHAR(500) DEFAULT NULL COMMENT '用户拒绝或审批说明',
+      created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+      updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+      decided_at DATETIME(6) DEFAULT NULL,
+      PRIMARY KEY (id),
+      KEY idx_memory_approval_user_status (user_id, status, created_at),
+      KEY idx_memory_approval_session_status (session_id, status, created_at),
+      CONSTRAINT chk_memory_approval_operation CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
+      CONSTRAINT chk_memory_approval_scope CHECK (scope IN ('USER', 'SESSION')),
+      CONSTRAINT chk_memory_approval_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED'))
+  ) ENGINE = InnoDB
+      DEFAULT CHARSET = utf8mb4
+      COLLATE = utf8mb4_unicode_ci
+      COMMENT = '结构化记忆审批申请';
 
 -- 学习会话消息表
 CREATE TABLE IF NOT EXISTS learning_session_messages (

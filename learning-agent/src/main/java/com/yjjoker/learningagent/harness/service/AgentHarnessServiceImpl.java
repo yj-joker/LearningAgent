@@ -30,7 +30,7 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryIndexSnapshot;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
-import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
@@ -100,8 +100,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 在最终回答生成后提取候选记忆，结果交给后续持久化服务。
     private final MemoryExtractionService memoryExtractionService;
 
-    // 按候选执行新增、更新或软删除，并累计实际变更次数。
-    private final MemoryCandidatePersistenceService memoryCandidatePersistenceService;
+    // 自动提取出的候选也先进入审批，避免后置流程绕过用户确认。
+    private final MemoryApprovalService memoryApprovalService;
 
     // 回答生成后检查整理阈值；整理失败不改变已经生成的回答。
     private final MemoryConsolidationService memoryConsolidationService;
@@ -121,8 +121,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    StructuredMemoryService structuredMemoryService,
                                    MemoryReferenceRegistry memoryReferenceRegistry,
                                    MemoryExtractionService memoryExtractionService,
-                                   MemoryCandidatePersistenceService memoryCandidatePersistenceService,
-                                   MemoryConsolidationService memoryConsolidationService) {
+                                   MemoryConsolidationService memoryConsolidationService,
+                                   MemoryApprovalService memoryApprovalService) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -147,9 +147,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.memoryReferenceRegistry = memoryReferenceRegistry;
         // 记忆提取服务独立于主循环，后续可以替换为规则提取或异步任务。
         this.memoryExtractionService = memoryExtractionService;
-        // 普通记忆变更和批量整理分开提交，整理失败不会撤销用户刚表达的新事实。
-        this.memoryCandidatePersistenceService = memoryCandidatePersistenceService;
         this.memoryConsolidationService = memoryConsolidationService;
+        this.memoryApprovalService = memoryApprovalService;
     }
 
     @Override
@@ -478,12 +477,15 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             List<MemoryCandidate> candidates = memoryExtractionService.extract(
                     extractionContext, userMessage, assistantAnswer
             );
-            // 模型选择引用，数据库归属和主键只从服务端快照读取。
-            memoryCandidatePersistenceService.persist(
-                    extractionContext, userMessage, candidates
-            );
-            // 事务代理正常返回，表示这批候选已经完成数据库提交。
-            log.info("记忆处理返回成功，sessionId={}，candidateCount={}", sessionId, candidates.size());
+            // 自动提取只创建审批申请，不直接写入；用户确认后才进入原有事务写入服务。
+            for (MemoryCandidate candidate : candidates) {
+                var request = memoryApprovalService.create(BaseContext.getCurrentId(), sessionId,
+                        candidate, extractionContext);
+                log.info("自动提取记忆等待审批，sessionId={}，approvalId={}，operation={}，scope={}",
+                        sessionId, request.getId(), candidate.getOperation(), candidate.getScope());
+            }
+            // 没有候选时不创建空审批；有候选时只记录申请数量，不宣称已经写入。
+            log.info("记忆候选处理完成，等待用户审批，sessionId={}，candidateCount={}", sessionId, candidates.size());
         } catch (RuntimeException exception) {
             log.warn("记忆候选提取或持久化失败，不影响本轮回答，sessionId={}，reason={}",
                     sessionId, exception.getMessage());

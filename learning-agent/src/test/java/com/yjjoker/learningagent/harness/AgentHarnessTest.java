@@ -440,7 +440,8 @@ class AgentHarnessTest {
                 List.of(),
                 memoryService,
                 new ActiveLearningSessionRepository(),
-                new ContextManager(2_000, 250),
+                // 审批状态提示会增加少量系统上下文，测试仍只验证恢复流程。
+                new ContextManager(2_200, 250),
                 resultStore
         );
 

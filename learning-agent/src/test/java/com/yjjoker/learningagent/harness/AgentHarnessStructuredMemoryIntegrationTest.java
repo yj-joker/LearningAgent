@@ -17,9 +17,7 @@ import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
 import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.harness.memory.model.MemoryWriteReceipt;
-import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
-import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -52,6 +50,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
 
 class AgentHarnessStructuredMemoryIntegrationTest {
@@ -210,15 +209,15 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         String answer = extractionHarness(client, store, history, consolidation).run(SESSION_ID, "现在最喜欢足球");
 
         assertEquals("了解你的新偏好。", answer);
-        assertEquals("现在最喜欢足球", currentMemory.getMemoryContent());
+        // 自动提取现在只创建审批申请，用户批准前不能改变数据库对象。
+        assertEquals("最喜欢羽毛球", currentMemory.getMemoryContent());
         assertEquals("favoriteSport", currentMemory.getMemoryKey());
-        verify(store).updateUserMemory(currentMemory);
+        verify(store, never()).updateUserMemory(currentMemory);
         verify(store, never()).lockUserMemory(USER_ID, 1L);
         // 先生成回答、再提取和保存记忆，最后才检查整理阈值。
         var order = org.mockito.Mockito.inOrder(client, store, consolidation);
         order.verify(client).generate(anyList());
         order.verify(client).generateWithoutTools(anyList());
-        order.verify(store).updateUserMemory(currentMemory);
         order.verify(consolidation).consolidateIfNeeded(USER_ID, SESSION_ID);
     }
 
@@ -433,11 +432,16 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(repository.findSessionById(SESSION_ID)).thenReturn(Optional.of(session));
         LlmRetryExecutor retry = new LlmRetryExecutor();
+        var approvals = mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenAnswer(invocation -> {
+            var request = new com.yjjoker.learningagent.harness.memory.model.MemoryApprovalRequest();
+            request.setId(1L);
+            return request;
+        });
         return new AgentHarnessServiceImpl(client, new ToolRegistry(tools), hooks, history, repository,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
                 store, references, new LlmMemoryExtractionService(client, retry),
-                new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)),
-                consolidation);
+                consolidation, approvals);
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

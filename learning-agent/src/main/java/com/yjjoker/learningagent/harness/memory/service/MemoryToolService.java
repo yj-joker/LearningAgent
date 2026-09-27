@@ -30,8 +30,8 @@ public class MemoryToolService {
     private static final JsonMapper JSON = new JsonMapper();
     private final MemoryReferenceRegistry references;
     private final StructuredMemoryService store;
-    private final MemoryCandidatePersistenceService persistence;
     private final LearningSessionRepository sessions;
+    private final MemoryApprovalService approvals;
 
     // 根据固定操作生成最小参数结构，不允许模型提供用户 ID 或数据库主键。
     public Map<String, Object> schema(MemoryOperation operation) {
@@ -55,7 +55,7 @@ public class MemoryToolService {
                 "additionalProperties", false);
     }
 
-    // 执行显式写入；正常返回的成功凭据只能在事务提交后交给主循环。
+    // 执行显式写入；本阶段先创建审批申请，不直接修改记忆表。
     public ToolExecutionResult write(MemoryOperation operation, String input) {
         try {
             MemoryExtractionContext context = requireContext();
@@ -68,12 +68,11 @@ public class MemoryToolService {
             }
             MemoryCandidate candidate = parseCandidate(operation, node, context);
             requireExplicitRequest(operation, candidate.getUserEvidence(), references.currentUserMessage());
-            // 共用后端校验，随后保存服务还会加锁检查版本、写入内容并增加整理计数。
-            MemoryWriteReceipt receipt = persistence.persistToolCandidate(context,
-                    references.currentUserMessage(), candidate);
-            log.info("主循环记忆写入已提交，sessionId={}，operation={}，scope={}，targetCount={}",
-                    context.getSessionId(), operation, receipt.getScope(), receipt.getMemoryIds().size());
-            return committedResult(receipt);
+            // 先保存后端已经校验过的候选和目标快照，等待用户明确批准。
+            var request = approvals.create(context.getUserId(), context.getSessionId(), candidate, context);
+            log.info("主循环记忆写入等待审批，sessionId={}，approvalId={}，operation={}，scope={}",
+                    context.getSessionId(), request.getId(), operation, candidate.getScope());
+            return pendingResult(request.getId());
         } catch (SecurityException exception) {
             // 身份或会话权限不满足时，重写工具参数不能解决问题。
             return failure("MEMORY_ACCESS_DENIED", "没有当前用户或会话的记忆操作权限", false);
@@ -88,6 +87,15 @@ public class MemoryToolService {
             log.warn("记忆工具数据库操作失败，operation={}，exceptionType={}", operation, exception.getClass().getSimpleName());
             return failure("MEMORY_WRITE_FAILED", "未能确认记忆写入结果，请查询确认后再处理，不要盲目重试", false);
         }
+    }
+
+    // 返回待审批状态；没有 MemoryWriteReceipt，后置提取不会把它误认为已落库。
+    private ToolExecutionResult pendingResult(Long approvalId) {
+        var output = JSON.createObjectNode();
+        output.put("status", "PENDING_APPROVAL");
+        output.put("approvalId", approvalId);
+        output.put("message", "记忆变更已提交审批，用户确认后才会写入");
+        return ToolExecutionResult.success(output.toString());
     }
 
     // 只返回当前用户和当前会话的索引；完整正文继续使用 recall_memory 按需读取。
