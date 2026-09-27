@@ -165,7 +165,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 给原始工具结果恢复工具设置当前会话范围，后续数据库查询不会跨会话读取。
             originalToolResultStore.beginSession(sessionId);
             // memoryRef 只在本次请求有效，先建立当前用户和会话的映射范围。
-            memoryReferenceRegistry.beginRun(BaseContext.getCurrentId(), sessionId);
+            memoryReferenceRegistry.beginRun(BaseContext.getCurrentId(), sessionId, userMessage);
             // 运行 Agent 循环，得到最终结果
             String answer = runAgentLoop(sessionId, userMessage, context);
             // 标记任务成功
@@ -283,7 +283,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()))
                 );
                 // 提取记忆候选并保存
-                extractMemoryCandidates(sessionId, userMessage, textResponse.content());
+                extractMemoryCandidates(sessionId, userMessage, textResponse.content(), context);
                 // 提取事务已经结束；这里可以重试之前未完成的整理，不持锁调用模型。
                 memoryConsolidationService.consolidateIfNeeded(BaseContext.getCurrentId(), sessionId);
                 return textResponse.content();
@@ -301,9 +301,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 只要包含恢复工具，整组 assistant/tool 消息就不进入未来上下文，避免调用与结果数量不一致。
                 // TODO 下一阶段要求恢复工具独占一轮：Prompt 负责提示，Harness 负责强制校验。
                 // TODO 如果模型混用工具，则不执行本轮任何工具，并为每个 toolCall 返回可重试失败，让模型重新规划。
-                boolean recoveryRound = containsRecoveryTool(toolCalls);
+                boolean recoveryRound = containsRecoveryTool(toolCalls, context);
                 // recoveryRef 和 memoryRef 都只属于当前 AgentLoop，相关工具消息不能进入未来历史。
-                boolean contextReplayable = !recoveryRound && !containsContextScopedTool(toolCalls);
+                boolean contextReplayable = !recoveryRound && !containsContextScopedTool(toolCalls, context);
 
                 // 如果 Hook 直接结束任务，需要用这个位置排除尚未完成的工具消息。
                 int currentToolRoundStartIndex = messages.size();
@@ -313,18 +313,21 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
                 // 一次响应可能要求调用多个工具，所以必须逐个执行并分别添加结果消息。
                 for (ToolCall toolCall : toolCalls) {
+                    // 先登记请求，再记录检查或执行结果；不能等工具成功才留下轨迹。
+                    context.requestToolExecution(toolCall);
                     // 在已经注册的工具中找到对应名称的工具
                     Tool tool = toolRegistry.getRequiredTool(toolCall.name());
+                    context.classifyToolExecution(toolCall, tool.isMemoryWriteTool());
                     boolean recoveryTool = tool.isContextRecoveryTool();
 
                     // 次数限制在工具执行前检查；被拒绝的请求不执行恢复工具和 afterToolExecution Hook。
                     if (recoveryTool && !contextManager.hasRecoveryCallCapacity(completedRecoveryCalls)) {
+                        ToolExecutionResult rejected = recoveryFailure(
+                                "RECOVERY_CALL_LIMIT_EXCEEDED", "本次任务的工具结果恢复次数已达到上限");
+                        context.rejectToolExecution(toolCall, rejected);
                         LlmMessage rejectedRecoveryMessage = createToolResultMessage(
                                 toolCall.id(),
-                                recoveryFailure(
-                                        "RECOVERY_CALL_LIMIT_EXCEEDED",
-                                        "本次任务的工具结果恢复次数已达到上限"
-                                ),
+                                rejected,
                                 false
                         );
                         messages.add(rejectedRecoveryMessage);
@@ -341,6 +344,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
                     // 如果 Hook 不允许LLM调用该工具并且不可重试，则立即返回结果。
                     if (!hookResult.isAllowed()) {
+                        // 拒绝也要留下结果，但不能触发“执行完成”的后置 Hook。
+                        ToolExecutionResult rejectedResult = ToolExecutionResult.failure(
+                                hookResult.getErrorCode(), hookResult.getMessage(), hookResult.isRetryable());
+                        context.rejectToolExecution(toolCall, rejectedResult);
                         if (!hookResult.isRetryable()) {
                             // 当前工具轮没有完成，不保存其 assistant/tool 消息，只保存Hook直接返回的答复。
                             List<LlmMessage> completedMessages = new ArrayList<>(messages.subList(
@@ -354,11 +361,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         // Hook拒绝工具调用并且该工具可以重新调用
                         // 出现可恢复问题时不执行工具，也不执行 afterToolExecution。
                         // 使用原 toolCallId 返回失败结果，让模型知道应该修正哪一次工具调用。
-                        ToolExecutionResult rejectedResult = ToolExecutionResult.failure(
-                                hookResult.getErrorCode(),
-                                hookResult.getMessage(),
-                                true
-                        );
                         LlmMessage rejectedToolMessage = LlmMessage.toolResult(
                                 toolCall.id(),
                                 serializeToolResult(rejectedResult),
@@ -368,21 +370,20 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         continue;
                     }
 
-                    //全部before Hook执行完才记录为已执行；如果未来安全 Hook 拒绝，这里不会运行。
-                    context.recordToolExecution(toolCall.name());
-
                     // 恢复工具先把模型的短引用解析成真实 toolCallId，再执行统一工具逻辑。
                     ToolExecutionResult toolResult;
+                    boolean executed = true;
                     if (recoveryTool) {
                         RecoveryArgumentResolution resolution = resolveRecoveryArguments(
                                 toolCall.arguments(), recoveryReferences
                         );
-                        toolResult = resolution.resolved()
-                                ? executeTool(tool, resolution.arguments())
+                        executed = resolution.resolved();
+                        toolResult = executed
+                                ? executeTool(tool, resolution.arguments(), context, toolCall)
                                 : resolution.failure();
                     } else {
                         // 普通工具仍然直接接收模型生成的参数。
-                        toolResult = executeTool(tool, toolCall.arguments());
+                        toolResult = executeTool(tool, toolCall.arguments(), context, toolCall);
                     }
 
                     if (recoveryTool && toolResult.isSuccess()) {
@@ -404,8 +405,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         }
                     }
 
-                    // 执行全部 afterToolExecution Hook。
-                    notifyAfterToolExecution(context, toolCall, toolResult);
+                    if (executed) {
+                        // 正常返回的成功和业务失败由后置 Hook 记录。
+                        notifyAfterToolExecution(context, toolCall, toolResult);
+                    } else {
+                        // 引用解析失败并没有执行工具，不能误记为工具执行失败。
+                        context.rejectToolExecution(toolCall, toolResult);
+                    }
 
                     // 将工具结果转换为 JSON 字符串
                     String toolResultJson = serializeToolResult(toolResult);
@@ -458,11 +464,17 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 提取失败不能覆盖已经生成的正常回答，因此这里隔离异常并只记录可观测信息。
     private void extractMemoryCandidates(Long sessionId,
                                          String userMessage,
-                                         String assistantAnswer) {
+                                         String assistantAnswer,
+                                         AgentRunContext runContext) {
         try {
+            // 记录缺失时保留主回答，不把“未知是否执行”当成“没有执行过”。
+            if (!runContext.hasCompleteToolHistory()) {
+                log.warn("工具轨迹不完整，跳过本轮记忆提取，runId={}，sessionId={}", runContext.getRunId(), sessionId);
+                return;
+            }
             // 回答完成后重新加载有效索引，提取和保存共用这一份引用快照。
             MemoryExtractionContext extractionContext = new MemoryExtractionContext(
-                    BaseContext.getCurrentId(), sessionId, loadMemoryIndex(sessionId));
+                    BaseContext.getCurrentId(), sessionId, loadMemoryIndex(sessionId), runContext.getToolExecutions());
             List<MemoryCandidate> candidates = memoryExtractionService.extract(
                     extractionContext, userMessage, assistantAnswer
             );
@@ -684,6 +696,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         hook.getClass().getSimpleName(), context.getRunId(), toolCall.name(), exception);
             }
         }
+        // 记录 Hook 缺失或发生故障时，用 Harness 已拿到的真实结果补齐，不靠模型推测。
+        if (!context.hasToolOutcome(toolCall, result)) {
+            context.completeToolExecution(toolCall, result);
+            log.warn("后置 Hook 未记录实际结果，Harness 已补齐工具轨迹，runId={}，toolName={}",
+                    context.getRunId(), toolCall.name());
+        }
     }
 
     // 执行所有后置Hook
@@ -700,8 +718,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 执行工具并返回结果
-    private ToolExecutionResult executeTool(Tool tool, String arguments) {
+    private ToolExecutionResult executeTool(Tool tool, String arguments, AgentRunContext context, ToolCall call) {
         try {
+            // 只有即将调用 execute 才标记为执行；后续系统异常由外层 markFailed 记录。
+            context.startToolExecution(call);
+            context.recordToolExecution(tool.name());
             //执行工具
             ToolExecutionResult result = tool.execute(arguments);
             if (result == null) {
@@ -731,9 +752,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 判断当前 assistant 工具请求中是否包含恢复工具。
-    private boolean containsRecoveryTool(List<ToolCall> toolCalls) {
+    private boolean containsRecoveryTool(List<ToolCall> toolCalls, AgentRunContext context) {
         for (ToolCall toolCall : toolCalls) {
-            if (toolRegistry.getRequiredTool(toolCall.name()).isContextRecoveryTool()) {
+            if (resolveToolForClassification(toolCall, context).isContextRecoveryTool()) {
                 return true;
             }
         }
@@ -741,13 +762,23 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 判断本轮是否调用了依赖当前请求临时引用的工具。
-    private boolean containsContextScopedTool(List<ToolCall> toolCalls) {
+    private boolean containsContextScopedTool(List<ToolCall> toolCalls, AgentRunContext context) {
         for (ToolCall toolCall : toolCalls) {
-            if (toolRegistry.getRequiredTool(toolCall.name()).isContextScopedTool()) {
+            if (resolveToolForClassification(toolCall, context).isContextScopedTool()) {
                 return true;
             }
         }
         return false;
+    }
+
+    // 消息重放策略需要提前查看工具类型；未知工具即使在预扫描阶段失败，也留下未执行的轨迹。
+    private Tool resolveToolForClassification(ToolCall call, AgentRunContext context) {
+        try {
+            return toolRegistry.getRequiredTool(call.name());
+        } catch (RuntimeException exception) {
+            context.requestToolExecution(call);
+            throw exception;
+        }
     }
 
     // 恢复预算失败不是系统异常，模型收到稳定错误码后应停止继续恢复。

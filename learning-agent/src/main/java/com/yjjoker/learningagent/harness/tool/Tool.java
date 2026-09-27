@@ -15,6 +15,11 @@ public interface Tool {
     // 名称负责精确定位工具，说明负责表达工具的用途，两者承担的职责不同。
     String description();
 
+    // 只有新增、修改、删除记忆的工具返回 true；查询和召回工具不能标记为写操作。
+    default boolean isMemoryWriteTool() {
+        return false;
+    }
+
     // 恢复类工具只为当前 Agent Loop 补充临时细节，其调用和结果不会进入未来上下文。
     default boolean isContextRecoveryTool() {
         return false;

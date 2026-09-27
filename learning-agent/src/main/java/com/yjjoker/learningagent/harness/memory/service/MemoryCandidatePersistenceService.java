@@ -8,6 +8,7 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
 import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
+import com.yjjoker.learningagent.harness.memory.model.MemoryWriteReceipt;
 import com.yjjoker.learningagent.projectenum.MemoryStatusEnum;
 import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
 import lombok.AllArgsConstructor;
@@ -34,6 +35,41 @@ import java.util.stream.Collectors;
 public class MemoryCandidatePersistenceService {
     private final StructuredMemoryService structuredMemoryService;
     private final MemoryConsolidationRepository consolidationRepository;
+
+    // 工具入口复用校验、行锁和计数；工具拿到返回值时，Spring 已完成事务提交。
+    @Transactional
+    public MemoryWriteReceipt persistToolCandidate(MemoryExtractionContext context, String userMessage,
+                                                   MemoryCandidate candidate) {
+        // 外部调用本方法已开启事务；复用 persist 时不依赖类内调用再次开启事务。
+        persist(context, userMessage, List.of(candidate));
+        Long ownerId = candidate.getScope() == MemoryScope.USER ? context.getUserId() : context.getSessionId();
+        if (candidate.getOperation() == MemoryOperation.CREATE) {
+            // 在同一事务中取得实际保存的主键，不能用模型生成的 ID 充当凭据。
+            Long id;
+            String key;
+            if (candidate.getScope() == MemoryScope.USER) {
+                UserMemory saved = structuredMemoryService.findActiveUserMemoryByKey(ownerId, candidate.getMemoryKey());
+                if (saved == null) {
+                    throw new IllegalStateException("新增用户记忆后未找到保存结果");
+                }
+                id = saved.getId();
+                key = saved.getMemoryKey();
+            } else {
+                SessionMemory saved = structuredMemoryService.findActiveSessionMemoryByKey(ownerId, candidate.getMemoryKey());
+                if (saved == null) {
+                    throw new IllegalStateException("新增会话记忆后未找到保存结果");
+                }
+                id = saved.getId();
+                key = saved.getMemoryKey();
+            }
+            return new MemoryWriteReceipt(candidate.getOperation(), candidate.getScope(), ownerId, List.of(id), List.of(key));
+        }
+        // 删除后不能查 ACTIVE 正文；使用刚刚加锁校验过的真实目标生成凭据。
+        List<MemoryExtractionTarget> targets = candidate.getTargetMemoryRefs().stream().map(context::resolve).toList();
+        return new MemoryWriteReceipt(candidate.getOperation(), candidate.getScope(), ownerId,
+                targets.stream().map(MemoryExtractionTarget::getMemoryId).toList(),
+                targets.stream().map(MemoryExtractionTarget::getMemoryKey).toList());
+    }
 
     // 先校验整批目标，再统一写入；任何写入失败都回滚整批操作。
     @Transactional

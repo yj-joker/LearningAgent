@@ -6,6 +6,9 @@ import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.harness.memory.model.*;
 import com.yjjoker.learningagent.harness.memory.service.*;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import org.junit.jupiter.api.Test;
 import java.util.List;
 import static com.yjjoker.learningagent.harness.memory.MemoryTestData.*;
@@ -16,6 +19,145 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class MemoryCandidatePersistenceServiceTest {
+    // 直接调用保存入口也不能重复改删已处理的目标，不能只依赖提取阶段检查。
+    @Test
+    void shouldRejectRepeatedTargetBeforeAnyDatabaseAccess() {
+        var first = user(1, "sport", "喜欢足球");
+        var receipt = new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(1L), List.of("sport"));
+        var context = contextWithWrite(receipt, List.of(first), List.of());
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        MemoryConsolidationRepository counts = mock(MemoryConsolidationRepository.class);
+        var service = new MemoryCandidatePersistenceService(store, counts);
+        // UPDATE 和 DELETE 都不能第二次处理同一目标。
+        for (var operation : List.of(UPDATE, DELETE)) {
+            var repeated = candidate(operation, USER, List.of("memory_1"), "喜欢足球", null, "喜欢足球");
+            assertThrows(MemoryExtractionFormatException.class,
+                    () -> service.persist(context, "喜欢足球", List.of(repeated)));
+        }
+        verifyNoInteractions(store, counts);
+    }
+
+    // 删除后原目标已不在最新索引；换成任何新 key 也不能在同一范围重新新增。
+    @Test
+    void shouldRejectAliasRecreationAfterCommittedDelete() {
+        var receipt = new MemoryWriteReceipt(DELETE, USER, USER_ID, List.of(1L), List.of("sport"));
+        var context = contextWithWrite(receipt, List.of(), List.of());
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        MemoryConsolidationRepository counts = mock(MemoryConsolidationRepository.class);
+        var candidate = candidate(CREATE, USER, List.of(), "喜欢篮球", "completelyDifferentAlias", "喜欢篮球");
+        assertThrows(MemoryExtractionFormatException.class,
+                () -> new MemoryCandidatePersistenceService(store, counts).persist(context, "忘记喜欢篮球这件事", List.of(candidate)));
+        verifyNoInteractions(store, counts);
+    }
+
+    // 新增已经完成时，不能再以另一个 key 新增同一范围的事实。
+    @Test
+    void shouldRejectAnotherCreateAfterCommittedCreate() {
+        var receipt = new MemoryWriteReceipt(CREATE, USER, USER_ID, List.of(1L), List.of("sport"));
+        var context = contextWithWrite(receipt, List.of(user(1, "sport", "喜欢篮球")), List.of());
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        var service = new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class));
+        assertThrows(MemoryExtractionFormatException.class, () -> service.persist(context, "喜欢篮球", List.of(
+                candidate(CREATE, USER, List.of(), "喜欢篮球", "sportAlias", "喜欢篮球"))));
+        verifyNoInteractions(store);
+    }
+
+    // 失败、拒绝和只有成功文字的结果都不能成为后置提取绕过限制的理由。
+    @Test
+    void shouldRejectAutomaticWritesAfterUnconfirmedAttempts() {
+        for (String outcome : List.of("FAILED", "REJECTED", "ERROR", "NO_RECEIPT")) {
+            AgentRunContext run = new AgentRunContext();
+            ToolCall call = new ToolCall("write_call", "write_memory", "{}");
+            run.requestToolExecution(call);
+            run.classifyToolExecution(call, true);
+            if (outcome.equals("REJECTED")) {
+                run.rejectToolExecution(call, ToolExecutionResult.failure("DENIED", "禁止修改", false));
+            } else if (outcome.equals("ERROR")) {
+                run.startToolExecution(call);
+                run.markFailed(new IllegalStateException("模拟异常"));
+            } else {
+                run.startToolExecution(call);
+                run.completeToolExecution(call, outcome.equals("NO_RECEIPT")
+                        ? ToolExecutionResult.success("已删除")
+                        : ToolExecutionResult.failure("NOT_FOUND", "没有找到", true));
+            }
+            var context = new MemoryExtractionContext(USER_ID, SESSION_ID,
+                    new MemoryIndexSnapshot(List.of(user(1, "sport", "喜欢足球")), List.of()), run.getToolExecutions());
+            StructuredMemoryService store = mock(StructuredMemoryService.class);
+            var service = new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class));
+            assertThrows(MemoryExtractionFormatException.class, () -> service.persist(context, "删除运动", List.of(
+                    candidate(DELETE, USER, List.of("memory_1"), "删除运动", null, null))), outcome);
+            verifyNoInteractions(store);
+        }
+    }
+
+    // 有凭据的正常写入只保护对应目标；其他已有目标仍可按原有权限和快照规则修改。
+    @Test
+    void shouldAllowUnrelatedExistingTargetsAndOtherScope() {
+        var sport = user(1, "sport", "喜欢足球");
+        var running = user(2, "running", "每周跑步三次");
+        var context = contextWithWrite(new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(1L), List.of("sport")),
+                List.of(sport, running), List.of());
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        when(store.lockUserMemory(USER_ID, 2L)).thenReturn(running);
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(context,
+                "每周跑步五次，今天学 Java", List.of(
+                        candidate(UPDATE, USER, List.of("memory_2"), "每周跑步五次", null, "每周跑步五次"),
+                        candidate(CREATE, SESSION, List.of(), "今天学 Java", "goal", "学习 Java")));
+        verify(store).updateUserMemory(running);
+        verify(store).saveSessionMemory(any());
+        verify(store, never()).lockUserMemory(USER_ID, 1L);
+    }
+
+    // 同一个数字 ID 在两张记忆表中代表不同目标，保护长期记忆不能误伤会话记忆。
+    @Test
+    void shouldKeepTargetProtectionScopedToItsOwnerAndTable() {
+        var sessionGoal = session(1, "goal", "学习 Java");
+        var context = contextWithWrite(new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(1L), List.of("sport")),
+                List.of(user(1, "sport", "喜欢足球")), List.of(sessionGoal));
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        when(store.lockSessionMemory(SESSION_ID, 1L)).thenReturn(sessionGoal);
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(context,
+                "改学网络", List.of(candidate(UPDATE, SESSION, List.of("memory_2"), "改学网络", null, "学习网络")));
+        verify(store).updateSessionMemory(sessionGoal);
+        verify(store, never()).lockUserMemory(anyLong(), anyLong());
+    }
+
+    // 不正确的用户或会话归属在建立输入时就拒绝，不能先把凭据正文发给模型。
+    @Test
+    void shouldRejectForeignReceiptBeforeExtraction() {
+        for (var scope : MemoryScope.values()) {
+            var foreignReceipt = new MemoryWriteReceipt(UPDATE, scope, 999L, List.of(1L), List.of("privateFact"));
+            assertThrows(IllegalStateException.class, () -> contextWithWrite(foreignReceipt, List.of(), List.of()));
+        }
+    }
+
+    // 查询工具如果返回了写入凭据，说明工具声明错误，不能悄悄过滤掉这次写入。
+    @Test
+    void shouldRejectReceiptFromMisclassifiedTool() {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall call = new ToolCall("call_read", "read_memory", "{}");
+        run.requestToolExecution(call);
+        run.classifyToolExecution(call, false);
+        run.startToolExecution(call);
+        run.completeToolExecution(call, ToolExecutionResult.memoryWriteSuccess("已修改",
+                new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(1L), List.of("sport"))));
+        assertThrows(IllegalStateException.class, () -> new MemoryExtractionContext(USER_ID, SESSION_ID,
+                new MemoryIndexSnapshot(List.of(), List.of()), run.getToolExecutions()));
+    }
+
+    // 构造已完成的合成工具调用；测试后置校验，不冒充真实数据库提交。
+    private MemoryExtractionContext contextWithWrite(MemoryWriteReceipt receipt,
+                                                     List<UserMemory> users, List<SessionMemory> sessions) {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall call = new ToolCall("write_call", "write_memory", "{}");
+        run.requestToolExecution(call);
+        run.classifyToolExecution(call, true);
+        run.startToolExecution(call);
+        run.completeToolExecution(call, ToolExecutionResult.memoryWriteSuccess("处理完成", receipt));
+        return new MemoryExtractionContext(USER_ID, SESSION_ID, new MemoryIndexSnapshot(users, sessions), run.getToolExecutions());
+    }
+
     // 新事实仍按 scope 保存到不同的表，不触发更新或删除。
     @Test
     void shouldCreateBothScopes() {

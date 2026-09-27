@@ -5,6 +5,10 @@ import com.yjjoker.learningagent.config.AliyunLlmProperties;
 import com.yjjoker.learningagent.config.MemoryConsolidationProperties;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
+import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import lombok.extern.slf4j.Slf4j;
 import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryConsolidator;
@@ -27,6 +31,115 @@ import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named = "MEMORY_ALIYUN_TEST", matches = "true")
 @Slf4j
 class MemoryTargetAliyunTest {
+    // 已确认删除的旧事实不能被提取回来；模型真实调用，工具凭据和索引使用合成样本。
+    @RepeatedTest(2)
+    void shouldRespectConfirmedMemoryDeletion() {
+        var result = extractor().extract(writeTraceContext(false),
+                "请忘记我喜欢羽毛球的记忆。", "已删除运动偏好。");
+        assertTrue(result.isEmpty(), "已删除的事实不能换 key 重新新增");
+        log.info("真实阿里云写入策略验证通过：已删除事实没有被重复添加");
+    }
+
+    // 写工具被拒绝时，后置提取不能换个入口执行同一请求。
+    @RepeatedTest(2)
+    void shouldNotBypassRejectedMemoryWrite() {
+        var result = extractor().extract(writeTraceContext(true),
+                "请记住我以后希望被叫作小林。", "本轮没有获得记忆写入许可，未保存。");
+        assertTrue(result.isEmpty(), "被拒绝的写入不能通过自动提取补做");
+        log.info("真实阿里云写入策略验证通过：被拒绝的写入没有转为自动候选");
+    }
+
+    // USER 范围已处理的事实被保护，但独立的会话目标仍能新增。
+    @RepeatedTest(2)
+    void shouldKeepSessionFactAfterConfirmedUserWrite() {
+        var result = extractor().extract(writeTraceContext(false),
+                "请忘记我喜欢羽毛球的记忆。另外，仅在本会话记住：本次学习目标是理解 MySQL 事务原子性。",
+                "已删除运动偏好，接下来学习 MySQL 事务原子性。");
+        assertEquals(1, result.size());
+        assertEquals(CREATE, result.getFirst().getOperation());
+        assertEquals(MemoryScope.SESSION, result.getFirst().getScope());
+        assertTrue(result.getFirst().getMemoryContent().contains("原子性"));
+        assertFalse(result.getFirst().getMemoryContent().contains("羽毛球"));
+        log.info("真实阿里云写入策略验证通过：独立会话事实正常提取");
+    }
+
+    // 走真实记录 Hook 构造工具快照；没有真实写工具落库，不把该测试冒充数据库端到端验收。
+    private MemoryExtractionContext writeTraceContext(boolean rejected) {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall call = new ToolCall("synthetic_write", rejected ? "create_memory" : "delete_memory", "{}");
+        run.requestToolExecution(call);
+        run.classifyToolExecution(call, true);
+        if (rejected) {
+            // 拒绝分支没有实际写入，也不能生成成功凭据。
+            run.rejectToolExecution(call, ToolExecutionResult.failure("MEMORY_WRITE_DENIED", "没有写入许可", true));
+        } else {
+            run.startToolExecution(call);
+            new ToolExecutionRecordingHook().afterToolExecution(run, call,
+                    ToolExecutionResult.memoryWriteSuccess("已删除运动偏好",
+                            new MemoryWriteReceipt(DELETE, MemoryScope.USER, USER_ID,
+                                    List.of(1L), List.of("favoriteSport"))));
+        }
+        return new MemoryExtractionContext(USER_ID, SESSION_ID,
+                new MemoryIndexSnapshot(List.of(), List.of()), run.getToolExecutions());
+    }
+
+    // 真实模型看到召回的旧事实时，不能把它当成用户刚提供的新记忆。
+    @RepeatedTest(2)
+    void shouldNotRecreateFactFromRecordedRecall() {
+        var result = extractor().extract(recallTraceContext(false),
+                "我以前最喜欢哪项运动？", "根据记忆，你最喜欢羽毛球。");
+        assertTrue(result.isEmpty(), "读取旧记忆不等于新增记忆");
+        log.info("真实阿里云轨迹验证通过：召回旧事实没有产生新的记忆候选");
+    }
+
+    // 读过记忆不意味着整轮停止提取；用户明确提供的新称呼仍应保留。
+    @RepeatedTest(2)
+    void shouldExtractIndependentFactAfterRecordedRecall() {
+        var result = extractor().extract(recallTraceContext(false),
+                "我以前最喜欢哪项运动？另外，以后请叫我小林。", "你最喜欢羽毛球。好的，小林。");
+        assertOnlyNicknameCreated(result);
+        log.info("真实阿里云轨迹验证通过：仅提取新称呼，不重复保存召回的旧偏好");
+    }
+
+    // 召回被拒绝不能伪装成成功，也不应阻止其他有明确用户依据的新事实。
+    @RepeatedTest(2)
+    void shouldKeepIndependentFactAfterRejectedRecall() {
+        var result = extractor().extract(recallTraceContext(true),
+                "查一下旧记忆。另外，以后请叫我小林。", "本次查询没有执行。好的，小林。");
+        assertOnlyNicknameCreated(result);
+        log.info("真实阿里云轨迹验证通过：拒绝查询未被当成新事实，独立称呼仍可提取");
+    }
+
+    // 构造合成调用记录，经过真实记录 Hook；只测试提取请求，不调用用户数据库。
+    private MemoryExtractionContext recallTraceContext(boolean rejected) {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall call = new ToolCall("synthetic_call", "recall_memory", "{\"memoryRef\":\"memory_1\"}");
+        run.requestToolExecution(call);
+        // 召回属于只读工具，记录保留在后端，但不再转发给提取模型。
+        run.classifyToolExecution(call, false);
+        if (rejected) {
+            // 没有执行时不触发后置 Hook，保持与 Harness 拒绝分支一致。
+            run.rejectToolExecution(call, ToolExecutionResult.failure("INVALID_ARGUMENT", "引用无效", true));
+        } else {
+            run.startToolExecution(call);
+            new ToolExecutionRecordingHook().afterToolExecution(run, call,
+                    ToolExecutionResult.success("用户最喜欢羽毛球"));
+        }
+        return new MemoryExtractionContext(USER_ID, SESSION_ID,
+                new MemoryIndexSnapshot(List.of(user(1, "favoriteSport", "用户最喜欢羽毛球")), List.of()),
+                run.getToolExecutions());
+    }
+
+    // 校验真实模型的语义结果，不能只检查它返回了合法 JSON。
+    private void assertOnlyNicknameCreated(List<MemoryCandidate> result) {
+        assertEquals(1, result.size());
+        assertEquals(CREATE, result.getFirst().getOperation());
+        assertEquals(MemoryScope.USER, result.getFirst().getScope());
+        assertTrue(result.getFirst().getMemoryContent().contains("小林"));
+        assertFalse(result.getFirst().getMemoryContent().contains("羽毛球"));
+        assertTrue(result.getFirst().getTargetMemoryRefs().isEmpty());
+    }
+
     // 不给用户消息指定 key，让真实模型根据旧索引识别两条同义目标。
     @Test
     void shouldIdentifyBothAliasesForUpdate() {
