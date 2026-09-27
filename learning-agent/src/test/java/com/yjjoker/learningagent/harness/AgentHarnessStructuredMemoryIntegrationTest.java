@@ -9,6 +9,8 @@ import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
+import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -194,14 +196,21 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 "memoryTopic":"运动偏好","memorySummary":"最喜欢足球","memoryContent":"现在最喜欢足球"}]}
                 """));
         ConversationMemoryService history = mock(ConversationMemoryService.class);
+        MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
 
-        String answer = extractionHarness(client, store, history).run(SESSION_ID, "现在最喜欢足球");
+        String answer = extractionHarness(client, store, history, consolidation).run(SESSION_ID, "现在最喜欢足球");
 
         assertEquals("了解你的新偏好。", answer);
         assertEquals("现在最喜欢足球", currentMemory.getMemoryContent());
         assertEquals("favoriteSport", currentMemory.getMemoryKey());
         verify(store).updateUserMemory(currentMemory);
         verify(store, never()).lockUserMemory(USER_ID, 1L);
+        // 先生成回答、再提取和保存记忆，最后才检查整理阈值。
+        var order = org.mockito.Mockito.inOrder(client, store, consolidation);
+        order.verify(client).generate(anyList());
+        order.verify(client).generateWithoutTools(anyList());
+        order.verify(store).updateUserMemory(currentMemory);
+        order.verify(consolidation).consolidateIfNeeded(USER_ID, SESSION_ID);
     }
 
     // 引用修复失败时仍返回主模型的回答，不允许错误候选进入数据库。
@@ -230,6 +239,12 @@ class AgentHarnessStructuredMemoryIntegrationTest {
     // 使用生产构造器接入真实提取和保存服务，模型和数据库由测试替代。
     private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
                                                   ConversationMemoryService history) {
+        return extractionHarness(client, store, history, mock(MemoryConsolidationService.class));
+    }
+
+    // 整理依赖由测试传入，便于检查调用顺序，不在生产类中添加测试构造器。
+    private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
+                                                  ConversationMemoryService history, MemoryConsolidationService consolidation) {
         LearningSessionRepository repository = mock(LearningSessionRepository.class);
         LearningSession session = new LearningSession();
         session.setId(SESSION_ID);
@@ -240,7 +255,8 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         return new AgentHarnessServiceImpl(client, new ToolRegistry(List.of()), List.of(), history, repository,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
                 store, new MemoryReferenceRegistry(), new LlmMemoryExtractionService(client, retry),
-                new MemoryCandidatePersistenceService(store));
+                new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)),
+                consolidation);
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

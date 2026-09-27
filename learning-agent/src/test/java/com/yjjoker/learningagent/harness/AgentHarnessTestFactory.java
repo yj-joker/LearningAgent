@@ -10,6 +10,7 @@ import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
@@ -135,7 +136,8 @@ public final class AgentHarnessTestFactory {
                 structuredMemoryService,
                 referenceRegistry,
                 new NoopMemoryExtractionService(),
-                new MemoryCandidatePersistenceService(structuredMemoryService)
+                new MemoryCandidatePersistenceService(structuredMemoryService, mock(MemoryConsolidationRepository.class)),
+                mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService.class)
         );
     }
 

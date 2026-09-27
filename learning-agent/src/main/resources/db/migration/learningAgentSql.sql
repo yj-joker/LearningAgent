@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS session_memories (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话结构化记忆表';
 
+-- 记忆整理进度；已有数据库可单独执行 memoryConsolidation.sql。
+CREATE TABLE IF NOT EXISTS memory_consolidation_state (
+    scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION，两类记忆分别整理',
+    owner_id BIGINT UNSIGNED NOT NULL COMMENT '对应的用户 ID 或会话 ID',
+    change_count BIGINT NOT NULL DEFAULT 0 COMMENT '初始有效记录数加正常记忆变更次数',
+    processed_count BIGINT NOT NULL DEFAULT 0 COMMENT '上次成功整理覆盖的变更次数',
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '进度更新时间，不用于推断事实新旧',
+    PRIMARY KEY (scope, owner_id),
+    CONSTRAINT chk_memory_consolidation_scope CHECK (scope IN ('USER', 'SESSION')),
+    CONSTRAINT chk_memory_consolidation_counts CHECK (processed_count >= 0 AND change_count >= processed_count)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+    COMMENT = '记忆整理触发与完成进度';
+
 -- 学习会话消息表
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',

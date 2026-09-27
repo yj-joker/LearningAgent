@@ -1,5 +1,7 @@
 package com.yjjoker.learningagent.harness.memory;
 
+import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
+
 import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.harness.memory.model.*;
@@ -18,7 +20,7 @@ class MemoryCandidatePersistenceServiceTest {
     @Test
     void shouldCreateBothScopes() {
         StructuredMemoryService store = mock(StructuredMemoryService.class);
-        var service = new MemoryCandidatePersistenceService(store);
+        var service = new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class));
         service.persist(emptyContext(), "喜欢篮球，今天学 Java", List.of(
                 candidate(CREATE, USER, List.of(), "喜欢篮球", "sport", "喜欢篮球"),
                 candidate(CREATE, SESSION, List.of(), "今天学 Java", "goal", "学习 Java")));
@@ -37,7 +39,7 @@ class MemoryCandidatePersistenceServiceTest {
         var snapshot = context(List.of(first, second, running), List.of());
         when(store.lockUserMemory(USER_ID, 1L)).thenReturn(first);
         when(store.lockUserMemory(USER_ID, 2L)).thenReturn(second);
-        new MemoryCandidatePersistenceService(store).persist(snapshot, "现在最喜欢足球", List.of(
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot, "现在最喜欢足球", List.of(
                 candidate(UPDATE, USER, List.of("memory_2", "memory_1"), "最喜欢足球", null, "最喜欢足球")));
         assertEquals("最喜欢足球", first.getMemoryContent());
         assertEquals("最喜欢足球", second.getMemoryContent());
@@ -62,7 +64,7 @@ class MemoryCandidatePersistenceServiceTest {
         var snapshot = context(List.of(first, second, user(3, "running", "每周跑步三次")), List.of());
         when(store.lockUserMemory(USER_ID, 1L)).thenReturn(first);
         when(store.lockUserMemory(USER_ID, 2L)).thenReturn(second);
-        new MemoryCandidatePersistenceService(store).persist(snapshot, "忘记最喜欢的运动", List.of(
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot, "忘记最喜欢的运动", List.of(
                 candidate(DELETE, USER, List.of("memory_1", "memory_2"), "忘记最喜欢的运动", null, null)));
         verify(store).deleteUserMemory(USER_ID, 1L);
         verify(store).deleteUserMemory(USER_ID, 2L);
@@ -78,7 +80,7 @@ class MemoryCandidatePersistenceServiceTest {
         SessionMemory second = session(2, "currentGoal", "学习 Java");
         when(store.lockSessionMemory(SESSION_ID, 1L)).thenReturn(first);
         when(store.lockSessionMemory(SESSION_ID, 2L)).thenReturn(second);
-        var service = new MemoryCandidatePersistenceService(store);
+        var service = new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class));
         service.persist(context(List.of(), List.of(first, second)), "改学网络", List.of(
                 candidate(UPDATE, SESSION, List.of("memory_1", "memory_2"), "改学网络", null, "学习网络")));
         assertEquals("学习网络", first.getMemoryContent());
@@ -97,7 +99,7 @@ class MemoryCandidatePersistenceServiceTest {
         UserMemory first = user(1, "sport", "最喜欢羽毛球");
         var snapshot = context(List.of(first, user(2, "alias", "最喜欢羽毛球")), List.of());
         when(store.lockUserMemory(USER_ID, 1L)).thenReturn(first);
-        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store).persist(snapshot,
+        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot,
                 "最喜欢足球", List.of(candidate(UPDATE, USER, List.of("memory_1", "memory_2"), "最喜欢足球", null, "足球"))));
         verify(store, never()).updateUserMemory(any());
         assertEquals("最喜欢羽毛球", first.getMemoryContent());
@@ -111,7 +113,7 @@ class MemoryCandidatePersistenceServiceTest {
         var snapshot = context(List.of(memory), List.of());
         memory.setMemorySummary("喜欢游泳");
         when(store.lockUserMemory(USER_ID, 1L)).thenReturn(memory);
-        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store).persist(snapshot,
+        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot,
                 "删除运动", List.of(candidate(DELETE, USER, List.of("memory_1"), "删除运动", null, null))));
         verify(store, never()).deleteUserMemory(anyLong(), anyLong());
     }
@@ -124,7 +126,7 @@ class MemoryCandidatePersistenceServiceTest {
         UserMemory wrongOwner = user(1, "sport", "篮球");
         wrongOwner.setUserId(999L);
         when(store.lockUserMemory(USER_ID, 1L)).thenReturn(wrongOwner);
-        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store).persist(snapshot,
+        assertThrows(RuntimeException.class, () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot,
                 "忘记", List.of(candidate(DELETE, USER, List.of("memory_1"), "忘记", null, null))));
         verify(store, never()).deleteUserMemory(anyLong(), anyLong());
     }
@@ -144,7 +146,7 @@ class MemoryCandidatePersistenceServiceTest {
     @Test
     void shouldRejectUngroundedCandidateAtPersistenceBoundary() {
         StructuredMemoryService store = mock(StructuredMemoryService.class);
-        assertThrows(MemoryExtractionFormatException.class, () -> new MemoryCandidatePersistenceService(store).persist(
+        assertThrows(MemoryExtractionFormatException.class, () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(
                 emptyContext(), "你好", List.of(candidate(CREATE, USER, List.of(), "喜欢篮球", "sport", "篮球"))));
         verifyNoInteractions(store);
     }
@@ -156,7 +158,7 @@ class MemoryCandidatePersistenceServiceTest {
         var snapshot = context(List.of(user(1, "sport", "篮球")), List.of());
         var change = candidate(DELETE, USER, List.of("memory_1"), "忘记", null, null);
         assertThrows(MemoryExtractionFormatException.class,
-                () -> new MemoryCandidatePersistenceService(store).persist(snapshot, "忘记", List.of(change, change)));
+                () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(snapshot, "忘记", List.of(change, change)));
         verifyNoInteractions(store);
     }
 
@@ -165,7 +167,7 @@ class MemoryCandidatePersistenceServiceTest {
     void shouldRejectDuplicateCreatesInOneBatch() {
         StructuredMemoryService store = mock(StructuredMemoryService.class);
         var create = candidate(CREATE, USER, List.of(), "篮球", "sport", "篮球");
-        assertThrows(MemoryExtractionFormatException.class, () -> new MemoryCandidatePersistenceService(store).persist(
+        assertThrows(MemoryExtractionFormatException.class, () -> new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(
                 emptyContext(), "篮球", List.of(create, create)));
         verifyNoInteractions(store);
     }
@@ -174,7 +176,7 @@ class MemoryCandidatePersistenceServiceTest {
     @Test
     void shouldSkipEmptyCandidates() {
         StructuredMemoryService store = mock(StructuredMemoryService.class);
-        new MemoryCandidatePersistenceService(store).persist(emptyContext(), "你好", List.of());
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(emptyContext(), "你好", List.of());
         verifyNoInteractions(store);
     }
 
@@ -185,7 +187,7 @@ class MemoryCandidatePersistenceServiceTest {
         UserMemory memory = user(1, "sport", "篮球");
         memory.setMemoryTopic("用户事实");
         when(store.findActiveUserMemoryByKey(USER_ID, "sport")).thenReturn(memory);
-        new MemoryCandidatePersistenceService(store).persist(emptyContext(), "篮球", List.of(
+        new MemoryCandidatePersistenceService(store, mock(MemoryConsolidationRepository.class)).persist(emptyContext(), "篮球", List.of(
                 candidate(CREATE, USER, List.of(), "篮球", "sport", "篮球")));
         verify(store, never()).saveUserMemory(any());
         verify(store, never()).updateUserMemory(any());

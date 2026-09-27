@@ -104,6 +104,16 @@ harness:
       retry:
         # 记忆提取格式错误时最多请求两次，次数包含第一次请求。
         max-attempts: ${HARNESS_MEMORY_EXTRACTION_MAX_ATTEMPTS:2}
+    consolidation:
+      # 控制回答生成后的同步整理；开启后，达到阈值的请求会多等待一次整理。
+      enabled: ${HARNESS_MEMORY_CONSOLIDATION_ENABLED:true}
+      # 两类记忆分别累计实际变更；首次把已有有效记录数纳入计数。
+      change-threshold: ${HARNESS_MEMORY_CONSOLIDATION_THRESHOLD:20}
+      # 本阶段超出上限就保留原记录和进度，不截断正文后做合并。
+      max-memories: ${HARNESS_MEMORY_CONSOLIDATION_MAX_MEMORIES:100}
+      max-input-characters: ${HARNESS_MEMORY_CONSOLIDATION_MAX_INPUT_CHARACTERS:40000}
+      # 整理输出格式或引用有误时最多请求两次，网络重试复用上面的配置。
+      max-attempts: ${HARNESS_MEMORY_CONSOLIDATION_MAX_ATTEMPTS:2}
 milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}

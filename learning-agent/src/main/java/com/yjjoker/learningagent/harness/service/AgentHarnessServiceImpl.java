@@ -31,6 +31,7 @@ import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
@@ -99,8 +100,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 在最终回答生成后提取候选记忆，结果交给后续持久化服务。
     private final MemoryExtractionService memoryExtractionService;
 
-    // 把候选按 USER/SESSION 作用域新增到对应记忆表，暂不做更新和去重。
+    // 按候选执行新增、更新或软删除，并累计实际变更次数。
     private final MemoryCandidatePersistenceService memoryCandidatePersistenceService;
+
+    // 回答生成后检查整理阈值；整理失败不改变已经生成的回答。
+    private final MemoryConsolidationService memoryConsolidationService;
 
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
@@ -117,7 +121,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    StructuredMemoryService structuredMemoryService,
                                    MemoryReferenceRegistry memoryReferenceRegistry,
                                    MemoryExtractionService memoryExtractionService,
-                                   MemoryCandidatePersistenceService memoryCandidatePersistenceService) {
+                                   MemoryCandidatePersistenceService memoryCandidatePersistenceService,
+                                   MemoryConsolidationService memoryConsolidationService) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -142,8 +147,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.memoryReferenceRegistry = memoryReferenceRegistry;
         // 记忆提取服务独立于主循环，后续可以替换为规则提取或异步任务。
         this.memoryExtractionService = memoryExtractionService;
-        // 持久化服务只负责新增，更新和去重留给后续阶段。
+        // 普通记忆变更和批量整理分开提交，整理失败不会撤销用户刚表达的新事实。
         this.memoryCandidatePersistenceService = memoryCandidatePersistenceService;
+        this.memoryConsolidationService = memoryConsolidationService;
     }
 
     @Override
@@ -278,6 +284,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 );
                 // 提取记忆候选并保存
                 extractMemoryCandidates(sessionId, userMessage, textResponse.content());
+                // 提取事务已经结束；这里可以重试之前未完成的整理，不持锁调用模型。
+                memoryConsolidationService.consolidateIfNeeded(BaseContext.getCurrentId(), sessionId);
                 return textResponse.content();
             }
 

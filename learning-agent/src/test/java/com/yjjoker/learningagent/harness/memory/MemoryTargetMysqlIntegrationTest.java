@@ -1,9 +1,17 @@
 package com.yjjoker.learningagent.harness.memory;
 
 import com.yjjoker.learningagent.entity.UserMemory;
+import com.yjjoker.learningagent.config.MemoryConsolidationProperties;
+import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
+import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryConsolidator;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidator;
+import lombok.extern.slf4j.Slf4j;
 import com.yjjoker.learningagent.harness.memory.impl.DatabaseStructuredMemoryService;
 import com.yjjoker.learningagent.harness.memory.model.*;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationPersistenceService;
+import com.yjjoker.learningagent.repository.MemoryConsolidationRepository;
 import com.yjjoker.learningagent.repository.UserMemoryRepository;
 import com.yjjoker.learningagent.repository.SessionMemoryRepository;
 import org.junit.jupiter.api.*;
@@ -29,11 +37,13 @@ import static org.mockito.ArgumentMatchers.argThat;
 
 // 显式开启才连接 MySQL；所有写入只作用于当前连接的临时表。
 @EnabledIfEnvironmentVariable(named = "MEMORY_MYSQL_TEST", matches = "true")
+@Slf4j
 class MemoryTargetMysqlIntegrationTest {
     private Connection connection;
     private SingleConnectionDataSource dataSource;
     private UserMemoryRepository users;
     private SessionMemoryRepository sessions;
+    private MemoryConsolidationRepository progress;
     private DatabaseStructuredMemoryService store;
     private MemoryCandidatePersistenceService persistence;
 
@@ -45,6 +55,10 @@ class MemoryTargetMysqlIntegrationTest {
         connection = DriverManager.getConnection(url, env("MYSQL_USER", "root"), System.getenv("MYSQL_PASSWORD"));
         dataSource = new SingleConnectionDataSource(connection, true);
         try (Statement statement = connection.createStatement()) {
+            // 进度表同样使用连接级临时表，验证迁移 SQL 而不修改真实进度。
+            String progressDdl = new org.springframework.core.io.ClassPathResource("db/migration/memoryConsolidation.sql")
+                    .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+            statement.execute(progressDdl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE"));
             // 两个临时表使用与 Repository 相同的字段，不复制真实业务数据。
             for (String table : List.of("user_memories", "session_memories")) {
                 String ownerColumn = table.equals("user_memories") ? "user_id" : "session_id";
@@ -58,12 +72,14 @@ class MemoryTargetMysqlIntegrationTest {
         var configuration = new org.apache.ibatis.session.Configuration();
         configuration.addMapper(UserMemoryRepository.class);
         configuration.addMapper(SessionMemoryRepository.class);
+        configuration.addMapper(MemoryConsolidationRepository.class);
         SqlSessionFactoryBean factory = new SqlSessionFactoryBean();
         factory.setDataSource(dataSource);
         factory.setConfiguration(configuration);
         SqlSessionTemplate template = new SqlSessionTemplate(factory.getObject());
         users = template.getMapper(UserMemoryRepository.class);
         sessions = template.getMapper(SessionMemoryRepository.class);
+        progress = template.getMapper(MemoryConsolidationRepository.class);
         store = new DatabaseStructuredMemoryService(users, sessions);
         persistence = transactionalService(store);
         // 第三条记录与最喜欢的运动无关，用来检查是否误改。
@@ -146,11 +162,212 @@ class MemoryTargetMysqlIntegrationTest {
 
     // 用 Spring 实际事务拦截器执行 @Transactional，验证提交和回滚。
     private MemoryCandidatePersistenceService transactionalService(DatabaseStructuredMemoryService targetStore) {
-        ProxyFactory proxy = new ProxyFactory(new MemoryCandidatePersistenceService(targetStore));
+        ProxyFactory proxy = new ProxyFactory(new MemoryCandidatePersistenceService(targetStore, progress));
         proxy.setProxyTargetClass(true);
         proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource),
                 new AnnotationTransactionAttributeSource()));
         return (MemoryCandidatePersistenceService) proxy.getProxy();
+    }
+
+    // 真实合并后只少一条有效记录，原行保留，整理计数也随同提交。
+    @Test
+    void shouldCommitConsolidationAndProgressTogether() {
+        progress.initialize(USER, USER_ID, 20);
+        var snapshot = consolidationSnapshot();
+        assertTrue(consolidationWriter(store).persist(snapshot, consolidationPlan()));
+        assertEquals("最喜欢羽毛球", users.findActiveById(USER_ID, 1L).getMemoryContent());
+        assertNull(users.findActiveById(USER_ID, 2L));
+        assertEquals("每周跑步三次", users.findActiveById(USER_ID, 3L).getMemoryContent());
+        assertEquals(3, countRows());
+        assertEquals(20, progress.find(USER, USER_ID).getProcessedCount());
+        assertEquals(20, progress.find(USER, USER_ID).getChangeCount());
+    }
+
+    // 更新成功但删除失败时，正文、删除状态和进度必须一起回滚。
+    @Test
+    void shouldRollbackConsolidationWhenDeleteFails() {
+        progress.initialize(USER, USER_ID, 20);
+        var snapshot = consolidationSnapshot();
+        var failingStore = spy(store);
+        doThrow(new IllegalStateException("模拟软删除失败")).when(failingStore).deleteUserMemory(USER_ID, 2L);
+        var plan = consolidationPlan();
+        plan.getMerges().getFirst().setMemoryContent("这个修改必须被事务回滚");
+        assertThrows(IllegalStateException.class, () -> consolidationWriter(failingStore).persist(snapshot, plan));
+        assertEquals("最喜欢羽毛球", users.findActiveById(USER_ID, 1L).getMemoryContent());
+        assertNotNull(users.findActiveById(USER_ID, 2L));
+        assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
+    }
+
+    // 正常提取实际改了两条记录，应累计两次而不是按一个候选计数。
+    @Test
+    void shouldPersistNormalChangeCountAndKeepInitializationIdempotent() {
+        progress.initialize(USER, USER_ID, 3);
+        var context = snapshot();
+        persistence.persist(context, "改成足球", List.of(candidate(UPDATE, USER,
+                refsByIds(context, 1L, 2L), "改成足球", null, "最喜欢足球")));
+        assertEquals(5, progress.find(USER, USER_ID).getChangeCount());
+        progress.initialize(USER, USER_ID, 999);
+        assertEquals(5, progress.find(USER, USER_ID).getChangeCount());
+    }
+
+    // 进度更新失败时，正常记忆修改也不能留下半批结果。
+    @Test
+    void shouldRollbackNormalChangesWhenProgressWriteFails() {
+        progress.initialize(USER, USER_ID, 3);
+        var failingProgress = spy(progress);
+        doThrow(new IllegalStateException("模拟进度写入失败")).when(failingProgress).addChanges(USER, USER_ID, 2);
+        ProxyFactory proxy = new ProxyFactory(new MemoryCandidatePersistenceService(store, failingProgress));
+        proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource), new AnnotationTransactionAttributeSource()));
+        var service = (MemoryCandidatePersistenceService) proxy.getProxy();
+        var context = snapshot();
+        assertThrows(IllegalStateException.class, () -> service.persist(context, "改成足球", List.of(
+                candidate(UPDATE, USER, refsByIds(context, 1L, 2L), "改成足球", null, "最喜欢足球"))));
+        assertEquals("最喜欢羽毛球", users.findActiveById(USER_ID, 1L).getMemoryContent());
+        assertEquals("最喜欢羽毛球", users.findActiveById(USER_ID, 2L).getMemoryContent());
+        assertEquals(3, progress.find(USER, USER_ID).getChangeCount());
+    }
+
+    // 新事实已经提交后，旧整理快照必须失败，不能把足球覆盖回羽毛球。
+    @Test
+    void shouldRejectStaleSnapshotAndPreserveLatestCommittedFact() {
+        progress.initialize(USER, USER_ID, 20);
+        var oldSnapshot = consolidationSnapshot();
+        var changed = store.recallUserMemory(USER_ID, 2L);
+        changed.setMemoryContent("现在最喜欢足球");
+        store.updateUserMemory(changed);
+        progress.addChanges(USER, USER_ID, 1);
+        assertThrows(IllegalStateException.class, () -> consolidationWriter(store).persist(oldSnapshot, consolidationPlan()));
+        assertEquals("现在最喜欢足球", users.findActiveById(USER_ID, 2L).getMemoryContent());
+        assertEquals(21, progress.find(USER, USER_ID).getChangeCount());
+        assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
+    }
+
+    // 没有合并项时也要阻止同一轮重复提交，不能只依靠正文是否变化。
+    @Test
+    void shouldRejectDuplicateCompletedInspection() {
+        progress.initialize(USER, USER_ID, 20);
+        var snapshot = consolidationSnapshot();
+        var writer = consolidationWriter(store);
+        assertTrue(writer.persist(snapshot, new MemoryConsolidationPlan()));
+        assertFalse(writer.persist(snapshot, new MemoryConsolidationPlan()));
+        assertEquals(20, progress.find(USER, USER_ID).getProcessedCount());
+        assertEquals(3, store.loadUserMemoryIndex(USER_ID).size());
+    }
+
+    // 使用真实条件 SQL，确认不能把期间新发生的变更一并标成已整理。
+    @Test
+    void shouldRejectOutdatedConditionalProgressUpdate() {
+        progress.initialize(USER, USER_ID, 20);
+        progress.addChanges(USER, USER_ID, 1);
+        assertEquals(0, progress.markProcessed(USER, USER_ID, 20, 0));
+        assertEquals(21, progress.find(USER, USER_ID).getChangeCount());
+        assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
+    }
+
+    // 注入最后一步更新零行，确认已执行的合并和软删除全部回滚。
+    @Test
+    void shouldRollbackMergeWhenProgressUpdateAffectsNoRow() {
+        progress.initialize(USER, USER_ID, 20);
+        var failingProgress = spy(progress);
+        doReturn(0).when(failingProgress).markProcessed(USER, USER_ID, 20, 0);
+        ProxyFactory proxy = new ProxyFactory(new MemoryConsolidationPersistenceService(store, failingProgress));
+        proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource), new AnnotationTransactionAttributeSource()));
+        var writer = (MemoryConsolidationPersistenceService) proxy.getProxy();
+        var snapshot = consolidationSnapshot();
+        var plan = consolidationPlan();
+        plan.getMerges().getFirst().setMemoryContent("这次写入必须回滚");
+        assertThrows(IllegalStateException.class, () -> writer.persist(snapshot, plan));
+        assertEquals("最喜欢羽毛球", users.findActiveById(USER_ID, 1L).getMemoryContent());
+        assertNotNull(users.findActiveById(USER_ID, 2L));
+        assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
+    }
+
+    // 真实模型方案经过阈值判断、事务保存与再次召回，数据只落在临时表。
+    @Test
+    @EnabledIfEnvironmentVariable(named = "MEMORY_ALIYUN_TEST", matches = "true")
+    void shouldPersistRealAliyunPlanAndRecallMergedDetails() {
+        var first = store.recallUserMemory(USER_ID, 1L);
+        first.setMemoryContent("用户最喜欢羽毛球，每周六去体育馆打球。");
+        store.updateUserMemory(first);
+        var second = store.recallUserMemory(USER_ID, 2L);
+        second.setMemoryContent("用户最喜欢的运动是羽毛球，通常和同事一起打球。");
+        store.updateUserMemory(second);
+        progress.initialize(USER, USER_ID, 20);
+        progress.initialize(SESSION, SESSION_ID, 0);
+        var properties = new MemoryConsolidationProperties();
+        MemoryConsolidator model = spy(new LlmMemoryConsolidator(MemoryTargetAliyunTest.client(), new LlmRetryExecutor(), properties));
+        var coordinator = new MemoryConsolidationService(properties, progress, store, model, consolidationWriter(store));
+        coordinator.consolidateIfNeeded(USER_ID, SESSION_ID);
+
+        // 不假定模型一定保留哪条 ID，但保留项必须来自原来的两个来源。
+        var index = store.loadUserMemoryIndex(USER_ID);
+        assertEquals(2, index.size());
+        var kept = index.stream().filter(memory -> memory.getId() != 3L).findFirst().orElseThrow();
+        String content = store.recallUserMemory(USER_ID, kept.getId()).getMemoryContent();
+        for (String detail : List.of("羽毛球", "周六", "体育馆", "同事")) {
+            assertTrue(content.contains(detail), "召回正文应保留：" + detail);
+        }
+        assertEquals(kept.getId() == 1L ? "favoriteSport" : "userFavoriteSport", kept.getMemoryKey());
+        long removedId = kept.getId() == 1L ? 2L : 1L;
+        assertNull(users.findActiveById(USER_ID, removedId));
+        assertThrows(com.yjjoker.learningagent.exception.NotFountException.class,
+                () -> store.recallUserMemory(USER_ID, removedId));
+        assertEquals("每周跑步三次", users.findActiveById(USER_ID, 3L).getMemoryContent());
+        assertEquals(3, countRows());
+        assertEquals(20, progress.find(USER, USER_ID).getProcessedCount());
+        // 完成后再次检查不应立即重复调用模型。
+        coordinator.consolidateIfNeeded(USER_ID, SESSION_ID);
+        verify(model, times(1)).consolidate(any());
+        log.info("真实模型与 MySQL 集成通过，activeCount={}，keptId={}，deletedId={}，processedCount=20",
+                index.size(), kept.getId(), removedId);
+    }
+
+    // 真实模型生成后注入另一个已提交的新事实，检查保存入口拒绝旧依据。
+    @Test
+    @EnabledIfEnvironmentVariable(named = "MEMORY_ALIYUN_TEST", matches = "true")
+    void shouldRejectRealAliyunPlanWhenMemoryChangesBeforeSave() {
+        progress.initialize(USER, USER_ID, 20);
+        var snapshot = consolidationSnapshot();
+        var model = new LlmMemoryConsolidator(MemoryTargetAliyunTest.client(), new LlmRetryExecutor(), new MemoryConsolidationProperties());
+        var plan = model.consolidate(snapshot);
+        assertEquals(1, plan.getMerges().size(), "模型应识别两条羽毛球同义记忆");
+        var changed = store.recallUserMemory(USER_ID, 2L);
+        changed.setMemoryContent("现在最喜欢足球");
+        store.updateUserMemory(changed);
+        progress.addChanges(USER, USER_ID, 1);
+        assertThrows(IllegalStateException.class, () -> consolidationWriter(store).persist(snapshot, plan));
+        assertEquals("现在最喜欢足球", users.findActiveById(USER_ID, 2L).getMemoryContent());
+        assertEquals(3, store.loadUserMemoryIndex(USER_ID).size());
+        assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
+        log.info("真实模型与 MySQL 旧快照校验通过：新事实保留，旧合并方案未提交");
+    }
+
+    // 创建真实事务代理，模型生成步骤不进入这个事务。
+    private MemoryConsolidationPersistenceService consolidationWriter(DatabaseStructuredMemoryService targetStore) {
+        ProxyFactory proxy = new ProxyFactory(new MemoryConsolidationPersistenceService(targetStore, progress));
+        proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource), new AnnotationTransactionAttributeSource()));
+        return (MemoryConsolidationPersistenceService) proxy.getProxy();
+    }
+
+    // 从临时表读取完整快照，不使用测试实体中尚未保存的时间戳。
+    private MemoryConsolidationSnapshot consolidationSnapshot() {
+        var entries = List.of(1L, 2L, 3L).stream().map(id -> {
+            var memory = store.recallUserMemory(USER_ID, id);
+            return new MemoryConsolidationEntry("memory_" + id, id, memory.getMemoryKey(), memory.getMemoryTopic(),
+                    memory.getMemorySummary(), memory.getMemoryContent(), memory.getUpdatedAt());
+        }).toList();
+        return new MemoryConsolidationSnapshot(progress.find(USER, USER_ID), entries);
+    }
+
+    // 只合并同义的运动偏好，保留跑步次数这条独立事实。
+    private MemoryConsolidationPlan consolidationPlan() {
+        var plan = MemoryConsolidationTest.mergePlan();
+        plan.getMerges().getFirst().setMemoryContent("最喜欢羽毛球");
+        plan.getMerges().getFirst().setMemorySummary("最喜欢羽毛球");
+        return plan;
     }
 
     // 每次操作前从数据库读取最新索引并重新建立映射。
