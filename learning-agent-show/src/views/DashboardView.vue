@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   ArrowRight,
@@ -21,6 +21,8 @@ import { useAuth } from '@/composables/useAuth'
 const { activities, recentActivities, courseCount, activeSessionCount } = useActivity()
 const { currentUser } = useAuth()
 const completionCount = computed(() => activities.value.filter((item) => item.kind === 'session-completed').length)
+const dashboardRoot = ref<HTMLElement | null>(null)
+let revealObserver: IntersectionObserver | null = null
 const displayName = computed(() => {
   const name = currentUser.value?.username || '学习者'
   return name.length > 18 ? `${name.slice(0, 18)}…` : name
@@ -34,10 +36,30 @@ function formatTime(value: string) {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
   return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date)
 }
+
+onMounted(() => {
+  const root = dashboardRoot.value
+  if (!root) return
+  const sections = Array.from(root.children)
+  if (!('IntersectionObserver' in window)) {
+    sections.forEach((section) => section.classList.add('is-revealed'))
+    return
+  }
+  revealObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return
+      entry.target.classList.add('is-revealed')
+      revealObserver?.unobserve(entry.target)
+    })
+  }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' })
+  sections.forEach((section) => revealObserver?.observe(section))
+})
+
+onBeforeUnmount(() => revealObserver?.disconnect())
 </script>
 
 <template>
-  <div class="dashboard-view">
+  <div ref="dashboardRoot" class="dashboard-view">
     <section class="workspace-summary">
       <div>
         <span class="section-kicker">今日学习</span>

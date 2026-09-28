@@ -8,6 +8,7 @@ import AppToast from '@/components/AppToast.vue'
 import AdminLayout from '@/components/admin/AdminLayout.vue'
 
 const sidebarOpen = ref(false)
+const sidebarCollapsed = ref(false)
 const route = useRoute()
 const isAuthPage = computed(() => route.name === 'login' || route.name === 'register' || route.name === 'admin-login')
 const isAdminPage = computed(() => route.path.startsWith('/admin'))
@@ -24,8 +25,13 @@ const isAdminPage = computed(() => route.path.startsWith('/admin'))
     </AdminLayout>
     <AppToast />
   </div>
-  <div v-else class="app-shell">
-    <AppSidebar :open="sidebarOpen" @close="sidebarOpen = false" />
+  <div v-else class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+    <AppSidebar
+      :open="sidebarOpen"
+      :collapsed="sidebarCollapsed"
+      @close="sidebarOpen = false"
+      @toggle-collapse="sidebarCollapsed = !sidebarCollapsed"
+    />
     <div class="app-main">
       <AppHeader @open-menu="sidebarOpen = true" />
       <main class="page-container">
