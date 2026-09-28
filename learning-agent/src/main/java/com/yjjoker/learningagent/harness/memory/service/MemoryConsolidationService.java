@@ -25,6 +25,7 @@ public class MemoryConsolidationService {
     private final StructuredMemoryService memoryService;
     private final MemoryConsolidator consolidator;
     private final MemoryConsolidationPersistenceService persistenceService;
+    private final MemoryConsolidationApprovalService approvals;
 
     // 用户和会话分别检查阈值，一类整理失败不阻止另一类，也不影响最终回答。
     public void consolidateIfNeeded(Long userId, Long sessionId) {
@@ -34,7 +35,7 @@ public class MemoryConsolidationService {
         for (MemoryScope scope : MemoryScope.values()) {
             Long ownerId = scope == MemoryScope.USER ? userId : sessionId;
             try {
-                consolidateScope(scope, ownerId);
+                consolidateScope(userId, sessionId, scope);
             } catch (RuntimeException exception) {
                 // 失败不清计数，下次仍可尝试；不输出异常中可能携带的业务正文。
                 log.warn("记忆整理未完成，保留待整理进度，scope={}，ownerId={}，errorType={}",
@@ -44,7 +45,15 @@ public class MemoryConsolidationService {
     }
 
     // 判断一个范围是否达到阈值，再读取完整快照并请求模型。
-    private void consolidateScope(MemoryScope scope, Long ownerId) {
+    public void consolidateScope(Long userId, Long sessionId, MemoryScope scope) {
+        // 调度器按范围调用此入口，也必须遵守停用开关。
+        if (!properties.isEnabled()) {
+            return;
+        }
+        if (userId == null || userId <= 0 || sessionId == null || sessionId <= 0 || scope == null) {
+            throw new IllegalArgumentException("整理任务缺少有效归属");
+        }
+        Long ownerId = scope == MemoryScope.USER ? userId : sessionId;
         if (ownerId == null || ownerId <= 0) {
             throw new IllegalArgumentException("记忆整理归属 ID 必须大于零");
         }
@@ -65,6 +74,11 @@ public class MemoryConsolidationService {
                     scope, ownerId, pending, properties.getChangeThreshold());
             return;
         }
+        // 相同版本被拒绝或已有申请时不再生成；不能用内存状态替代数据库中的审批决定。
+        if (approvals.hasProposal(state)) {
+            log.info("跳过重复整理提案，scope={}，ownerId={}，changeCount={}", scope, ownerId, state.getChangeCount());
+            return;
+        }
         if (ids == null) {
             ids = loadIds(scope, ownerId);
         }
@@ -77,9 +91,14 @@ public class MemoryConsolidationService {
         MemoryConsolidationSnapshot snapshot = loadSnapshot(state, ids);
         // 零条或一条无需模型判断，但仍确认这批变更已经检查完。
         MemoryConsolidationPlan plan = ids.size() < 2 ? new MemoryConsolidationPlan() : consolidator.consolidate(snapshot);
-        if (persistenceService.persist(snapshot, plan)) {
-            log.info("记忆整理事务已提交，scope={}，ownerId={}，checkedCount={}，mergeGroups={}，conflictGroups={}",
-                    scope, ownerId, ids.size(), plan.getMerges().size(), plan.getConflicts().size());
+        MemoryConsolidationValidator.validate(snapshot, plan);
+        if (!plan.getMerges().isEmpty()) {
+            // 有实际修改时只保存申请；此处绝不修改记忆或推进 processedCount。
+            approvals.submit(userId, sessionId, snapshot, plan);
+        } else if (persistenceService.persist(snapshot, plan)) {
+            // 空方案或只有冲突提示时不修改记忆，无需用户批准空操作。
+            log.info("整理检查完成，无记忆变更，scope={}，ownerId={}，checkedCount={}，conflictGroups={}",
+                    scope, ownerId, ids.size(), plan.getConflicts().size());
         }
     }
 

@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 public class MemoryApprovalView {
     private Long id;
     private Long sessionId;
+    private MemoryApprovalType approvalType;
     private MemoryOperation operation;
     private MemoryScope scope;
     private String candidateJson;
@@ -21,7 +22,7 @@ public class MemoryApprovalView {
 
     // 从数据库申请对象转换为前端展示对象。
     public static MemoryApprovalView from(MemoryApprovalRequest request) {
-        return new MemoryApprovalView(request.getId(), request.getSessionId(), request.getOperation(),
+        return new MemoryApprovalView(request.getId(), request.getSessionId(), request.getApprovalType(), request.getOperation(),
                 request.getScope(), request.getCandidateJson(), request.getStatus(),
                 request.getCreatedAt(), request.getDecidedAt(), request.getDecisionReason());
     }

@@ -47,7 +47,11 @@ class MemoryApprovalServiceTest {
     private final MemoryApprovalRepository repository = mock(MemoryApprovalRepository.class);
     private final MemoryCandidatePersistenceService persistence = mock(MemoryCandidatePersistenceService.class);
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
-    private final MemoryApprovalService service = new MemoryApprovalService(repository, persistence, sessions);
+    private final com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationApprovalService consolidation =
+            mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationApprovalService.class);
+    private final com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler scheduler =
+            mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler.class);
+    private final MemoryApprovalService service = new MemoryApprovalService(repository, persistence, sessions, consolidation, scheduler);
 
     @BeforeEach
     void setUp() {
@@ -101,6 +105,8 @@ class MemoryApprovalServiceTest {
         assertEquals(MemoryApprovalStatus.APPROVED, result.getStatus());
         verify(persistence).persistToolCandidate(any(MemoryExtractionContext.class),
                 eq("请记住我喜欢篮球"), any(MemoryCandidate.class));
+        // 自动提取的申请在聊天结束后批准，也会安排提交后的整理检查。
+        verify(scheduler).requestAfterCommit(USER_ID, SESSION_ID);
     }
 
     // 拒绝只更新申请状态，不执行记忆写入。

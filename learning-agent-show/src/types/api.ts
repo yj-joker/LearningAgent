@@ -176,10 +176,12 @@ export interface AgentChatPayload {
 export interface MemoryApprovalView {
   id: ApiId
   sessionId: ApiId
-  operation: 'CREATE' | 'UPDATE' | 'DELETE'
+  // 整批整理不是单条更新，页面根据类型读取对应的方案结构。
+  approvalType: 'CHANGE' | 'CONSOLIDATION'
+  operation: 'CREATE' | 'UPDATE' | 'DELETE' | null
   scope: 'USER' | 'SESSION'
   candidateJson: string
-  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'STALE'
 }
 
 // 待审批是正常的业务状态，不应显示成请求失败或宣称操作已经完成。

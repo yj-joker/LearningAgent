@@ -17,6 +17,15 @@ public class AgentRunContext {
 
     // runId 用来把同一次任务产生的多条日志关联起来。
     private final String runId;
+    // 供结束 Hook 传递任务归属，不把请求线程的 ThreadLocal 带到后台线程。
+    private Long userId;
+    private Long sessionId;
+
+    // Harness 验证会话归属后设置，模型参数不能覆盖这里的身份。
+    public void bindSession(Long userId, Long sessionId) {
+        this.userId = Objects.requireNonNull(userId);
+        this.sessionId = Objects.requireNonNull(sessionId);
+    }
 
     // 新任务分配编号；后续恢复继续使用这个编号，不创建另一个业务任务。
     public AgentRunContext() {

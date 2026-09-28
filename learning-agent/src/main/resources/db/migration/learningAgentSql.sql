@@ -144,11 +144,19 @@ CREATE TABLE IF NOT EXISTS session_memories (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审批申请主键',
       user_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属用户',
       session_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属学习会话',
-      operation VARCHAR(20) NOT NULL COMMENT 'CREATE、UPDATE 或 DELETE',
+      approval_type VARCHAR(24) NOT NULL DEFAULT 'CHANGE' COMMENT 'CHANGE 或 CONSOLIDATION',
+      operation VARCHAR(20) NULL COMMENT '单条变更的操作；整理方案为空',
       scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION',
-      candidate_json JSON NOT NULL COMMENT '后端校验后的记忆候选',
-      target_snapshot_json JSON NOT NULL COMMENT '申请创建时的 memoryRef 目标快照',
-      status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING、APPROVED 或 REJECTED',
+      candidate_json JSON NOT NULL COMMENT '按申请类型保存单条候选或整批方案',
+      target_snapshot_json JSON NOT NULL COMMENT '单条目标快照或完整整理快照',
+      snapshot_change_count BIGINT NULL COMMENT '整理看到的累计变更数',
+      snapshot_processed_count BIGINT NULL COMMENT '整理看到的已处理数',
+      status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING、APPROVED、REJECTED 或 STALE',
+      consolidation_owner_id BIGINT UNSIGNED GENERATED ALWAYS AS
+          (CASE WHEN approval_type = 'CONSOLIDATION' THEN IF(scope = 'USER', user_id, session_id) ELSE NULL END) STORED,
+      pending_consolidation_key VARCHAR(80) GENERATED ALWAYS AS
+          (CASE WHEN approval_type = 'CONSOLIDATION' AND status = 'PENDING'
+           THEN CONCAT(scope, ':', IF(scope = 'USER', user_id, session_id)) ELSE NULL END) STORED,
       decision_reason VARCHAR(500) DEFAULT NULL COMMENT '用户拒绝或审批说明',
       created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
       updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -156,9 +164,16 @@ CREATE TABLE IF NOT EXISTS session_memories (
       PRIMARY KEY (id),
       KEY idx_memory_approval_user_status (user_id, status, created_at),
       KEY idx_memory_approval_session_status (session_id, status, created_at),
+      UNIQUE KEY uk_pending_consolidation (pending_consolidation_key),
+      UNIQUE KEY uk_consolidation_version (scope, consolidation_owner_id, snapshot_change_count, snapshot_processed_count),
+      CONSTRAINT chk_memory_approval_type CHECK (approval_type IN ('CHANGE', 'CONSOLIDATION')),
+      CONSTRAINT chk_memory_approval_payload CHECK
+          ((approval_type = 'CHANGE' AND operation IS NOT NULL AND snapshot_change_count IS NULL AND snapshot_processed_count IS NULL)
+           OR (approval_type = 'CONSOLIDATION' AND operation IS NULL AND snapshot_change_count IS NOT NULL
+               AND snapshot_processed_count IS NOT NULL AND snapshot_processed_count >= 0 AND snapshot_change_count > snapshot_processed_count)),
       CONSTRAINT chk_memory_approval_operation CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
       CONSTRAINT chk_memory_approval_scope CHECK (scope IN ('USER', 'SESSION')),
-      CONSTRAINT chk_memory_approval_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED'))
+      CONSTRAINT chk_memory_approval_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'STALE'))
   ) ENGINE = InnoDB
       DEFAULT CHARSET = utf8mb4
       COLLATE = utf8mb4_unicode_ci

@@ -157,8 +157,8 @@ class MemoryConsolidationConcurrencyMysqlTest {
                 assertThrows(TimeoutException.class, () -> stale.get(250, TimeUnit.MILLISECONDS));
                 release.countDown();
                 update.get(10, TimeUnit.SECONDS);
-                ExecutionException failure = assertThrows(ExecutionException.class, () -> stale.get(10, TimeUnit.SECONDS));
-                assertInstanceOf(IllegalStateException.class, failure.getCause());
+                // 等锁后读取到新版本，整份旧方案返回未执行，让审批层记录 STALE。
+                assertFalse(stale.get(10, TimeUnit.SECONDS));
                 assertEquals("现在最喜欢足球", store.recallUserMemory(USER_ID, 1L).getMemoryContent());
                 assertEquals(21, progress.find(USER, USER_ID).getChangeCount());
                 assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());

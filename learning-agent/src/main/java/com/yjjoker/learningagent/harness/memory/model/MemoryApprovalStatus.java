@@ -4,5 +4,7 @@ package com.yjjoker.learningagent.harness.memory.model;
 public enum MemoryApprovalStatus {
     PENDING,
     APPROVED,
-    REJECTED
+    REJECTED,
+    // 等待期间原记忆或整理进度已变化，不执行旧方案；不是按时间自动过期。
+    STALE
 }

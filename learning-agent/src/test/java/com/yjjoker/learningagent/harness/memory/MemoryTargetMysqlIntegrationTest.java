@@ -237,7 +237,8 @@ class MemoryTargetMysqlIntegrationTest {
         changed.setMemoryContent("现在最喜欢足球");
         store.updateUserMemory(changed);
         progress.addChanges(USER, USER_ID, 1);
-        assertThrows(IllegalStateException.class, () -> consolidationWriter(store).persist(oldSnapshot, consolidationPlan()));
+        // 数据变化返回未执行，审批层据此保存 STALE，而不是把状态更新一起回滚。
+        assertFalse(consolidationWriter(store).persist(oldSnapshot, consolidationPlan()));
         assertEquals("现在最喜欢足球", users.findActiveById(USER_ID, 2L).getMemoryContent());
         assertEquals(21, progress.find(USER, USER_ID).getChangeCount());
         assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());
@@ -298,8 +299,15 @@ class MemoryTargetMysqlIntegrationTest {
         progress.initialize(SESSION, SESSION_ID, 0);
         var properties = new MemoryConsolidationProperties();
         MemoryConsolidator model = spy(new LlmMemoryConsolidator(MemoryTargetAliyunTest.client(), new LlmRetryExecutor(), properties));
-        var coordinator = new MemoryConsolidationService(properties, progress, store, model, consolidationWriter(store));
+        // 此集成测试只验证模型和整理写入器，先捕获提案，再显式模拟批准；不覆盖审批 HTTP。
+        var proposals = mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationApprovalService.class);
+        var coordinator = new MemoryConsolidationService(properties, progress, store, model, consolidationWriter(store), proposals);
         coordinator.consolidateIfNeeded(USER_ID, SESSION_ID);
+        assertEquals(3, store.loadUserMemoryIndex(USER_ID).size(), "未批准前不能合并");
+        var snapshotArg = org.mockito.ArgumentCaptor.forClass(MemoryConsolidationSnapshot.class);
+        var planArg = org.mockito.ArgumentCaptor.forClass(MemoryConsolidationPlan.class);
+        verify(proposals).submit(eq(USER_ID), eq(SESSION_ID), snapshotArg.capture(), planArg.capture());
+        assertTrue(consolidationWriter(store).persist(snapshotArg.getValue(), planArg.getValue()));
 
         // 不假定模型一定保留哪条 ID，但保留项必须来自原来的两个来源。
         var index = store.loadUserMemoryIndex(USER_ID);
@@ -337,7 +345,7 @@ class MemoryTargetMysqlIntegrationTest {
         changed.setMemoryContent("现在最喜欢足球");
         store.updateUserMemory(changed);
         progress.addChanges(USER, USER_ID, 1);
-        assertThrows(IllegalStateException.class, () -> consolidationWriter(store).persist(snapshot, plan));
+        assertFalse(consolidationWriter(store).persist(snapshot, plan));
         assertEquals("现在最喜欢足球", users.findActiveById(USER_ID, 2L).getMemoryContent());
         assertEquals(3, store.loadUserMemoryIndex(USER_ID).size());
         assertEquals(0, progress.find(USER, USER_ID).getProcessedCount());

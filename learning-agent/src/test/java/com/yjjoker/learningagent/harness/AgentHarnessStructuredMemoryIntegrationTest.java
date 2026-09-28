@@ -17,7 +17,7 @@ import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
 import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.harness.memory.model.MemoryWriteReceipt;
-import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -208,7 +208,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 "memoryTopic":"运动偏好","memorySummary":"最喜欢足球","memoryContent":"现在最喜欢足球"}]}
                 """));
         ConversationMemoryService history = mock(ConversationMemoryService.class);
-        MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
+        MemoryConsolidationScheduler consolidation = mock(MemoryConsolidationScheduler.class);
 
         String answer = extractionHarness(client, store, history, consolidation).run(SESSION_ID, "现在最喜欢足球").getAnswer();
 
@@ -218,11 +218,11 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         assertEquals("favoriteSport", currentMemory.getMemoryKey());
         verify(store, never()).updateUserMemory(currentMemory);
         verify(store, never()).lockUserMemory(USER_ID, 1L);
-        // 先生成回答、再提取和保存记忆，最后才检查整理阈值。
+        // 先生成回答、再提取候选，正常结束后由 Hook 通知整理调度器。
         var order = org.mockito.Mockito.inOrder(client, store, consolidation);
         order.verify(client).generate(anyList());
         order.verify(client).generateWithoutTools(anyList());
-        order.verify(consolidation).consolidateIfNeeded(USER_ID, SESSION_ID);
+        order.verify(consolidation).request(USER_ID, SESSION_ID);
     }
 
     // 引用修复失败时仍返回主模型的回答，不允许错误候选进入数据库。
@@ -260,7 +260,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         LlmClient client = toolThenAnswerClient("recall_memory", "{\"memoryRef\":\"${CURRENT_MEMORY_REF}\"}");
         ToolExecutionRecordingHook recorder = org.mockito.Mockito.spy(new ToolExecutionRecordingHook());
         AgentHarnessService harness = extractionHarness(client, store, mock(ConversationMemoryService.class),
-                mock(MemoryConsolidationService.class),
+                mock(MemoryConsolidationScheduler.class),
                 List.of(new RecallMemoryTool(references, store)), List.of(recorder), references);
 
         assertEquals("正常回答", harness.run(SESSION_ID, "查询我的旧记忆").getAnswer());
@@ -304,7 +304,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 """), new TextLlmResponse("{\"memories\":[]}"));
         ToolExecutionRecordingHook recorder = org.mockito.Mockito.spy(new ToolExecutionRecordingHook());
         AgentHarnessService harness = extractionHarness(client, store, mock(ConversationMemoryService.class),
-                mock(MemoryConsolidationService.class), List.of(writeTool), List.of(recorder),
+                mock(MemoryConsolidationScheduler.class), List.of(writeTool), List.of(recorder),
                 new MemoryReferenceRegistry());
 
         assertEquals("正常回答", harness.run(SESSION_ID, "请忘记我喜欢羽毛球的记忆").getAnswer());
@@ -339,7 +339,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
             }
         };
         AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
-                mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
+                mock(ConversationMemoryService.class), mock(MemoryConsolidationScheduler.class),
                 List.of(tool), List.of(rejection, recorder), new MemoryReferenceRegistry());
 
         assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
@@ -363,7 +363,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
             }
         };
         AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
-                mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
+                mock(ConversationMemoryService.class), mock(MemoryConsolidationScheduler.class),
                 List.of(tool), List.of(brokenRecorder), new MemoryReferenceRegistry());
 
         assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
@@ -387,7 +387,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
             }
         };
         AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
-                mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
+                mock(ConversationMemoryService.class), mock(MemoryConsolidationScheduler.class),
                 List.of(queryTool()), List.of(incompleteRecorder), new MemoryReferenceRegistry());
 
         assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
@@ -427,19 +427,19 @@ class AgentHarnessStructuredMemoryIntegrationTest {
     // 使用生产构造器接入真实提取和保存服务，模型和数据库由测试替代。
     private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
                                                   ConversationMemoryService history) {
-        return extractionHarness(client, store, history, mock(MemoryConsolidationService.class));
+        return extractionHarness(client, store, history, mock(MemoryConsolidationScheduler.class));
     }
 
     // 整理依赖由测试传入，便于检查调用顺序，不在生产类中添加测试构造器。
     private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
-                                                  ConversationMemoryService history, MemoryConsolidationService consolidation) {
+                                                  ConversationMemoryService history, MemoryConsolidationScheduler consolidation) {
         return extractionHarness(client, store, history, consolidation, List.of(),
                 List.of(new ToolExecutionRecordingHook()), new MemoryReferenceRegistry());
     }
 
     // 测试可替换工具和 Hook；仍使用同一套生产 Harness 与提取服务。
     private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
-                                                  ConversationMemoryService history, MemoryConsolidationService consolidation,
+                                                  ConversationMemoryService history, MemoryConsolidationScheduler consolidation,
                                                   List<Tool> tools, List<AgentHook> hooks, MemoryReferenceRegistry references) {
         LearningSessionRepository repository = mock(LearningSessionRepository.class);
         LearningSession session = new LearningSession();
@@ -454,10 +454,13 @@ class AgentHarnessStructuredMemoryIntegrationTest {
             request.setId(1L);
             return request;
         });
-        return new AgentHarnessServiceImpl(client, new ToolRegistry(tools), hooks, history, repository,
+        // 显式安装生产整理 Hook，验证主循环只提交通知而不直接整理。
+        var installedHooks = new java.util.ArrayList<>(hooks);
+        installedHooks.add(new com.yjjoker.learningagent.harness.hook.MemoryConsolidationHook(consolidation));
+        return new AgentHarnessServiceImpl(client, new ToolRegistry(tools), installedHooks, history, repository,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
                 store, references, new LlmMemoryExtractionService(client, retry),
-                consolidation, approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class));
+                approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class));
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

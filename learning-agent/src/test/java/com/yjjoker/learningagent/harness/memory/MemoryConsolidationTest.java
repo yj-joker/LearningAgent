@@ -82,7 +82,7 @@ class MemoryConsolidationTest {
     void shouldRejectChangedContentBeforeAnyWrite() {
         var snapshot = snapshot();
         second.setMemoryContent("用户已经明确改为最喜欢足球。");
-        assertThrows(IllegalStateException.class, () -> writer.persist(snapshot, mergePlan()));
+        assertFalse(writer.persist(snapshot, mergePlan()));
         verify(memories, never()).updateUserMemory(any());
         verify(progress, never()).markProcessed(any(), any(), anyLong(), anyLong());
     }
@@ -444,7 +444,8 @@ class MemoryConsolidationTest {
 
     // 组装协调服务，测试中可以替换最终事务写入器。
     private MemoryConsolidationService coordinator(MemoryConsolidationPersistenceService persistence) {
-        return new MemoryConsolidationService(properties, progress, memories, model, persistence);
+        return new MemoryConsolidationService(properties, progress, memories, model, persistence,
+                mock(MemoryConsolidationApprovalService.class));
     }
 
     // 创建数据库进度的测试副本，两类归属分别取对应 ID。

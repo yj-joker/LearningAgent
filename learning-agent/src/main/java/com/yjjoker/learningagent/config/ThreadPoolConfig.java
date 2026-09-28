@@ -19,6 +19,23 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Slf4j
 public class ThreadPoolConfig {
 
+    // 整理使用独立的有界线程池；不复制请求身份，后台任务显式携带用户和会话 ID。
+    @Bean("memoryConsolidationExecutor")
+    public ThreadPoolTaskExecutor memoryConsolidationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(16);
+        executor.setThreadNamePrefix("memory-consolidation-");
+        // 满载时拒绝并保留整理进度，不能让聊天线程接手耗时模型调用。
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        log.info("记忆整理线程池已初始化，core=1，max=2，queueCapacity=16");
+        return executor;
+    }
+
     /**
      * 创建业务异步线程池。
      */

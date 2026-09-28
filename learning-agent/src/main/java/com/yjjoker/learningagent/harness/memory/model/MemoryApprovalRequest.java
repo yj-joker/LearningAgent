@@ -11,10 +11,15 @@ public class MemoryApprovalRequest {
     private Long id;
     private Long userId;
     private Long sessionId;
+    // 旧申请默认是单条变更；整理申请的 operation 留空，不能冒充单条 UPDATE。
+    private MemoryApprovalType approvalType = MemoryApprovalType.CHANGE;
     private MemoryOperation operation;
     private MemoryScope scope;
     private String candidateJson;
     private String targetSnapshotJson;
+    // 整理版本用于防重复提案；普通变更不填写，也不影响原有审批。
+    private Long snapshotChangeCount;
+    private Long snapshotProcessedCount;
     private MemoryApprovalStatus status;
     private String decisionReason;
     private LocalDateTime createdAt;

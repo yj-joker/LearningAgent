@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.memory.service;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalRequest;
 import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalStatus;
+import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalType;
 import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalView;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
@@ -34,6 +35,8 @@ public class MemoryApprovalService {
     private final MemoryApprovalRepository repository;
     private final MemoryCandidatePersistenceService persistence;
     private final LearningSessionRepository sessions;
+    private final MemoryConsolidationApprovalService consolidationApprovals;
+    private final MemoryConsolidationScheduler consolidationScheduler;
 
     // 创建待审批申请，并保存当时的候选和目标快照。
     @Transactional
@@ -57,6 +60,22 @@ public class MemoryApprovalService {
         Long userId = currentUser();
         MemoryApprovalRequest request = requirePending(approvalId, userId);
         requireOwner(userId, request.getSessionId());
+        if (request.getApprovalType() == MemoryApprovalType.CONSOLIDATION) {
+            // 整理用保存的整份方案执行，不重新请求模型；申请状态与业务写入共用外层事务。
+            boolean applied = consolidationApprovals.apply(request);
+            MemoryApprovalStatus status = applied ? MemoryApprovalStatus.APPROVED : MemoryApprovalStatus.STALE;
+            String reason = applied ? "整理方案已批准并执行" : "原记忆或整理进度已变化，未执行旧方案";
+            LocalDateTime now = LocalDateTime.now();
+            if (repository.decide(request.getId(), userId, status, reason, now, now) != 1) {
+                throw new ClientDataErrorException("审批状态已变化，请刷新后重试");
+            }
+            request.setStatus(status);
+            request.setDecisionReason(reason);
+            request.setDecidedAt(now);
+            request.setUpdatedAt(now);
+            log.info("整理审批已处理，待事务提交，approvalId={}，scope={}，status={}", request.getId(), request.getScope(), status);
+            return MemoryApprovalView.from(request);
+        }
         try {
             MemoryCandidate candidate = JSON.readValue(request.getCandidateJson(), MemoryCandidate.class);
             List<MemoryExtractionTarget> targets = readTargets(request.getTargetSnapshotJson());
@@ -72,6 +91,8 @@ public class MemoryApprovalService {
             }
             log.info("记忆审批已批准并写入，userId={}，sessionId={}，approvalId={}，affectedCount={}",
                     userId, request.getSessionId(), approvalId, receipt.getMemoryIds().size());
+            // 用户可能在聊天结束后才批准提取提案，因此写入提交后也要检查整理条件。
+            consolidationScheduler.requestAfterCommit(userId, request.getSessionId());
             return MemoryApprovalView.from(request);
         } catch (JacksonException exception) {
             throw new ClientDataErrorException("审批申请内容已损坏，请重新发起申请");

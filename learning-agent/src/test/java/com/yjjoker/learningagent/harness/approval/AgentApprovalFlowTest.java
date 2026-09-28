@@ -459,7 +459,7 @@ class AgentApprovalFlowTest {
         hooks.addAll(extra);
         harness = new AgentHarnessServiceImpl(llm, registry, hooks, history, sessions,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null,
-                new LlmRetryExecutor(), memory, references, extraction, consolidation,
+                new LlmRetryExecutor(), memory, references, extraction,
                 mock(MemoryApprovalService.class), approvals);
     }
 

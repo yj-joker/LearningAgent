@@ -38,21 +38,21 @@ public class MemoryConsolidationPersistenceService {
                 .sorted(Comparator.comparing(MemoryConsolidationEntry::getMemoryId)).toList()) {
             if (snapshot.getScope() == MemoryScope.USER) {
                 UserMemory memory = memoryService.lockUserMemory(snapshot.getOwnerId(), entry.getMemoryId());
-                if (memory == null) {
-                    throw new IllegalStateException("整理目标已失效");
-                }
-                requireUnchanged(snapshot, entry, memory.getId(), memory.getUserId(), memory.getStatus(),
+                if (memory == null || !isUnchanged(snapshot, entry, memory.getId(), memory.getUserId(), memory.getStatus(),
                         memory.getMemoryKey(), memory.getMemoryTopic(), memory.getMemorySummary(),
-                        memory.getMemoryContent(), memory.getUpdatedAt());
+                        memory.getMemoryContent(), memory.getUpdatedAt())) {
+                    log.info("整理快照已失效，scope={}，memoryId={}，未修改记忆", snapshot.getScope(), entry.getMemoryId());
+                    return false;
+                }
                 users.put(entry.getMemoryRef(), memory);
             } else {
                 SessionMemory memory = memoryService.lockSessionMemory(snapshot.getOwnerId(), entry.getMemoryId());
-                if (memory == null) {
-                    throw new IllegalStateException("整理目标已失效");
-                }
-                requireUnchanged(snapshot, entry, memory.getId(), memory.getSessionId(), memory.getStatus(),
+                if (memory == null || !isUnchanged(snapshot, entry, memory.getId(), memory.getSessionId(), memory.getStatus(),
                         memory.getMemoryKey(), memory.getMemoryTopic(), memory.getMemorySummary(),
-                        memory.getMemoryContent(), memory.getUpdatedAt());
+                        memory.getMemoryContent(), memory.getUpdatedAt())) {
+                    log.info("整理快照已失效，scope={}，memoryId={}，未修改记忆", snapshot.getScope(), entry.getMemoryId());
+                    return false;
+                }
                 sessions.put(entry.getMemoryRef(), memory);
             }
         }
@@ -87,15 +87,20 @@ public class MemoryConsolidationPersistenceService {
     }
 
     // 连同正文一起比较，避免索引相同但原文已经改变时继续合并。
-    private void requireUnchanged(MemoryConsolidationSnapshot snapshot, MemoryConsolidationEntry entry,
+    private boolean isUnchanged(MemoryConsolidationSnapshot snapshot, MemoryConsolidationEntry entry,
                                   Long id, Long ownerId, MemoryStatusEnum status, String key, String topic,
                                   String summary, String content, LocalDateTime updatedAt) {
-        if (status != MemoryStatusEnum.ACTIVE || !Objects.equals(snapshot.getOwnerId(), ownerId)
-                || !Objects.equals(entry.getMemoryId(), id) || !Objects.equals(entry.getMemoryKey(), key)
+        // 归属或主键不符不是普通版本冲突，必须拒绝并回滚，不能作为可批准的目标。
+        if (!Objects.equals(snapshot.getOwnerId(), ownerId) || !Objects.equals(entry.getMemoryId(), id)) {
+            throw new IllegalStateException("整理目标归属或 ID 不匹配");
+        }
+        if (status != MemoryStatusEnum.ACTIVE || !Objects.equals(entry.getMemoryKey(), key)
                 || !Objects.equals(entry.getMemoryTopic(), topic) || !Objects.equals(entry.getMemorySummary(), summary)
                 || !Objects.equals(entry.getMemoryContent(), content) || !Objects.equals(entry.getUpdatedAt(), updatedAt)) {
-            throw new IllegalStateException("整理目标已变化，保留原记录，等待下次重新判断");
+            // 在任何写入前返回，审批事务才能正常提交 STALE，而不是被异常标记为必须回滚。
+            return false;
         }
+        return true;
     }
 
     // 更新保留项，再软删除其他长期记忆；保留原 ID、key 和创建时间。

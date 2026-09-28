@@ -34,7 +34,6 @@ import com.yjjoker.learningagent.harness.approval.*;
 import com.yjjoker.learningagent.harness.model.AgentRunStatus;
 import com.yjjoker.learningagent.vo.AgentRunResult;
 import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
-import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
@@ -111,9 +110,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 通用审批保存任务检查点，主循环不再依赖某种业务工具的审批草稿。
     private final AgentApprovalService agentApprovalService;
 
-    // 回答生成后检查整理阈值；整理失败不改变已经生成的回答。
-    private final MemoryConsolidationService memoryConsolidationService;
-
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
     // List.copyOf 防止外部在 Harness 运行期间修改 Hook 列表。
@@ -129,7 +125,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    StructuredMemoryService structuredMemoryService,
                                    MemoryReferenceRegistry memoryReferenceRegistry,
                                    MemoryExtractionService memoryExtractionService,
-                                   MemoryConsolidationService memoryConsolidationService,
                                    MemoryApprovalService memoryApprovalService,
                                    AgentApprovalService agentApprovalService) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
@@ -156,7 +151,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.memoryReferenceRegistry = memoryReferenceRegistry;
         // 记忆提取服务独立于主循环，后续可以替换为规则提取或异步任务。
         this.memoryExtractionService = memoryExtractionService;
-        this.memoryConsolidationService = memoryConsolidationService;
         this.memoryApprovalService = memoryApprovalService;
         this.agentApprovalService = agentApprovalService;
     }
@@ -171,6 +165,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             validateUserMessage(userMessage);
             // 验证会话访问权限
             validateSessionAccess(sessionId);
+            context.bindSession(BaseContext.getCurrentId(), sessionId);
             // 同一会话的暂停任务必须先恢复，不能另开聊天把原工具请求遗忘。
             agentApprovalService.requireSessionAvailable(sessionId);
             // 给原始工具结果恢复工具设置当前会话范围，后续数据库查询不会跨会话读取。
@@ -209,6 +204,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             return agentApprovalService.get(runId);
         }
         AgentRunContext context = new AgentRunContext(runId);
+        context.bindSession(run.getUserId(), run.getSessionId());
         try {
             AgentRunCheckpoint checkpoint = agentApprovalService.restore(run);
             originalToolResultStore.beginSession(run.getSessionId());
@@ -377,8 +373,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 }
                 // 提取记忆候选并保存
                 extractMemoryCandidates(sessionId, userMessage, textResponse.content(), context);
-                // 提取事务已经结束；这里可以重试之前未完成的整理，不持锁调用模型。
-                memoryConsolidationService.consolidateIfNeeded(BaseContext.getCurrentId(), sessionId);
+                // 整理由任务完成 Hook 通知后台调度器，不在主循环直接执行记忆合并。
                 return AgentRunResult.completed(context.getRunId(), textResponse.content());
             }
 
