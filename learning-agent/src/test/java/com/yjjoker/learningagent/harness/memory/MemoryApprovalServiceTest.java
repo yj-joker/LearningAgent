@@ -9,6 +9,10 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
 import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.harness.memory.model.MemoryWriteReceipt;
+import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalView;
+import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
+import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
@@ -20,6 +24,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
+import java.sql.Connection;
+import javax.sql.DataSource;
+import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
 import java.util.Optional;
 import java.time.LocalDateTime;
 
@@ -46,6 +57,9 @@ class MemoryApprovalServiceTest {
         session.setUserId(USER_ID);
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(sessions.findSessionById(SESSION_ID)).thenReturn(Optional.of(session));
+        // 单元测试用同一个对象模拟加锁读取；真正的数据库锁由 Repository SQL 执行。
+        when(repository.lock(anyLong(), eq(USER_ID))).thenAnswer(invocation ->
+                repository.findById(invocation.getArgument(0)));
     }
 
     @AfterEach
@@ -142,6 +156,30 @@ class MemoryApprovalServiceTest {
                 eq("请修改运动偏好为足球"), any(MemoryCandidate.class));
     }
 
+    // 他人的申请在锁定或修改之前就拒绝，不能通过审批编号跨用户操作。
+    @Test
+    void shouldRejectAnotherUsersApproval() {
+        MemoryApprovalRequest request = pendingRequest();
+        request.setUserId(USER_ID + 1);
+        when(repository.findById(7L)).thenReturn(request);
+        assertThrows(RuntimeException.class, () -> service.approve(7L));
+        verify(repository, never()).lock(any(), any());
+        verifyNoInteractions(persistence);
+    }
+
+    // 加锁后必须重新确认状态，不能使用等待锁之前读到的旧 PENDING。
+    @Test
+    void shouldRecheckDecisionAfterLocking() {
+        MemoryApprovalRequest request = pendingRequest();
+        MemoryApprovalRequest decided = pendingRequest();
+        decided.setStatus(MemoryApprovalStatus.REJECTED);
+        when(repository.findById(7L)).thenReturn(request);
+        when(repository.lock(7L, USER_ID)).thenReturn(decided);
+        assertThrows(RuntimeException.class, () -> service.approve(7L));
+        verifyNoInteractions(persistence);
+    }
+
+    // 构造独立待审批申请，不依赖真实数据库主键。
     private MemoryApprovalRequest pendingRequest() {
         MemoryApprovalRequest request = new MemoryApprovalRequest();
         request.setId(7L);
@@ -160,6 +198,7 @@ class MemoryApprovalServiceTest {
         return request;
     }
 
+    // 准备合法候选，让各场景只改变审批或并发状态。
     private MemoryCandidate candidate(MemoryOperation operation, String evidence) {
         MemoryCandidate candidate = new MemoryCandidate();
         candidate.setOperation(operation);

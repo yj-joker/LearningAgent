@@ -27,19 +27,30 @@ public interface MemoryApprovalRepository {
     int insert(@Param("request") MemoryApprovalRequest request);
 
     // 查询单条申请，服务层还会再次检查当前登录用户。
-    @Select("SELECT id, user_id AS userId, session_id AS sessionId, operation, scope, " +
-            "candidate_json AS candidateJson, target_snapshot_json AS targetSnapshotJson, status, " +
-            "decision_reason AS decisionReason, created_at AS createdAt, updated_at AS updatedAt, " +
-            "decided_at AS decidedAt FROM memory_approval_requests WHERE id = #{id}")
+    @Select("SELECT r.*, r.user_id AS userId, r.session_id AS sessionId, " +
+            "r.candidate_json AS candidateJson, r.target_snapshot_json AS targetSnapshotJson, " +
+            "r.decision_reason AS decisionReason, r.created_at AS createdAt, r.updated_at AS updatedAt, " +
+            "r.decided_at AS decidedAt " +
+            "FROM memory_approval_requests r " +
+            "WHERE r.id = #{id}")
     MemoryApprovalRequest findById(@Param("id") Long id);
 
     // 只返回当前用户的待处理申请，前端用它生成确认卡片。
+    @Select("SELECT r.*, r.user_id AS userId, r.session_id AS sessionId, " +
+            "r.candidate_json AS candidateJson, r.target_snapshot_json AS targetSnapshotJson, " +
+            "r.decision_reason AS decisionReason, r.created_at AS createdAt, r.updated_at AS updatedAt, " +
+            "r.decided_at AS decidedAt " +
+            "FROM memory_approval_requests r " +
+            "WHERE r.user_id = #{userId} AND r.status = 'PENDING' ORDER BY r.created_at ASC, r.id ASC")
+    List<MemoryApprovalRequest> findPendingByUserId(@Param("userId") Long userId);
+
+    // 审批事务使用当前读，等待其他事务结束后不能继续使用旧的 PENDING 快照。
     @Select("SELECT id, user_id AS userId, session_id AS sessionId, operation, scope, " +
             "candidate_json AS candidateJson, target_snapshot_json AS targetSnapshotJson, status, " +
             "decision_reason AS decisionReason, created_at AS createdAt, updated_at AS updatedAt, " +
             "decided_at AS decidedAt FROM memory_approval_requests " +
-            "WHERE user_id = #{userId} AND status = 'PENDING' ORDER BY created_at ASC, id ASC")
-    List<MemoryApprovalRequest> findPendingByUserId(@Param("userId") Long userId);
+            "WHERE id = #{id} AND user_id = #{userId} FOR UPDATE")
+    MemoryApprovalRequest lock(@Param("id") Long id, @Param("userId") Long userId);
 
     // 只有 PENDING 才能变成终态，防止重复点击同一审批按钮。
     @Update("UPDATE memory_approval_requests SET status = #{status}, decision_reason = #{reason}, " +

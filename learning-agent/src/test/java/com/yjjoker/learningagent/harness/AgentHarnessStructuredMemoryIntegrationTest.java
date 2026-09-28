@@ -122,8 +122,12 @@ class AgentHarnessStructuredMemoryIntegrationTest {
 
         // 第一条消息是 system，记忆索引应该位于其中。
         String systemPrompt = llmClient.messages.getFirst().getFirst().getContent();
-        assertTrue(systemPrompt.contains("memoryRef=memory_1"));
-        assertTrue(systemPrompt.contains("memoryRef=memory_2"));
+        // 读取真实索引引用，不假定每个任务都使用同一组 memory_1、memory_2。
+        var visibleRefs = systemPrompt.lines().filter(line -> line.startsWith("- memoryRef="))
+                .map(line -> line.substring("- memoryRef=".length()).split("，")[0]).toList();
+        assertEquals(2, visibleRefs.size());
+        assertTrue(visibleRefs.get(0).endsWith("_1"));
+        assertTrue(visibleRefs.get(1).endsWith("_2"));
         assertFalse(systemPrompt.contains("memoryId=1"));
         assertFalse(systemPrompt.contains("memoryId=2"));
         assertTrue(systemPrompt.contains("learning_language"));
@@ -153,7 +157,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         MemoryReferenceRegistry referenceRegistry = new MemoryReferenceRegistry();
         SequenceLlmClient llmClient = new SequenceLlmClient(
                 new ToolCallLlmResponse(List.of(new ToolCall(
-                        "call_memory", "recall_memory", "{\"memoryRef\":\"memory_1\"}"
+                        "call_memory", "recall_memory", "{\"memoryRef\":\"${CURRENT_MEMORY_REF}\"}"
                 ))),
                 new TextLlmResponse("你喜欢篮球，并且每周打三次球。")
         );
@@ -177,7 +181,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 referenceRegistry
         );
 
-        String answer = harness.run(SESSION_ID, "我喜欢什么运动？");
+        String answer = harness.run(SESSION_ID, "我喜欢什么运动？").getAnswer();
 
         assertEquals("你喜欢篮球，并且每周打三次球。", answer);
         assertTrue(llmClient.messages.get(1).stream()
@@ -206,7 +210,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         ConversationMemoryService history = mock(ConversationMemoryService.class);
         MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
 
-        String answer = extractionHarness(client, store, history, consolidation).run(SESSION_ID, "现在最喜欢足球");
+        String answer = extractionHarness(client, store, history, consolidation).run(SESSION_ID, "现在最喜欢足球").getAnswer();
 
         assertEquals("了解你的新偏好。", answer);
         // 自动提取现在只创建审批申请，用户批准前不能改变数据库对象。
@@ -236,7 +240,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 """));
 
         String answer = extractionHarness(client, store, mock(ConversationMemoryService.class))
-                .run(SESSION_ID, "忘记运动");
+                .run(SESSION_ID, "忘记运动").getAnswer();
 
         assertEquals("这是正常回答。", answer);
         verify(client, org.mockito.Mockito.times(2)).generateWithoutTools(anyList());
@@ -253,13 +257,13 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         when(store.loadUserMemoryIndex(USER_ID)).thenReturn(List.of(memory));
         when(store.recallUserMemory(USER_ID, 1L)).thenReturn(memory);
         MemoryReferenceRegistry references = new MemoryReferenceRegistry();
-        LlmClient client = toolThenAnswerClient("recall_memory", "{\"memoryRef\":\"memory_1\"}");
+        LlmClient client = toolThenAnswerClient("recall_memory", "{\"memoryRef\":\"${CURRENT_MEMORY_REF}\"}");
         ToolExecutionRecordingHook recorder = org.mockito.Mockito.spy(new ToolExecutionRecordingHook());
         AgentHarnessService harness = extractionHarness(client, store, mock(ConversationMemoryService.class),
                 mock(MemoryConsolidationService.class),
                 List.of(new RecallMemoryTool(references, store)), List.of(recorder), references);
 
-        assertEquals("正常回答", harness.run(SESSION_ID, "查询我的旧记忆"));
+        assertEquals("正常回答", harness.run(SESSION_ID, "查询我的旧记忆").getAnswer());
 
         var capture = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(client).generateWithoutTools(capture.capture());
@@ -303,7 +307,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 mock(MemoryConsolidationService.class), List.of(writeTool), List.of(recorder),
                 new MemoryReferenceRegistry());
 
-        assertEquals("正常回答", harness.run(SESSION_ID, "请忘记我喜欢羽毛球的记忆"));
+        assertEquals("正常回答", harness.run(SESSION_ID, "请忘记我喜欢羽毛球的记忆").getAnswer());
 
         // 工具只执行一次；重复候选由后端拒绝，不会进入数据库写入服务。
         verify(writeTool).execute("{}");
@@ -338,7 +342,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
                 List.of(tool), List.of(rejection, recorder), new MemoryReferenceRegistry());
 
-        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料"));
+        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
         verify(tool, never()).execute(any());
         verify(recorder, never()).afterToolExecution(any(), any(), any());
         verify(client).generateWithoutTools(org.mockito.ArgumentMatchers.argThat(messages ->
@@ -362,7 +366,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
                 List.of(tool), List.of(brokenRecorder), new MemoryReferenceRegistry());
 
-        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料"));
+        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
         verify(tool).execute("{}");
         // 普通查询仍会被补记，但不会因为记录补齐就进入提取输入。
         verify(client).generateWithoutTools(org.mockito.ArgumentMatchers.argThat(messages ->
@@ -386,18 +390,30 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 mock(ConversationMemoryService.class), mock(MemoryConsolidationService.class),
                 List.of(queryTool()), List.of(incompleteRecorder), new MemoryReferenceRegistry());
 
-        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料"));
+        assertEquals("正常回答", harness.run(SESSION_ID, "查询资料").getAnswer());
         verify(client, never()).generateWithoutTools(anyList());
     }
 
     // 主模型先调用工具再回答，提取模型返回空候选；三个调用分别验证。
     private LlmClient toolThenAnswerClient(String toolName, String arguments) {
         LlmClient client = mock(LlmClient.class);
-        when(client.generate(anyList())).thenReturn(
-                new ToolCallLlmResponse(List.of(new ToolCall("call_test", toolName, arguments))),
-                new TextLlmResponse("正常回答"));
+        when(client.generate(anyList())).thenAnswer(inv ->
+                new ToolCallLlmResponse(List.of(new ToolCall("call_test", toolName,
+                        copyVisibleMemoryReference(arguments, inv.getArgument(0))))))
+                .thenReturn(new TextLlmResponse("正常回答"));
         when(client.generateWithoutTools(anyList())).thenReturn(new TextLlmResponse("{\"memories\":[]}"));
         return client;
+    }
+
+    // 模拟模型从本次索引复制引用；故意测试错误编号的场景不使用占位符。
+    private static String copyVisibleMemoryReference(String arguments, List<LlmMessage> messages) {
+        if (!arguments.contains("${CURRENT_MEMORY_REF}")) {
+            return arguments;
+        }
+        String reference = messages.getFirst().getContent().lines()
+                .filter(line -> line.startsWith("- memoryRef=")).findFirst().orElseThrow()
+                .substring("- memoryRef=".length()).split("，")[0];
+        return arguments.replace("${CURRENT_MEMORY_REF}", reference);
     }
 
     // 准备普通查询工具，用于验证结果收集与 Hook 异常分支。
@@ -441,7 +457,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         return new AgentHarnessServiceImpl(client, new ToolRegistry(tools), hooks, history, repository,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
                 store, references, new LlmMemoryExtractionService(client, retry),
-                consolidation, approvals);
+                consolidation, approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class));
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。
@@ -481,7 +497,12 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         @Override
         public LlmResponse generate(List<LlmMessage> messages) {
             this.messages.add(List.copyOf(messages));
-            return responses.removeFirst();
+            LlmResponse response = responses.removeFirst();
+            if (response instanceof ToolCallLlmResponse toolResponse) {
+                return new ToolCallLlmResponse(toolResponse.toolCalls().stream().map(call ->
+                        new ToolCall(call.id(), call.name(), copyVisibleMemoryReference(call.arguments(), messages))).toList());
+            }
+            return response;
         }
     }
 }

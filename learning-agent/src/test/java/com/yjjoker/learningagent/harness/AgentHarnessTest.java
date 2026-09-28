@@ -72,7 +72,7 @@ class AgentHarnessTest {
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
         AgentHarnessService harness = createHarness(fakeLlmClient, toolRegistry, List.of());
 
-        String reply = harness.run(SESSION_ID, "什么是数据库事务？");
+        String reply = harness.run(SESSION_ID, "什么是数据库事务？").getAnswer();
 
         assertEquals("模拟的模型回复", reply);
         assertEquals(1, fakeLlmClient.receivedMessages.size());
@@ -101,7 +101,7 @@ class AgentHarnessTest {
         ToolRegistry toolRegistry = new ToolRegistry(List.of(tool));
         AgentHarnessService harness = createHarness(fakeLlmClient, toolRegistry, List.of());
 
-        String reply = harness.run(SESSION_ID, "系统中有哪些用户？");
+        String reply = harness.run(SESSION_ID, "系统中有哪些用户？").getAnswer();
 
         assertEquals("目前有两位用户：张三和李四。", reply);
         assertEquals(1, tool.executeCount);
@@ -142,7 +142,7 @@ class AgentHarnessTest {
                 List.of()
         );
 
-        String reply = harness.run(SESSION_ID, "帮我查一个用户");
+        String reply = harness.run(SESSION_ID, "帮我查一个用户").getAnswer();
 
         assertEquals("请告诉我要查询的用户名。", reply);
         JsonNode toolResult = JSON_MAPPER.readTree(
@@ -247,7 +247,7 @@ class AgentHarnessTest {
                 List.of(hook)
         );
 
-        String reply = harness.run(SESSION_ID, "执行测试学习工具");
+        String reply = harness.run(SESSION_ID, "执行测试学习工具").getAnswer();
 
         assertEquals("工具处理完成", reply);
         assertEquals(
@@ -280,7 +280,7 @@ class AgentHarnessTest {
                 List.of(new ToolArgumentValidationHook(), recordingHook)
         );
 
-        String reply = harness.run(SESSION_ID, "执行测试学习工具");
+        String reply = harness.run(SESSION_ID, "执行测试学习工具").getAnswer();
 
         assertEquals("我已经重新检查参数，请补充课程编号。", reply);
         // executeCount 为 0 证明 Hook 拒绝后，工具没有任何执行机会。
@@ -325,7 +325,7 @@ class AgentHarnessTest {
                 List.of(permissionHook, recordingHook)
         );
 
-        String reply = harness.run(SESSION_ID, "执行无权限的工具");
+        String reply = harness.run(SESSION_ID, "执行无权限的工具").getAnswer();
 
         assertEquals("当前用户没有权限执行该操作", reply);
         assertEquals(0, tool.executeCount);
@@ -354,7 +354,7 @@ class AgentHarnessTest {
                 memoryService
         );
 
-        String reply = harness.run(SESSION_ID, "它有哪些特性？");
+        String reply = harness.run(SESSION_ID, "它有哪些特性？").getAnswer();
 
         assertEquals("它的四个特性是原子性、一致性、隔离性和持久性。", reply);
 
@@ -423,7 +423,7 @@ class AgentHarnessTest {
                         new ToolCall(
                                 "call_restore",
                                 "get_original_tool_result",
-                                "{\"recoveryRef\":\"result_1\",\"offset\":0,\"limit\":100}"
+                                "{\"recoveryRef\":\"${CURRENT_RECOVERY_REF}\",\"offset\":0,\"limit\":100}"
                         )
                 )),
                 new TextLlmResponse("我已读取原始资料片段。")
@@ -445,14 +445,14 @@ class AgentHarnessTest {
                 resultStore
         );
 
-        String answer = harness.run(SESSION_ID, "查询资料并在需要时读取原始细节");
+        String answer = harness.run(SESSION_ID, "查询资料并在需要时读取原始细节").getAnswer();
 
         assertEquals("我已读取原始资料片段。", answer);
         // 第二次请求仍然只看到压缩后的第一次工具结果。
         assertTrue(fakeLlmClient.receivedMessages.get(1).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
                         && message.getContent().contains("工具结果已截断")
-                        && message.getContent().contains("恢复引用=result_1")));
+                        && message.getContent().contains("恢复引用=result_")));
         // 第三次请求包含恢复工具返回的原始片段。
         assertTrue(fakeLlmClient.receivedMessages.get(2).stream()
                 .anyMatch(message -> "tool".equals(message.getRole())
@@ -541,10 +541,11 @@ class AgentHarnessTest {
         ToolCall recoveryCall = new ToolCall(
                 "call_restore",
                 "get_original_tool_result",
-                "{\"toolCallId\":\"call_source\",\"offset\":0,\"limit\":100}"
+                "{\"toolCallId\":\"call_source\",\"offset\":0,\"limit\":300}"
         );
 
         // 按真实消息结构计算未压缩结果大小，让它处于硬上限内但超过 95% 安全水位。
+        // 恢复较长片段，确保截断后能同时容纳任务引用和系统提示词。
         ToolExecutionResult projectedResult = recoveryTool.execute(recoveryCall.arguments());
         LlmMessage projectedToolMessage = LlmMessage.toolResult(
                 recoveryCall.id(),
@@ -574,7 +575,7 @@ class AgentHarnessTest {
                 resultStore
         );
 
-        String answer = harness.run(SESSION_ID, userMessage);
+        String answer = harness.run(SESSION_ID, userMessage).getAnswer();
 
         assertEquals("安全水位测试结束", answer);
         JsonNode compactedResult = findToolResult(fakeLlmClient.receivedMessages.get(1), "call_restore");
@@ -663,7 +664,20 @@ class AgentHarnessTest {
             if (responses.isEmpty()) {
                 throw new IllegalStateException("测试没有准备足够的模型响应");
             }
-            return responses.removeFirst();
+            LlmResponse response = responses.removeFirst();
+            if (response instanceof ToolCallLlmResponse toolResponse) {
+                return new ToolCallLlmResponse(toolResponse.toolCalls().stream().map(call -> {
+                    if (!call.arguments().contains("${CURRENT_RECOVERY_REF}")) {
+                        return call;
+                    }
+                    // 像模型一样复制本次收到的引用，不在测试里猜固定的 result_1。
+                    String reference = messages.stream().filter(message -> "tool".equals(message.getRole()))
+                            .map(message -> JSON_MAPPER.readTree(message.getContent()).get("recoveryRef"))
+                            .filter(java.util.Objects::nonNull).map(JsonNode::asString).findFirst().orElseThrow();
+                    return new ToolCall(call.id(), call.name(), call.arguments().replace("${CURRENT_RECOVERY_REF}", reference));
+                }).toList());
+            }
+            return response;
         }
     }
 

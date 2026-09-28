@@ -30,6 +30,9 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryIndexSnapshot;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
+import com.yjjoker.learningagent.harness.approval.*;
+import com.yjjoker.learningagent.harness.model.AgentRunStatus;
+import com.yjjoker.learningagent.vo.AgentRunResult;
 import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
@@ -48,6 +51,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Objects;
 
 // Harness 的业务实现类，负责安排模型调用流程，而不是负责拼接厂商 HTTP 请求。
@@ -103,6 +108,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 自动提取出的候选也先进入审批，避免后置流程绕过用户确认。
     private final MemoryApprovalService memoryApprovalService;
 
+    // 通用审批保存任务检查点，主循环不再依赖某种业务工具的审批草稿。
+    private final AgentApprovalService agentApprovalService;
+
     // 回答生成后检查整理阈值；整理失败不改变已经生成的回答。
     private final MemoryConsolidationService memoryConsolidationService;
 
@@ -122,7 +130,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    MemoryReferenceRegistry memoryReferenceRegistry,
                                    MemoryExtractionService memoryExtractionService,
                                    MemoryConsolidationService memoryConsolidationService,
-                                   MemoryApprovalService memoryApprovalService) {
+                                   MemoryApprovalService memoryApprovalService,
+                                   AgentApprovalService agentApprovalService) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -149,10 +158,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.memoryExtractionService = memoryExtractionService;
         this.memoryConsolidationService = memoryConsolidationService;
         this.memoryApprovalService = memoryApprovalService;
+        this.agentApprovalService = agentApprovalService;
     }
 
     @Override
-    public String run(Long sessionId, String userMessage) {
+    public AgentRunResult run(Long sessionId, String userMessage) {
         // 每次 HTTP 请求都会得到独立上下文，用于保存本次任务的工具轨迹和完成状态。
         AgentRunContext context = new AgentRunContext();
 
@@ -161,15 +171,21 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             validateUserMessage(userMessage);
             // 验证会话访问权限
             validateSessionAccess(sessionId);
+            // 同一会话的暂停任务必须先恢复，不能另开聊天把原工具请求遗忘。
+            agentApprovalService.requireSessionAvailable(sessionId);
             // 给原始工具结果恢复工具设置当前会话范围，后续数据库查询不会跨会话读取。
             originalToolResultStore.beginSession(sessionId);
             // memoryRef 只在本次请求有效，先建立当前用户和会话的映射范围。
-            memoryReferenceRegistry.beginRun(BaseContext.getCurrentId(), sessionId, userMessage);
+            memoryReferenceRegistry.beginRun(BaseContext.getCurrentId(), sessionId, userMessage, context.getRunId());
             // 运行 Agent 循环，得到最终结果
-            String answer = runAgentLoop(sessionId, userMessage, context);
-            // 标记任务成功
-            context.markSucceeded();
-            return answer;
+            AgentRunResult result = runAgentLoop(sessionId, userMessage, context, null, List.of());
+            // HTTP 执行结束不代表任务成功；等待审批需要独立记录，不能被结束 Hook 误报。
+            if (result.getStatus() == AgentRunStatus.WAITING_APPROVAL) {
+                context.markWaitingApproval();
+            } else {
+                context.markSucceeded();
+            }
+            return result;
         } catch (RuntimeException exception) {
             // 标记任务失败
             context.markFailed(exception);
@@ -181,6 +197,67 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             originalToolResultStore.clear();
             // 任务结束后清理 memoryRef，避免线程池复用线程时读取旧映射。
             memoryReferenceRegistry.clear();
+        }
+    }
+
+    // 审批之后继续原任务，不重新生成用户问题，也不先调用一次模型来猜待执行工具。
+    @Override
+    public AgentRunResult resume(String runId) {
+        AgentApprovalRun run = agentApprovalService.claim(runId);
+        if (run.getStatus() == AgentRunStatus.COMPLETED) {
+            // 重复点击返回原答案；执行权已经结束，不再次执行工具或保存聊天记录。
+            return agentApprovalService.get(runId);
+        }
+        AgentRunContext context = new AgentRunContext(runId);
+        try {
+            AgentRunCheckpoint checkpoint = agentApprovalService.restore(run);
+            originalToolResultStore.beginSession(run.getSessionId());
+            // 恢复原编号和当时的目标版本，而不是重新加载索引后从 memory_1 编号。
+            memoryReferenceRegistry.restoreRun(run.getUserId(), run.getSessionId(), checkpoint.getUserMessage(), runId,
+                    checkpoint.getMemoryTargets(), checkpoint.getNextMemoryNumber());
+            context.restoreToolHistory(checkpoint.getToolExecutions().stream()
+                    .map(ToolExecutionSnapshot::restore).toList(), checkpoint.getExecutedToolNames(),
+                    checkpoint.isToolHistoryComplete());
+            restoreOriginalToolResults(checkpoint.getMessages());
+            AgentRunResult result = runAgentLoop(run.getSessionId(), checkpoint.getUserMessage(), context,
+                    checkpoint, agentApprovalService.decisions(run));
+            if (result.getStatus() == AgentRunStatus.WAITING_APPROVAL) {
+                context.markWaitingApproval();
+            } else {
+                context.markSucceeded();
+            }
+            return result;
+        } catch (RuntimeException exception) {
+            context.markFailed(exception);
+            // 不能确定工具是否已经产生副作用时停止恢复，绝不自动再执行一遍。
+            try {
+                agentApprovalService.fail(runId);
+            } catch (RuntimeException persistenceFailure) {
+                exception.addSuppressed(persistenceFailure);
+            }
+            throw exception;
+        } finally {
+            notifyAfterRun(context);
+            originalToolResultStore.clear();
+            memoryReferenceRegistry.clear();
+        }
+    }
+
+    // 暂停前的工具原文可能还没有写入聊天表，恢复时从检查点回填本次线程缓存。
+    private void restoreOriginalToolResults(List<LlmMessage> messages) {
+        var ordinaryCallIds = new java.util.HashSet<String>();
+        var recoveryNames = toolRegistry.getAllTools().stream().filter(Tool::isContextRecoveryTool)
+                .map(Tool::name).collect(java.util.stream.Collectors.toSet());
+        for (LlmMessage message : messages) {
+            for (ToolCall call : message.getToolCalls()) {
+                if (!recoveryNames.contains(call.name())) {
+                    ordinaryCallIds.add(call.id());
+                }
+            }
+            // 恢复工具自身的结果仍不登记为可恢复原文，避免嵌套恢复。
+            if ("tool".equals(message.getRole()) && ordinaryCallIds.contains(message.getToolCallId())) {
+                originalToolResultStore.save(message.getToolCallId(), message.getOriginalContent());
+            }
         }
     }
 
@@ -223,69 +300,86 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
-    private String runAgentLoop(Long sessionId, String userMessage, AgentRunContext context) {
-        // messages 是发送给模型的完整上下文，包含系统提示词、旧历史和本轮消息。
+    // 执行到最终回答或审批屏障就返回；等待期间不占用本次请求线程。
+    private AgentRunResult runAgentLoop(Long sessionId, String userMessage, AgentRunContext context,
+                                        AgentRunCheckpoint saved, List<ToolApprovalRequest> decisions) {
         List<LlmMessage> messages = new ArrayList<>();
-
-        // 只加载记忆索引并拼入 system 消息，避免把记忆正文直接复制到每一轮上下文。
-        MemoryIndexSnapshot memoryIndex = loadMemoryIndex(sessionId);
-        messages.add(LlmMessage.system(buildSystemPrompt(memoryIndex)));
-        messages.addAll(conversationMemoryService.loadHistory(sessionId));
-
-        // 记住本轮用户消息的起点，最终只保存这个位置之后的新消息。
-        int currentRunStartIndex = messages.size();
-        LlmMessage currentUserMessage = LlmMessage.user(userMessage);
-        messages.add(currentUserMessage);
-
-        // 记录工具轮数，防止模型无限嵌套工具调用
-        int completedToolRounds = 0;
-        // 恢复预算只在当前 Agent Loop 内统计，下一次用户请求会重新计算。
-        int completedRecoveryCalls = 0;
-        int recoveredCharacters = 0;
-        RecoveryReferenceRegistry recoveryReferences = new RecoveryReferenceRegistry();
-        // 一次 Agent Loop 最多摘要一次，避免把刚生成的摘要再次送去摘要。
-        boolean summaryUsed = false;
-        //Agent Loop核心
+        int currentRunStartIndex;
+        if (saved == null) {
+            // 普通新问题才读取历史和最新记忆索引；恢复任务必须使用原检查点。
+            MemoryIndexSnapshot memoryIndex = loadMemoryIndex(sessionId);
+            messages.add(LlmMessage.system(buildSystemPrompt(memoryIndex)));
+            messages.addAll(conversationMemoryService.loadHistory(sessionId));
+            currentRunStartIndex = messages.size();
+            messages.add(LlmMessage.user(userMessage));
+        } else {
+            messages.addAll(saved.getMessages());
+            currentRunStartIndex = saved.getCurrentRunStartIndex();
+        }
+        LlmMessage currentUserMessage = messages.get(currentRunStartIndex);
+        // 暂停不会重置工具轮数、恢复次数、字符预算和本轮摘要次数。
+        int completedToolRounds = saved == null ? 0 : saved.getCompletedToolRounds();
+        int completedRecoveryCalls = saved == null ? 0 : saved.getCompletedRecoveryCalls();
+        int recoveredCharacters = saved == null ? 0 : saved.getRecoveredCharacters();
+        boolean summaryUsed = saved != null && saved.isSummaryUsed();
+        RecoveryReferenceRegistry recoveryReferences = new RecoveryReferenceRegistry(context.getRunId());
+        if (saved != null) {
+            recoveryReferences.restore(saved.getRecoveryReferences(), saved.getNextRecoveryNumber());
+        }
+        // 本地恢复原工具响应；只有补齐对应的 tool 结果后才再次请求模型。
+        ToolCallLlmResponse pendingResponse = saved == null ? null : new ToolCallLlmResponse(saved.getPendingCalls());
+        Map<String, ToolApprovalRequest> currentDecisions = new LinkedHashMap<>();
+        for (ToolApprovalRequest decision : decisions) {
+            currentDecisions.put(decision.getToolCallId(), decision);
+        }
         while (true) {
-            // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
-            // 得到模型的回复
-            //查找到本轮AgentLoop当中的历史摘要，一轮AgentLoop当中只会存在一个
-            String summaryBeforeRequest = findContextSummaryContent(messages);
-            messages = prepareMessagesForLlmRequest(
-                    messages,
-                    recoveryReferences,
-                    currentRunStartIndex,
-                    !summaryUsed
-            );
-            // 摘要会减少历史消息数量；重新定位当前用户消息，避免后续子列表边界失效。
-            currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
-            //
-            boolean summaryGenerated = persistNewSummaryIfNeeded(
-                    sessionId, summaryBeforeRequest, messages
-            );
-            summaryUsed = summaryUsed || summaryGenerated;
-            // 保存工具结果被压缩之后的上下文
-            conversationMemoryService.updateToolContextCopies(
-                    sessionId,
-                    messages.subList(1, currentRunStartIndex)
-            );
-            // 网络暂时失败由重试器处理；成功后这里仍只接收一个正常 LlmResponse。
-            LlmResponse response = llmRetryExecutor.generate(llmClient, messages);
+            boolean resumingToolRound = pendingResponse != null;
+            LlmResponse response;
+            if (resumingToolRound) {
+                response = pendingResponse;
+                pendingResponse = null;
+            } else {
+                // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
+                // 摘要身份由消息字段确定，比较前后内容只用于判断是否生成了新摘要。
+                String summaryBeforeRequest = findContextSummaryContent(messages);
+                messages = prepareMessagesForLlmRequest(
+                        messages,
+                        recoveryReferences,
+                        currentRunStartIndex,
+                        !summaryUsed
+                );
+                // 摘要会减少历史消息数量；重新定位当前用户消息，避免后续子列表边界失效。
+                currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
+                boolean summaryGenerated = persistNewSummaryIfNeeded(
+                        sessionId, summaryBeforeRequest, messages
+                );
+                summaryUsed = summaryUsed || summaryGenerated;
+                // 保存工具结果被压缩之后的上下文
+                conversationMemoryService.updateToolContextCopies(
+                        sessionId,
+                        messages.subList(1, currentRunStartIndex)
+                );
+                // 网络暂时失败由重试器处理；成功后这里仍只接收一个正常 LlmResponse。
+                response = llmRetryExecutor.generate(llmClient, messages);
+            }
 
             //是最终结果？
             if (response instanceof TextLlmResponse textResponse) {
                 LlmMessage assistantMessage = LlmMessage.assistant(textResponse.content());
                 messages.add(assistantMessage);
                 // 只有完整得到最终回答后，才在一个事务中保存本轮全部消息。
-                conversationMemoryService.appendMessages(
-                        sessionId,
-                        new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()))
-                );
+                List<LlmMessage> completedMessages = new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()));
+                if (saved == null) {
+                    conversationMemoryService.appendMessages(sessionId, completedMessages);
+                } else {
+                    // 最终消息和运行完成状态一起提交，客户端重试不会重复保存同一轮。
+                    agentApprovalService.complete(context.getRunId(), sessionId, completedMessages, textResponse.content());
+                }
                 // 提取记忆候选并保存
                 extractMemoryCandidates(sessionId, userMessage, textResponse.content(), context);
                 // 提取事务已经结束；这里可以重试之前未完成的整理，不持锁调用模型。
                 memoryConsolidationService.consolidateIfNeeded(BaseContext.getCurrentId(), sessionId);
-                return textResponse.content();
+                return AgentRunResult.completed(context.getRunId(), textResponse.content());
             }
 
             // 是工具调用？
@@ -296,7 +390,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
                 // 获取LLM想要调用的工具列表
                 List<ToolCall> toolCalls = toolCallResponse.toolCalls();
-
                 // 只要包含恢复工具，整组 assistant/tool 消息就不进入未来上下文，避免调用与结果数量不一致。
                 // TODO 下一阶段要求恢复工具独占一轮：Prompt 负责提示，Harness 负责强制校验。
                 // TODO 如果模型混用工具，则不执行本轮任何工具，并为每个 toolCall 返回可重试失败，让模型重新规划。
@@ -304,69 +397,105 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // recoveryRef 和 memoryRef 都只属于当前 AgentLoop，相关工具消息不能进入未来历史。
                 boolean contextReplayable = !recoveryRound && !containsContextScopedTool(toolCalls, context);
 
-                // 如果 Hook 直接结束任务，需要用这个位置排除尚未完成的工具消息。
-                int currentToolRoundStartIndex = messages.size();
-                //将本轮LLM的工具请求添加到上下文，标记是否可重放
-                LlmMessage assistantToolMessage = LlmMessage.assistantToolCalls(toolCalls, contextReplayable);
-                messages.add(assistantToolMessage);
-
-                // 一次响应可能要求调用多个工具，所以必须逐个执行并分别添加结果消息。
+                // 新响应保存 assistant 请求；恢复时检查点已经保存过，不能追加第二份。
+                int currentToolRoundStartIndex = resumingToolRound ? messages.size() - 1 : messages.size();
+                if (!resumingToolRound) {
+                    messages.add(LlmMessage.assistantToolCalls(toolCalls, contextReplayable));
+                }
+                Map<String, ToolCallHookResult> checks = new LinkedHashMap<>();
+                Map<String, String> approvalReasons = new LinkedHashMap<>();
+                // 整批只检查不执行，哪怕待审批工具排在最后，前面的普通工具也不会抢先产生副作用。
+                for (ToolCall call : toolCalls) {
+                    ToolCallHookResult check = notifyBeforeToolExecution(context, call);
+                    ToolApprovalRequest decision = currentDecisions.get(call.id());
+                    if (decision != null) {
+                        if (!Objects.equals(decision.getToolName(), call.name())
+                                || !Objects.equals(decision.getArguments(), call.arguments())) {
+                            throw new IllegalStateException("已审批的工具参数与检查点不一致");
+                        }
+                        if ("REJECTED".equals(decision.getStatus())) {
+                            // 用户拒绝也是该调用的结果；稍后用原 ID 回给模型，不执行工具或后置 Hook。
+                            check = ToolCallHookResult.reject("APPROVAL_REJECTED", "用户拒绝了这次工具调用", false);
+                        } else if ("APPROVED".equals(decision.getStatus()) && check.isApprovalRequired()) {
+                            // 只消除审批要求；其他 Hook 真正拒绝的权限检查仍然有效。
+                            check = ToolCallHookResult.allow();
+                        } else if (!"APPROVED".equals(decision.getStatus())) {
+                            throw new IllegalStateException("审批尚未完成");
+                        }
+                    }
+                    checks.put(call.id(), check);
+                    if (check.isApprovalRequired()) {
+                        approvalReasons.put(call.id(), check.getApprovalReason());
+                    } else if (!check.isAllowed() && !check.isRetryable()
+                            && !"APPROVAL_REJECTED".equals(check.getErrorCode())) {
+                        // 真正的权限拒绝优先于审批，整批不执行；只保存完整前序消息和拒绝说明。
+                        context.requestToolExecution(call);
+                        context.classifyToolExecution(call, toolRegistry.getRequiredTool(call.name()).isMemoryWriteTool());
+                        context.rejectToolExecution(call, ToolExecutionResult.failure(check.error()));
+                        List<LlmMessage> finished = new ArrayList<>(messages.subList(currentRunStartIndex, currentToolRoundStartIndex));
+                        finished.add(LlmMessage.assistant(check.getMessage()));
+                        if (saved == null) {
+                            conversationMemoryService.appendMessages(sessionId, finished);
+                        } else {
+                            agentApprovalService.complete(context.getRunId(), sessionId, finished, check.getMessage());
+                        }
+                        return AgentRunResult.completed(context.getRunId(), check.getMessage());
+                    }
+                }
+                if (!approvalReasons.isEmpty()) {
+                    if (resumingToolRound) {
+                        // 等待期间新增了审批要求时保守结束，不丢掉本批旧拒绝，也不复用旧授权。
+                        String notice = "等待期间审批规则已变化，本批工具均未执行，请重新发起请求。";
+                        List<LlmMessage> finished = new ArrayList<>(messages.subList(currentRunStartIndex, currentToolRoundStartIndex));
+                        finished.add(LlmMessage.assistant(notice));
+                        agentApprovalService.complete(context.getRunId(), sessionId, finished, notice);
+                        return AgentRunResult.completed(context.getRunId(), notice);
+                    }
+                    AgentRunCheckpoint checkpoint = new AgentRunCheckpoint();
+                    checkpoint.setRunId(context.getRunId());
+                    checkpoint.setUserId(BaseContext.getCurrentId());
+                    checkpoint.setSessionId(sessionId);
+                    checkpoint.setUserMessage(userMessage);
+                    checkpoint.setBatchNumber(saved == null ? 0 : saved.getBatchNumber());
+                    checkpoint.setMessages(messages);
+                    checkpoint.setPendingCalls(toolCalls);
+                    checkpoint.setCurrentRunStartIndex(currentRunStartIndex);
+                    checkpoint.setCompletedToolRounds(completedToolRounds);
+                    checkpoint.setCompletedRecoveryCalls(completedRecoveryCalls);
+                    checkpoint.setRecoveredCharacters(recoveredCharacters);
+                    checkpoint.setSummaryUsed(summaryUsed);
+                    checkpoint.setRecoveryReferences(recoveryReferences.snapshot());
+                    checkpoint.setNextRecoveryNumber(recoveryReferences.nextNumber());
+                    checkpoint.setMemoryTargets(memoryReferenceRegistry.toolContext().getTargets());
+                    checkpoint.setNextMemoryNumber(memoryReferenceRegistry.nextReferenceNumber());
+                    checkpoint.setToolExecutions(context.getToolExecutions().stream().map(ToolExecutionSnapshot::from).toList());
+                    checkpoint.setExecutedToolNames(context.getExecutedToolNames());
+                    checkpoint.setToolHistoryComplete(context.hasCompleteToolHistory());
+                    return agentApprovalService.pause(checkpoint, approvalReasons);
+                }
+                // 当前批次的批准仅使用一次，下一次模型提出新调用仍需重新审批。
+                currentDecisions.clear();
                 for (ToolCall toolCall : toolCalls) {
-                    // 先登记请求，再记录检查或执行结果；不能等工具成功才留下轨迹。
                     context.requestToolExecution(toolCall);
-                    // 在已经注册的工具中找到对应名称的工具
                     Tool tool = toolRegistry.getRequiredTool(toolCall.name());
                     context.classifyToolExecution(toolCall, tool.isMemoryWriteTool());
                     boolean recoveryTool = tool.isContextRecoveryTool();
-
-                    // 次数限制在工具执行前检查；被拒绝的请求不执行恢复工具和 afterToolExecution Hook。
-                    if (recoveryTool && !contextManager.hasRecoveryCallCapacity(completedRecoveryCalls)) {
-                        ToolExecutionResult rejected = recoveryFailure(
-                                "RECOVERY_CALL_LIMIT_EXCEEDED", "本次任务的工具结果恢复次数已达到上限");
+                    ToolCallHookResult hookResult = checks.get(toolCall.id());
+                    if (!hookResult.isAllowed()) {
+                        ToolExecutionResult rejected = ToolExecutionResult.failure(hookResult.error());
                         context.rejectToolExecution(toolCall, rejected);
-                        LlmMessage rejectedRecoveryMessage = createToolResultMessage(
-                                toolCall.id(),
-                                rejected,
-                                false
-                        );
-                        messages.add(rejectedRecoveryMessage);
+                        messages.add(createToolResultMessage(toolCall.id(), rejected, contextReplayable));
                         continue;
                     }
-
-                    // 只要恢复工具开始执行就计数，即使参数错误或找不到原始结果也会消耗一次机会。
+                    // 实际执行前扣恢复次数，被审批拒绝的工具不消耗恢复预算。
+                    if (recoveryTool && !contextManager.hasRecoveryCallCapacity(completedRecoveryCalls)) {
+                        ToolExecutionResult rejected = recoveryFailure("RECOVERY_CALL_LIMIT_EXCEEDED", "本次任务的工具结果恢复次数已达到上限");
+                        context.rejectToolExecution(toolCall, rejected);
+                        messages.add(createToolResultMessage(toolCall.id(), rejected, false));
+                        continue;
+                    }
                     if (recoveryTool) {
                         completedRecoveryCalls++;
-                    }
-
-                    // 顺序执行前置 Hook；第一个拒绝结果会立即停止后续前置 Hook。
-                    ToolCallHookResult hookResult = notifyBeforeToolExecution(context, toolCall);
-
-                    // 如果 Hook 不允许LLM调用该工具并且不可重试，则立即返回结果。
-                    if (!hookResult.isAllowed()) {
-                        // 拒绝也要留下结果，但不能触发“执行完成”的后置 Hook。
-                        ToolExecutionResult rejectedResult = ToolExecutionResult.failure(
-                                hookResult.getErrorCode(), hookResult.getMessage(), hookResult.isRetryable());
-                        context.rejectToolExecution(toolCall, rejectedResult);
-                        if (!hookResult.isRetryable()) {
-                            // 当前工具轮没有完成，不保存其 assistant/tool 消息，只保存Hook直接返回的答复。
-                            List<LlmMessage> completedMessages = new ArrayList<>(messages.subList(
-                                    currentRunStartIndex,//除去system的开始索引
-                                    currentToolRoundStartIndex//调用工具前的索引
-                            ));
-                            completedMessages.add(LlmMessage.assistant(hookResult.getMessage()));
-                            conversationMemoryService.appendMessages(sessionId, completedMessages);
-                            return hookResult.getMessage();
-                        }
-                        // Hook拒绝工具调用并且该工具可以重新调用
-                        // 出现可恢复问题时不执行工具，也不执行 afterToolExecution。
-                        // 使用原 toolCallId 返回失败结果，让模型知道应该修正哪一次工具调用。
-                        LlmMessage rejectedToolMessage = LlmMessage.toolResult(
-                                toolCall.id(),
-                                serializeToolResult(rejectedResult),
-                                contextReplayable
-                        );
-                        messages.add(rejectedToolMessage);
-                        continue;
                     }
 
                     // 恢复工具先把模型的短引用解析成真实 toolCallId，再执行统一工具逻辑。
@@ -665,24 +794,22 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
-    // 顺序执行前置 Hook；一旦某个 Hook 拒绝，后面的 Hook 不再执行。
+    // 审批要求先记下，继续权限检查；任何拒绝都优先于“用户可以批准”。
     private ToolCallHookResult notifyBeforeToolExecution(AgentRunContext context, ToolCall toolCall) {
+        ToolCallHookResult approval = ToolCallHookResult.allow();
         for (AgentHook hook : hooks) {
             ToolCallHookResult result = hook.beforeToolExecution(context, toolCall);
             if (result == null) {
                 throw new IllegalStateException("beforeToolExecution Hook 返回结果不能为空");
             }
-            // 如果某个 Hook 拒绝了工具调用，立即返回结果，不再执行后续 Hook。
-            if (!result.isAllowed()) {
-                log.warn("工具前置 Hook 拒绝调用，runId={}，toolName={}，errorCode={}，retryable={}",
-                        context.getRunId(),
-                        toolCall.name(),
-                        result.getErrorCode(),
-                        result.isRetryable());
+            if (result.isApprovalRequired()) {
+                approval = result;
+            } else if (!result.isAllowed()) {
+                // 真正拒绝后不再调用后续 Hook；需要审批则继续检查，不能提前放行。
                 return result;
             }
         }
-        return ToolCallHookResult.allow();
+        return approval;
     }
 
     // 工具正常返回后执行所有工具后置 Hook。

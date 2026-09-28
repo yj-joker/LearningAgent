@@ -40,7 +40,7 @@ public class ToolExecutionRecord {
         return new ToolExecutionRecord(sequence, toolCallId, toolName, arguments, memoryWriteTool, nextStatus, outcome, errorType);
     }
 
-    // 只有终态才能交给提取模型；REQUESTED 和 STARTED 表示轨迹还不完整。
+    // 待审批调用保存在检查点中；运行轨迹只判断这次实际尝试是否已经结束。
     public boolean isFinished() {
         return status != Status.REQUESTED && status != Status.STARTED;
     }

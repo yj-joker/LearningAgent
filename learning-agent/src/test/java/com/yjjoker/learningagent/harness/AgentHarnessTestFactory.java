@@ -142,7 +142,8 @@ public final class AgentHarnessTestFactory {
                 referenceRegistry,
                 new NoopMemoryExtractionService(),
                 mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationService.class),
-                mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class)
+                mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class),
+                mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class)
         );
     }
 

@@ -164,6 +164,44 @@ CREATE TABLE IF NOT EXISTS session_memories (
       COLLATE = utf8mb4_unicode_ci
       COMMENT = '结构化记忆审批申请';
 
+-- 通用审批：运行检查点 + 本次工具调用的审批，两者不依赖记忆业务。
+-- 手动执行此增量脚本；不删除旧审批表或修改旧申请，已有旧申请仍走旧接口。
+CREATE TABLE IF NOT EXISTS agent_approval_runs (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '整个逻辑任务编号，恢复时不变',
+    user_id BIGINT UNSIGNED NOT NULL,
+    session_id BIGINT UNSIGNED NOT NULL,
+    batch_number INT UNSIGNED NOT NULL COMMENT '每次暂停加一，旧批准不能授权新批次',
+    status VARCHAR(32) NOT NULL,
+    checkpoint_json JSON NOT NULL COMMENT '完整消息、待执行请求、引用映射、预算与已执行轨迹',
+    answer MEDIUMTEXT NULL COMMENT '最终答案，重复恢复直接返回',
+    active_session_id BIGINT UNSIGNED GENERATED ALWAYS AS
+        (CASE WHEN status IN ('WAITING_APPROVAL','APPROVAL_RESOLVED','RUNNING') THEN session_id ELSE NULL END) STORED,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_agent_approval_active_session (active_session_id),
+    KEY idx_agent_approval_owner (user_id, status, created_at),
+    CONSTRAINT chk_agent_run_state CHECK (status IN ('WAITING_APPROVAL','APPROVAL_RESOLVED','RUNNING','COMPLETED','FAILED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用 Agent 暂停与恢复检查点';
+
+CREATE TABLE IF NOT EXISTS agent_tool_approvals (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    batch_number INT UNSIGNED NOT NULL,
+    tool_call_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    tool_name VARCHAR(128) NOT NULL,
+    -- 用 LONGTEXT 保留原参数字符串，JSON 列会规范化空格，影响逐字核对已批准参数。
+    arguments_json LONGTEXT NOT NULL,
+    reason VARCHAR(500) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    decision_reason VARCHAR(500) NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    decided_at DATETIME(6) NULL,
+    PRIMARY KEY (run_id, batch_number, tool_call_id),
+    CONSTRAINT fk_tool_approval_run FOREIGN KEY (run_id) REFERENCES agent_approval_runs(run_id),
+    CONSTRAINT chk_tool_approval_state CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+    CONSTRAINT chk_tool_approval_args CHECK (JSON_VALID(arguments_json))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用工具审批决定，不代表执行结果';
+
 -- 学习会话消息表
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',

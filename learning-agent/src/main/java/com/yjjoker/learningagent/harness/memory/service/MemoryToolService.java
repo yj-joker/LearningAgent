@@ -20,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 // 主模型记忆工具的共同入口；不持有跨请求状态，不在模型请求期间占用数据库事务。
 @Service
@@ -31,13 +30,13 @@ public class MemoryToolService {
     private final MemoryReferenceRegistry references;
     private final StructuredMemoryService store;
     private final LearningSessionRepository sessions;
-    private final MemoryApprovalService approvals;
+    private final MemoryCandidatePersistenceService persistence;
 
     // 根据固定操作生成最小参数结构，不允许模型提供用户 ID 或数据库主键。
     public Map<String, Object> schema(MemoryOperation operation) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("userEvidence", Map.of("type", "string", "description",
-                "逐字复制本轮用户明确要求记住、修改或删除的完整指令，不引用历史、助手或工具内容"));
+                "逐字复制本轮用户完整消息，不截取片段，不引用历史、助手或工具内容；提交申请不代表获得执行授权"));
         if (operation == MemoryOperation.CREATE) {
             fields.put("scope", Map.of("type", "string", "enum", List.of("USER", "SESSION")));
             fields.put("memoryKey", textField("新事实的稳定 key，不填写已有 key"));
@@ -55,8 +54,8 @@ public class MemoryToolService {
                 "additionalProperties", false);
     }
 
-    // 执行显式写入；本阶段先创建审批申请，不直接修改记忆表。
-    public ToolExecutionResult write(MemoryOperation operation, String input) {
+    // 共用参数、归属和证据校验；预检不写入，批准后的执行才进入事务服务。
+    private ToolExecutionResult process(MemoryOperation operation, String input, boolean execute) {
         try {
             MemoryExtractionContext context = requireContext();
             JsonNode node = parseObject(input);
@@ -67,35 +66,41 @@ public class MemoryToolService {
                 return failure("INVALID_ARGUMENT", "存在未允许的参数，请按工具结构重新填写", true);
             }
             MemoryCandidate candidate = parseCandidate(operation, node, context);
-            requireExplicitRequest(operation, candidate.getUserEvidence(), references.currentUserMessage());
-            // 先保存后端已经校验过的候选和目标快照，等待用户明确批准。
-            var request = approvals.create(context.getUserId(), context.getSessionId(), candidate, context);
-            log.info("主循环记忆写入等待审批，sessionId={}，approvalId={}，operation={}，scope={}",
-                    context.getSessionId(), request.getId(), operation, candidate.getScope());
-            return pendingResult(request.getId());
+            requireCurrentUserEvidence(candidate.getUserEvidence(), references.currentUserMessage());
+            if (!execute) {
+                log.info("记忆工具预检完成，sessionId={}，operation={}，未执行写入", context.getSessionId(), operation);
+                return ToolExecutionResult.success("记忆参数校验通过");
+            }
+            // 旧目标快照、实际写入和变更计数在同一事务核对，批准不能覆盖已发生的并发修改。
+            MemoryWriteReceipt receipt = persistence.persistToolCandidate(context,
+                    references.currentUserMessage(), candidate);
+            log.info("已批准的记忆工具执行完成，sessionId={}，operation={}，affectedCount={}",
+                    context.getSessionId(), operation, receipt.getMemoryIds().size());
+            return ToolExecutionResult.memoryWriteSuccess("记忆操作已完成", receipt);
         } catch (SecurityException exception) {
             // 身份或会话权限不满足时，重写工具参数不能解决问题。
             return failure("MEMORY_ACCESS_DENIED", "没有当前用户或会话的记忆操作权限", false);
         } catch (JacksonException | IllegalArgumentException | MemoryExtractionFormatException exception) {
             // 输入错误可以修正，不输出异常中可能包含的原始 JSON。
-            return failure("INVALID_MEMORY_ARGUMENT", "参数或用户依据不合法，请使用本轮明确指令和当前记忆引用", true);
+            return failure("INVALID_MEMORY_ARGUMENT", "参数或用户依据不合法，请完整复制本轮用户消息并使用当前记忆引用", true);
         } catch (ClientDataErrorException | NotFountException exception) {
             // 目标被并发修改或删除时，要求重新读索引，不用旧内容覆盖新内容。
             return failure("MEMORY_TARGET_CHANGED", "目标已变化、不可访问或同 key 已存在，请调用 list_memories 重新确认", true);
         } catch (DataAccessException exception) {
-            // 网络中断等情况不能宣称一定未提交；不鼓励盲目重复写入。
+            // 数据库错误不伪装成功；写入由事务服务回滚，日志只记录异常类型。
             log.warn("记忆工具数据库操作失败，operation={}，exceptionType={}", operation, exception.getClass().getSimpleName());
-            return failure("MEMORY_WRITE_FAILED", "未能确认记忆写入结果，请查询确认后再处理，不要盲目重试", false);
+            return failure("MEMORY_LOOKUP_FAILED", "无法校验当前会话或记忆，请稍后重试", false);
         }
     }
 
-    // 返回待审批状态；没有 MemoryWriteReceipt，后置提取不会把它误认为已落库。
-    private ToolExecutionResult pendingResult(Long approvalId) {
-        var output = JSON.createObjectNode();
-        output.put("status", "PENDING_APPROVAL");
-        output.put("approvalId", approvalId);
-        output.put("message", "记忆变更已提交审批，用户确认后才会写入");
-        return ToolExecutionResult.success(output.toString());
+    // 前置 Hook 调用此方法；通过只代表参数有效，不代表用户已经批准。
+    public ToolExecutionResult validate(MemoryOperation operation, String input) {
+        return process(operation, input, false);
+    }
+
+    // Harness 在审批通过且权限复查通过后调用 execute，工具才真正修改记忆。
+    public ToolExecutionResult write(MemoryOperation operation, String input) {
+        return process(operation, input, true);
     }
 
     // 只返回当前用户和当前会话的索引；完整正文继续使用 recall_memory 按需读取。
@@ -176,63 +181,15 @@ public class MemoryToolService {
         return candidate;
     }
 
-    // 限定本轮原文中的明确命令，避免仅凭助手回答或旧历史触发写入。
-    // 这是保守的文字规则，不是完整语义授权；TODO 后续接入用户审批，处理否定、引用等复杂表达。
-    private void requireExplicitRequest(MemoryOperation operation, String evidence, String original) {
-        if (original == null || !original.contains(evidence)) {
-            throw new IllegalArgumentException("没有本轮用户依据");
+    // 只证明依据来自本轮用户，不用正则猜测自然语言中的授权含义。
+    private void requireCurrentUserEvidence(String evidence, String original) {
+        // 完整保留否定、问句和引用的上下文，防止模型只截取一句“删除”。
+        if (original == null || original.isBlank() || evidence == null || evidence.isBlank()
+                || !original.strip().equals(evidence.strip())) {
+            throw new IllegalArgumentException("userEvidence 必须完整复制本轮用户消息");
         }
-        String action = switch (operation) {
-            case CREATE -> "(?:记住|记下|保存|添加|新增)";
-            case UPDATE -> "(?:修改|更新|更改|将|把)";
-            case DELETE -> "(?:忘记|删除|移除|清除)";
-        };
-        Pattern command = Pattern.compile("^(?:请(?:帮我)?|帮我|麻烦你|麻烦|现在|另外[，,]?)?\\s*" + action + ".+", Pattern.DOTALL);
-        // 提问、否定和引用不作为这版工具的明确命令；不确定时宁可让用户重新说明。
-        if (!command.matcher(evidence).matches() || evidence.matches("(?s).*[？?].*")
-                || evidence.contains("不要") || evidence.contains("不用") || evidence.contains("别删除")) {
-            throw new IllegalArgumentException("需要明确的记忆操作命令");
-        }
-        int position = original.indexOf(evidence);
-        if (position > 0 && "。！？!?；;\n".indexOf(original.charAt(position - 1)) < 0) {
-            throw new IllegalArgumentException("不能从引用或否定句中截取操作命令");
-        }
-    }
-
-    // 数据库已提交后，刷新失败也不能把已完成的操作报告成失败。
-    private ToolExecutionResult committedResult(MemoryWriteReceipt receipt) {
-        var output = JSON.createObjectNode();
-        output.put("operation", receipt.getOperation().name());
-        output.put("scope", receipt.getScope().name());
-        output.put("message", "记忆操作已完成");
-        var refs = output.putArray("affectedMemoryRefs");
-        var latest = output.putArray("affectedMemories");
-        try {
-            // 只更新本次处理的目标；不能悄悄刷新模型尚未看到的其他记忆版本。
-            if (receipt.getOperation() == MemoryOperation.DELETE) {
-                references.toolContext().currentRefsFor(receipt).forEach(references::remove);
-            } else {
-                for (Long id : receipt.getMemoryIds()) {
-                    String ref = receipt.getScope() == MemoryScope.USER
-                            ? references.registerUserMemory(store.recallUserMemory(receipt.getOwnerId(), id))
-                            : references.registerSessionMemory(store.recallSessionMemory(receipt.getOwnerId(), id));
-                    refs.add(ref);
-                    // 更新版本的同时把新索引交给模型，后续写入仍以它实际看到的快照为依据。
-                    MemoryExtractionTarget target = references.toolContext().resolve(ref);
-                    var entry = latest.addObject();
-                    entry.put("memoryRef", ref);
-                    entry.put("memoryKey", target.getMemoryKey());
-                    entry.put("memoryTopic", target.getMemoryTopic());
-                    entry.put("memorySummary", target.getMemorySummary());
-                }
-            }
-        } catch (RuntimeException exception) {
-            log.warn("记忆已提交但索引刷新失败，sessionId={}，exceptionType={}",
-                    references.currentSessionId(), exception.getClass().getSimpleName());
-            output.put("refreshRequired", true);
-            output.put("message", "记忆已处理，请调用 list_memories 刷新索引，不要重复写入");
-        }
-        return ToolExecutionResult.memoryWriteSuccess(output.toString(), receipt);
+        // “请记住我不要吃花生”可以提交申请；是否执行由用户对具体变更的审批决定。
+        // 提示词仍要求明确指令，但安全边界是后端权限检查和用户审批，不是关键词匹配。
     }
 
     // 刷新使用带范围的数据库查询，编号由当前请求注册表保持稳定。

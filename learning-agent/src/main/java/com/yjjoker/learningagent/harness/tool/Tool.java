@@ -15,6 +15,16 @@ public interface Tool {
     // 名称负责精确定位工具，说明负责表达工具的用途，两者承担的职责不同。
     String description();
 
+    // 声明是否需要用户确认；与记忆分类无关，文件、权限等工具也能使用。
+    default boolean requiresUserApproval() {
+        return false;
+    }
+
+    // 审批前只检查输入，不能产生写入等副作用；字段规则由具体工具补充。
+    default ToolExecutionResult validateApprovalInput(String input) {
+        return ToolExecutionResult.success("参数检查通过");
+    }
+
     // 只有新增、修改、删除记忆的工具返回 true；查询和召回工具不能标记为写操作。
     default boolean isMemoryWriteTool() {
         return false;

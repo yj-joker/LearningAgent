@@ -57,7 +57,7 @@ public class RecallMemoryTool implements Tool {
                 "properties", Map.of(
                         "memoryRef", Map.of(
                                 "type", "string",
-                                "description", "当前记忆索引中的引用，例如 memory_1；必须原样复制"
+                                "description", "当前记忆索引中的完整 memoryRef，包含任务标识；必须原样复制，不能使用旧任务引用"
                         )
                 ),
                 "required", java.util.List.of("memoryRef"),

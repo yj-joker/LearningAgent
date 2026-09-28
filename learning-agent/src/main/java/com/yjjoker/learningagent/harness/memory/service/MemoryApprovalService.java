@@ -23,8 +23,9 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
-// 管理记忆写入的用户审批；申请阶段不改记忆，批准阶段复用原有事务写入服务。
+// 处理回答后的自动记忆提案，不再负责主循环的工具审批和暂停。
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -40,19 +41,8 @@ public class MemoryApprovalService {
                                         MemoryExtractionContext context) {
         requireOwner(userId, sessionId);
         try {
-            MemoryApprovalRequest request = new MemoryApprovalRequest();
-            request.setUserId(userId);
-            request.setSessionId(sessionId);
-            request.setOperation(candidate.getOperation());
-            request.setScope(candidate.getScope());
-            request.setCandidateJson(JSON.writeValueAsString(candidate));
-            request.setTargetSnapshotJson(JSON.writeValueAsString(context.getTargets().stream()
-                    .filter(target -> candidate.getTargetMemoryRefs().contains(target.getMemoryRef()))
-                    .toList()));
-            request.setStatus(MemoryApprovalStatus.PENDING);
-            request.setCreatedAt(LocalDateTime.now());
-            request.setUpdatedAt(request.getCreatedAt());
-            repository.insert(request);
+            MemoryApprovalRequest request = buildRequest(userId, sessionId, candidate, context);
+            requireInserted(repository.insert(request));
             log.info("记忆审批申请已创建，userId={}，sessionId={}，approvalId={}，operation={}，scope={}",
                     userId, sessionId, request.getId(), candidate.getOperation(), candidate.getScope());
             return request;
@@ -122,10 +112,39 @@ public class MemoryApprovalService {
         if (request == null || !userId.equals(request.getUserId())) {
             throw new ClientDataErrorException("审批申请不存在或无权访问");
         }
+        // 自动提取产生的独立提案只锁申请本身；主循环工具改走通用审批表。
+        request = repository.lock(approvalId, userId);
+        if (request == null) {
+            throw new ClientDataErrorException("审批申请已失效");
+        }
         if (request.getStatus() != MemoryApprovalStatus.PENDING) {
             throw new ClientDataErrorException("该审批申请已经处理，不能重复操作");
         }
         return request;
+    }
+
+    // 自动提取提案保存候选和目标版本；构造对象时不执行记忆操作。
+    private MemoryApprovalRequest buildRequest(Long userId, Long sessionId, MemoryCandidate candidate,
+                                               MemoryExtractionContext context) {
+        MemoryApprovalRequest request = new MemoryApprovalRequest();
+        request.setUserId(userId);
+        request.setSessionId(sessionId);
+        request.setOperation(candidate.getOperation());
+        request.setScope(candidate.getScope());
+        request.setCandidateJson(JSON.writeValueAsString(candidate));
+        request.setTargetSnapshotJson(JSON.writeValueAsString(context.getTargets().stream()
+                .filter(target -> candidate.getTargetMemoryRefs().contains(target.getMemoryRef())).toList()));
+        request.setStatus(MemoryApprovalStatus.PENDING);
+        request.setCreatedAt(LocalDateTime.now());
+        request.setUpdatedAt(request.getCreatedAt());
+        return request;
+    }
+
+    // 数据库未保存成功就终止事务，不能对外返回假的申请编号或等待状态。
+    private void requireInserted(int affected) {
+        if (affected != 1) {
+            throw new IllegalStateException("审批数据保存失败");
+        }
     }
 
     // 批准和创建都检查用户、会话归属及会话状态。

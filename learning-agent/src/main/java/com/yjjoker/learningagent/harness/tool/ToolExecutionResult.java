@@ -8,7 +8,7 @@ import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
-// 工具统一用这个对象表示执行结果，Harness 因此能明确区分“成功”和“可恢复的失败”。
+// 工具结果只表示真实执行成功或失败；是否需要审批由前置 Hook 决定。
 // 预期内的业务失败进入 HarnessError；数据库断连、代码错误等系统异常仍交给 HarnessException。
 @Getter
 @AllArgsConstructor(access = AccessLevel.PRIVATE)

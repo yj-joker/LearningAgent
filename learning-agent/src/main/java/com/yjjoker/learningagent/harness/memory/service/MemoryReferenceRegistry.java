@@ -7,6 +7,7 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.memory.model.MemoryIndexSnapshot;
+import com.yjjoker.learningagent.harness.model.TaskReferenceScope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -16,6 +17,7 @@ import java.util.Objects;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
 // 为一次 AgentLoop 建立 memoryRef 到真实记忆 ID 的临时映射。
 // ThreadLocal 保证同一应用进程中的并发请求不会互相读取引用。
@@ -34,7 +36,12 @@ public class MemoryReferenceRegistry {
 
     // 由 Harness 保存本轮原文；工具参数不能替换这份用户依据。
     public void beginRun(Long userId, Long sessionId, String userMessage) {
-        currentRun.set(new RunReferences(userId, sessionId, userMessage));
+        beginRun(userId, sessionId, userMessage, UUID.randomUUID().toString());
+    }
+
+    // 主循环传入逻辑任务编号，使暂停和恢复共用同一引用范围。
+    public void beginRun(Long userId, Long sessionId, String userMessage, String runId) {
+        currentRun.set(new RunReferences(userId, sessionId, userMessage, TaskReferenceScope.fromRunId(runId)));
         log.debug("记忆引用映射已开始，userId={}，sessionId={}", userId, sessionId);
     }
 
@@ -113,6 +120,37 @@ public class MemoryReferenceRegistry {
         currentRun.remove();
     }
 
+    // 编号计数器也要保存，已删除的短引用不能重新分配给另一个目标。
+    public int nextReferenceNumber() {
+        return currentRun.get().nextNumber;
+    }
+
+    // 恢复原任务的引用和目标版本；不是重新查询索引再从 memory_1 编号。
+    public void restoreRun(Long userId, Long sessionId, String userMessage, String runId,
+                           java.util.List<MemoryExtractionTarget> targets, int nextNumber) {
+        beginRun(userId, sessionId, userMessage, runId);
+        RunReferences run = currentRun.get();
+        if (targets == null || nextNumber < 1) {
+            throw new IllegalArgumentException("记忆引用检查点不完整");
+        }
+        for (MemoryExtractionTarget target : targets) {
+            // 检查编号范围，防止把别的任务映射装进当前任务。旧检查点的 memory_N 只在恢复时兼容。
+            int number = TaskReferenceScope.restoredNumber(target.getMemoryRef(), "memory", run.referenceScope);
+            if (number >= nextNumber) {
+                throw new IllegalArgumentException("记忆引用计数器不合法");
+            }
+            Long owner = target.getScope() == MemoryScope.USER ? userId : sessionId;
+            if (!Objects.equals(owner, target.getOwnerId())) {
+                throw new IllegalArgumentException("检查点中的记忆归属不一致");
+            }
+            run.references.put(target.getMemoryRef(), new MemoryReference(
+                    target.getScope(), target.getOwnerId(), target.getMemoryId()));
+            run.snapshots.put(target.getMemoryRef(), target);
+        }
+        run.nextNumber = nextNumber;
+        log.info("记忆引用已从检查点恢复，sessionId={}，referenceCount={}", sessionId, targets.size());
+    }
+
     // 相同数据库目标复用本轮编号；新增目标才消耗下一个编号。
     private String register(MemoryReference reference) {
         RunReferences runReferences = currentRun.get();
@@ -133,7 +171,7 @@ public class MemoryReferenceRegistry {
                 return entry.getKey();
             }
         }
-        String memoryRef = "memory_" + runReferences.nextNumber++;
+        String memoryRef = "memory_" + runReferences.referenceScope + "_" + runReferences.nextNumber++;
         runReferences.references.put(memoryRef, reference);
         log.debug("记忆引用注册成功，memoryRef={}，scope={}，memoryId={}",
                 memoryRef, reference.getScope(), reference.getMemoryId());
@@ -148,22 +186,25 @@ public class MemoryReferenceRegistry {
         // 当前请求的会话范围，用于校验会话记忆归属。
         private final Long sessionId;
         private final String userMessage;
+        // 任务范围与序号组合成完整引用，不能跨任务重新指向其他记忆。
+        private final String referenceScope;
         // 只保存可见摘要和版本信息，不提前加载完整正文。
         private final Map<String, MemoryExtractionTarget> snapshots = new LinkedHashMap<>();
         // 按生成顺序保存 memoryRef 到真实目标的映射。
         private final Map<String, MemoryReference> references = new LinkedHashMap<>();
-        // 只在当前请求内递增，重新请求会从 memory_1 重新开始。
+        // 序号只在当前任务内递增；新任务会更换前缀，不能复用完整旧引用。
         private int nextNumber = 1;
 
         private RunReferences() {
-            this(null, null, null);
+            this(null, null, null, TaskReferenceScope.fromRunId(UUID.randomUUID().toString()));
         }
 
         // 每次请求新建容器，结束时由 clear 释放。
-        private RunReferences(Long userId, Long sessionId, String userMessage) {
+        private RunReferences(Long userId, Long sessionId, String userMessage, String referenceScope) {
             this.userId = userId;
             this.sessionId = sessionId;
             this.userMessage = userMessage;
+            this.referenceScope = referenceScope;
         }
     }
 }

@@ -16,7 +16,26 @@ import java.util.UUID;
 public class AgentRunContext {
 
     // runId 用来把同一次任务产生的多条日志关联起来。
-    private final String runId = UUID.randomUUID().toString();
+    private final String runId;
+
+    // 新任务分配编号；后续恢复继续使用这个编号，不创建另一个业务任务。
+    public AgentRunContext() {
+        this(UUID.randomUUID().toString());
+    }
+
+    // 从服务端检查点恢复原任务身份，耗时仍单独统计本次 HTTP 执行。
+    public AgentRunContext(String runId) {
+        this.runId = Objects.requireNonNull(runId);
+    }
+
+    // 恢复已经完成的工具记录，后续执行只追加，不能丢掉防重复提取的依据。
+    public void restoreToolHistory(List<ToolExecutionRecord> records, List<String> names, boolean complete) {
+        toolExecutions.clear();
+        toolExecutions.addAll(records);
+        executedToolNames.clear();
+        executedToolNames.addAll(names);
+        toolHistoryComplete = complete;
+    }
 
     // 使用单调递增的纳秒时间计算耗时，不受系统时钟被校准的影响。
     private final long startedAtNanos = System.nanoTime();
@@ -29,9 +48,12 @@ public class AgentRunContext {
     // 发现记录不一致时保守停止自动提取，不能把记录失败当成没有调用过工具。
     private boolean toolHistoryComplete = true;
 
-    // completed 表示 Agent Loop 已经结束；successful 用来区分正常回答和异常终止。
+    // completed 表示任务已进入成功或失败的终态；等待审批仍为 false。
+    // successful 只表示本次执行正常完成，不代表待审批的记忆已写入。
     private boolean completed;
     private boolean successful;
+    // 本次 HTTP 调用可以结束，但等待审批的业务任务还没有完成。
+    private boolean waitingApproval;
 
     // 异常结束时只记录异常类型，不在上下文中保存可能包含敏感信息的异常消息。
     private String failureType;
@@ -119,6 +141,13 @@ public class AgentRunContext {
     public void markSucceeded() {
         completed = true;
         successful = true;
+    }
+
+    // 等待审批不是失败，也不是最终成功；结束 Hook 可以通过这个字段区分。
+    public void markWaitingApproval() {
+        waitingApproval = true;
+        completed = false;
+        successful = false;
     }
 
     // 标记任务异常结束。

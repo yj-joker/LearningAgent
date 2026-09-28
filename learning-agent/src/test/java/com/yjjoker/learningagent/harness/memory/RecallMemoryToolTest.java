@@ -35,10 +35,10 @@ class RecallMemoryToolTest {
         // 先建立本次 AgentLoop 的引用，再让工具解析模型传入的短引用。
         MemoryReferenceRegistry registry = new MemoryReferenceRegistry();
         registry.beginRun(userId, 10L);
-        registry.registerUserMemory(memory);
+        String reference = registry.registerUserMemory(memory);
 
         RecallMemoryTool tool = new RecallMemoryTool(registry, memoryService);
-        ToolExecutionResult result = tool.execute("{\"memoryRef\":\"memory_1\"}");
+        ToolExecutionResult result = tool.execute("{\"memoryRef\":\"" + reference + "\"}");
 
         assertTrue(result.isSuccess());
         assertTrue(result.getContent().contains("用户喜欢篮球"));
@@ -59,5 +59,32 @@ class RecallMemoryToolTest {
         assertEquals("INVALID_MEMORY_REFERENCE", result.getErrorCode());
         assertTrue(result.isRetryable());
         registry.clear();
+    }
+
+    // 新任务虽然也从序号 1 开始，旧 memoryRef 仍必须被拒绝，不能查到新目标。
+    @Test
+    void shouldRejectPreviousTasksReferenceWithoutQueryingAnotherMemory() {
+        MemoryReferenceRegistry registry = new MemoryReferenceRegistry();
+        StructuredMemoryService service = mock(StructuredMemoryService.class);
+        UserMemory first = new UserMemory();
+        first.setId(1L);
+        first.setUserId(20L);
+        UserMemory second = new UserMemory();
+        second.setId(2L);
+        second.setUserId(20L);
+        try {
+            registry.beginRun(20L, 10L);
+            String oldReference = registry.registerUserMemory(first);
+            registry.beginRun(20L, 10L);
+            String currentReference = registry.registerUserMemory(second);
+            org.junit.jupiter.api.Assertions.assertNotEquals(oldReference, currentReference);
+            ToolExecutionResult result = new RecallMemoryTool(registry, service)
+                    .execute("{\"memoryRef\":\"" + oldReference + "\"}");
+            assertFalse(result.isSuccess());
+            assertEquals("INVALID_MEMORY_REFERENCE", result.getErrorCode());
+            org.mockito.Mockito.verifyNoInteractions(service);
+        } finally {
+            registry.clear();
+        }
     }
 }

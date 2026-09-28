@@ -96,7 +96,10 @@ class MemoryToolsHttpTest {
 
             // 教学提问和明确的“不操作”要求不能变成工具写入或自动提取删除。
             long beforeQuestion = lastMessage(second);
-            post("/agent/chat", Map.of("sessionId", second, "userMessage", "如何删除记忆？只解释流程，不要调用任何写入工具，也不要修改现有记忆。"));
+            JsonNode explanation = post("/agent/chat", Map.of("sessionId", second, "userMessage", "如何删除记忆？只解释流程，不要调用任何写入工具，也不要修改现有记忆。"));
+            // 待审批调用不写入可重放工具历史，因此还要检查接口没有产生新的审批批次。
+            assertEquals("COMPLETED", explanation.get("status").asString());
+            assertTrue(explanation.get("approvals").isEmpty());
             String questionCalls = toolCalls(second, beforeQuestion);
             assertFalse(questionCalls.contains("create_memory") || questionCalls.contains("update_memory") || questionCalls.contains("delete_memory"));
             assertEquals(2, changes("USER", userId));
@@ -142,10 +145,16 @@ class MemoryToolsHttpTest {
         return id;
     }
 
-    // 同时核对接口结果、实际工具请求和成功结果，不能只相信最终自然语言回答。
+    // 写工具先核对待审批状态再批准；读工具仍核对实际请求和成功结果。
     private String chat(long sessionId, String message, String expectedTool) throws Exception {
         long before = lastMessage(sessionId);
-        String answer = post("/agent/chat", Map.of("sessionId", sessionId, "userMessage", message)).asString();
+        JsonNode response = post("/agent/chat", Map.of("sessionId", sessionId, "userMessage", message));
+        String answer = response.get("answer").asString();
+        if (List.of("create_memory", "update_memory", "delete_memory").contains(expectedTool)) {
+            // 这里只批准本次合成测试返回的申请，不能处理测试账户的其他历史申请。
+            return approveReturnedBatch(response, sessionId, expectedTool);
+        }
+        assertEquals("COMPLETED", response.get("status").asString());
         assertTrue(toolCalls(sessionId, before).contains(expectedTool), "本轮没有调用预期工具：" + expectedTool);
         assertTrue(toolResults(sessionId, before).stream().map(json::readTree)
                 .anyMatch(result -> result.get("success") != null && result.get("success").asBoolean()));
@@ -154,6 +163,31 @@ class MemoryToolsHttpTest {
         assertEquals(0, replayable);
         log.info("HTTP 工具链路通过，sessionId={}，expectedTool={}，answerCharacters={}", sessionId, expectedTool, answer.length());
         return answer;
+    }
+
+    // 真实 HTTP 测试完成审批后必须 resume；只批准还不能宣称记忆工具已执行。
+    private String approveReturnedBatch(JsonNode response, long sessionId, String expectedTool) throws Exception {
+        assertEquals("WAITING_APPROVAL", response.get("status").asString());
+        String runId = response.get("runId").asString();
+        Map<String, Object> run = jdbc.queryForMap("SELECT status, checkpoint_json FROM agent_approval_runs WHERE run_id=? AND user_id=? AND session_id=?",
+                runId, userId, sessionId);
+        assertEquals("WAITING_APPROVAL", run.get("status"));
+        assertTrue(run.get("checkpoint_json").toString().contains(expectedTool));
+        JsonNode requests = response.get("approvals");
+        assertTrue(requests.isArray() && !requests.isEmpty());
+        for (JsonNode approval : requests) {
+            assertEquals(runId, approval.get("runId").asString());
+            assertEquals("PENDING", approval.get("status").asString());
+            post("/agent/runs/" + runId + "/approvals/" + response.get("batchNumber").asInt()
+                    + "/" + approval.get("toolCallId").asString(), Map.of("approved", true));
+        }
+        JsonNode resumed = post("/agent/runs/" + runId + "/resume", Map.of());
+        assertEquals("COMPLETED", resumed.get("status").asString());
+        String status = jdbc.queryForObject("SELECT status FROM agent_approval_runs WHERE run_id=? AND user_id=?", String.class, runId, userId);
+        assertEquals("COMPLETED", status);
+        log.info("HTTP 审批与恢复完成，runId={}，sessionId={}，expectedTool={}，approvalCount={}",
+                runId, sessionId, expectedTool, requests.size());
+        return resumed.get("answer").asString();
     }
 
     // 参数化查询只读取当前合成用户或会话的指定 key，不扫描真实用户正文。

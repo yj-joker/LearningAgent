@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import java.util.Map;
 
-// 工具入口只说明操作，参数、权限和事务统一交给记忆工具服务。
+// 审批 Hook 先检查参数，Harness 确认批准后才调用 execute 执行记忆写入。
 @Component
 @RequiredArgsConstructor
 public class DeleteMemoryTool implements Tool {
@@ -26,6 +26,16 @@ public class DeleteMemoryTool implements Tool {
     @Override
     public boolean isMemoryWriteTool() { return true; }
 
+    // 交给通用审批 Hook；主循环不需要判断这是不是记忆工具。
+    @Override
+    public boolean requiresUserApproval() { return true; }
+
+    // 审批前仅校验，不修改数据库；正式执行时还会核对旧目标版本。
+    @Override
+    public ToolExecutionResult validateApprovalInput(String input) {
+        return service.validate(MemoryOperation.DELETE, input);
+    }
+
     // 引用只属于当前请求，相关工具消息不能跨轮重放。
     @Override
     public boolean isContextScopedTool() { return true; }
@@ -34,8 +44,7 @@ public class DeleteMemoryTool implements Tool {
     @Override
     public Map<String, Object> parametersSchema() { return service.schema(MemoryOperation.DELETE); }
 
-    // 操作类型由 Java 固定，不能让模型参数改成另一种操作。
+    // 固定操作类型；批准后的实际写入复用记忆事务服务。
     @Override
     public ToolExecutionResult execute(String input) { return service.write(MemoryOperation.DELETE, input); }
 }
-
