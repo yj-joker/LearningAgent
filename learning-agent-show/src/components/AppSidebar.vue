@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
-import { BookOpenText, Bot, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
+import { BookOpenText, Bot, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
-defineProps<{ open: boolean }>()
-defineEmits<{ close: [] }>()
+defineProps<{ open: boolean; collapsed: boolean }>()
+defineEmits<{ close: []; toggleCollapse: [] }>()
 
 const navItems = [
   { label: '学习概览', to: '/', icon: LayoutDashboard },
@@ -30,7 +30,7 @@ function signOut() {
   <Transition name="fade">
     <button v-if="open" class="sidebar-backdrop" aria-label="关闭导航" @click="$emit('close')" />
   </Transition>
-  <aside class="sidebar" :class="{ 'is-open': open }">
+  <aside class="sidebar" :class="{ 'is-open': open, 'is-collapsed': collapsed && !open }">
     <div class="brand-row">
       <RouterLink class="brand" to="/" @click="$emit('close')">
         <span class="brand-mark"><GraduationCap :size="25" :stroke-width="2.2" /></span>
@@ -42,9 +42,12 @@ function signOut() {
       <button class="icon-button sidebar-close" aria-label="关闭菜单" @click="$emit('close')">
         <X :size="20" />
       </button>
+      <button class="sidebar-collapse" :aria-label="collapsed ? '展开侧栏' : '收起侧栏'" @click="$emit('toggleCollapse')">
+        <ChevronLeft :size="16" :class="{ 'is-flipped': collapsed }" />
+      </button>
     </div>
 
-    <div class="sidebar-section-label">工作台</div>
+    <div v-if="!collapsed" class="sidebar-section-label">工作台</div>
     <nav class="sidebar-nav" aria-label="主导航">
       <RouterLink
         v-for="item in navItems"
@@ -54,16 +57,16 @@ function signOut() {
         @click="$emit('close')"
       >
         <component :is="item.icon" :size="19" />
-        <span>{{ item.label }}</span>
+        <span v-if="!collapsed">{{ item.label }}</span>
       </RouterLink>
     </nav>
 
     <div class="sidebar-spacer" />
-    <RouterLink class="sidebar-create-link" to="/courses?create=1" @click="$emit('close')"><Plus :size="17" /> 创建课程</RouterLink>
+    <RouterLink class="sidebar-create-link" to="/courses?create=1" title="创建课程" @click="$emit('close')"><Plus :size="17" /><span v-if="!collapsed">创建课程</span></RouterLink>
 
     <div class="sidebar-footer">
       <span class="avatar">{{ currentUser?.username?.slice(0, 2).toUpperCase() || 'LA' }}</span>
-      <span>
+      <span v-if="!collapsed">
         <strong>{{ currentUser?.username || '学习者' }}</strong>
         <small>专注成长的每一天</small>
       </span>
