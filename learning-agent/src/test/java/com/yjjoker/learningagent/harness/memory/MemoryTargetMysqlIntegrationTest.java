@@ -55,9 +55,8 @@ class MemoryTargetMysqlIntegrationTest {
         connection = DriverManager.getConnection(url, env("MYSQL_USER", "root"), System.getenv("MYSQL_PASSWORD"));
         dataSource = new SingleConnectionDataSource(connection, true);
         try (Statement statement = connection.createStatement()) {
-            // 进度表同样使用连接级临时表，验证迁移 SQL 而不修改真实进度。
-            String progressDdl = new org.springframework.core.io.ClassPathResource("db/migration/memoryConsolidation.sql")
-                    .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+            // 从统一建表文件创建临时进度表，不修改真实进度，也不依赖旧脚本。
+            String progressDdl = tableDdl("memory_consolidation_state");
             statement.execute(progressDdl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE"));
             // 两个临时表使用与 Repository 相同的字段，不复制真实业务数据。
             for (String table : List.of("user_memories", "session_memories")) {
@@ -94,6 +93,46 @@ class MemoryTargetMysqlIntegrationTest {
         if (connection != null) {
             connection.close();
         }
+    }
+
+    // 真实 COUNT 按归属隔离并排除软删除记录，预检查本身不初始化整理进度。
+    @Test
+    void shouldCountActiveMemoriesWithoutInitializingProgress() {
+        assertEquals(3, progress.countActiveUserMemories(USER_ID));
+        assertEquals(0, progress.countActiveUserMemories(USER_ID + 1));
+        store.deleteUserMemory(USER_ID, 2L);
+        assertEquals(2, progress.countActiveUserMemories(USER_ID));
+        store.saveSessionMemory(session(1, "goal", "学习 Java"));
+        assertEquals(1, progress.countActiveSessionMemories(SESSION_ID));
+        assertEquals(0, progress.countActiveSessionMemories(SESSION_ID + 1));
+        assertNull(progress.find(USER, USER_ID));
+        assertNull(progress.find(SESSION, SESSION_ID));
+    }
+
+    // 不调用模型也能验证完整审批表定义，避免删除旧脚本后仅靠编译判断 SQL 正确。
+    @Test
+    void shouldCreateApprovalTableFromUnifiedSchema() throws Exception {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(tableDdl("memory_approval_requests")
+                    .replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE"));
+            // 读取 MySQL 实际建立的列和索引，而不是只在源码字符串中寻找字段。
+            var columns = new java.util.HashSet<String>();
+            try (ResultSet result = statement.executeQuery("SHOW COLUMNS FROM memory_approval_requests")) {
+                while (result.next()) {
+                    columns.add(result.getString("Field"));
+                }
+            }
+            assertTrue(columns.containsAll(List.of("approval_type", "snapshot_change_count",
+                    "snapshot_processed_count", "pending_consolidation_key", "consolidation_owner_id")));
+            var indexes = new java.util.HashSet<String>();
+            try (ResultSet result = statement.executeQuery("SHOW INDEX FROM memory_approval_requests")) {
+                while (result.next()) {
+                    indexes.add(result.getString("Key_name"));
+                }
+            }
+            assertTrue(indexes.containsAll(List.of("uk_pending_consolidation", "uk_consolidation_version")));
+        }
+        log.info("统一建表文件验收通过：审批字段和两个防重复索引已在MySQL临时表建立");
     }
 
     // 真实 SQL 更新和软删除两条同义记录，第三条记录仍可召回。

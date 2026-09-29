@@ -105,7 +105,7 @@ harness:
         # 记忆提取格式错误时最多请求两次，次数包含第一次请求。
         max-attempts: ${HARNESS_MEMORY_EXTRACTION_MAX_ATTEMPTS:2}
     consolidation:
-      # 控制回答生成后的同步整理；开启后，达到阈值的请求会多等待一次整理。
+      # 入队前先检查阈值；达到条件后在后台生成待审批方案，不等待模型整理完成。
       enabled: ${HARNESS_MEMORY_CONSOLIDATION_ENABLED:true}
       # 两类记忆分别累计实际变更；首次把已有有效记录数纳入计数。
       change-threshold: ${HARNESS_MEMORY_CONSOLIDATION_THRESHOLD:20}
@@ -118,6 +118,11 @@ milvus:
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}
   timeout: ${MILVUS_TIMEOUT:10000}
+
+approval:
+  websocket:
+    # 生产环境填写实际前端来源；HTTPS 页面对应使用 WSS 连接。
+    allowed-origins: ${APPROVAL_WEBSOCKET_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
 
 document:
   task:

@@ -51,6 +51,8 @@ export default defineConfig({
       '/agent': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        // 同一个代理同时转发审批 HTTP 和 WebSocket 升级请求。
+        ws: true,
       },
     },
   },

@@ -4,6 +4,7 @@ import com.yjjoker.learningagent.harness.memory.model.*;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.repository.MemoryApprovalRepository;
+import com.yjjoker.learningagent.notification.ApprovalNotifier;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Objects;
@@ -23,6 +24,7 @@ public class MemoryConsolidationApprovalService {
     private final MemoryApprovalRepository repository;
     private final LearningSessionRepository sessions;
     private final MemoryConsolidationPersistenceService persistence;
+    private final ApprovalNotifier notifier;
 
     // 先检查数据库中的申请，进程重启后仍记得待审批和已拒绝的版本。
     public boolean hasProposal(MemoryConsolidationState state) {
@@ -60,6 +62,8 @@ public class MemoryConsolidationApprovalService {
         }
         log.info("整理提案已保存，待事务提交，approvalId={}，scope={}，ownerId={}，mergeGroups={}，changeCount={}，未修改记忆",
                 request.getId(), snapshot.getScope(), snapshot.getOwnerId(), plan.getMerges().size(), snapshot.getChangeCount());
+        // 后台线程显式传递 userId；无需恢复请求线程里的登录上下文。
+        notifier.changedAfterCommit(userId);
     }
 
     // 上层审批事务持有申请锁；实际写入复用原有事务，失败时申请和记忆一起回滚。

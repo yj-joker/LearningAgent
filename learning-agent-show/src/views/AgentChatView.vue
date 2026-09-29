@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Bot, BookOpenText, MessageSquareText, Send, Sparkles, UserRound } from 'lucide-vue-next'
 import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeAgentRun } from '@/api/agent'
@@ -8,6 +8,7 @@ import { ApiError } from '@/api/client'
 import { useActivity } from '@/composables/useActivity'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
+import { useApprovalNotifications } from '@/composables/useApprovalNotifications'
 
 type ChatRole = 'user' | 'assistant'
 
@@ -33,6 +34,9 @@ const router = useRouter()
 const { activities } = useActivity()
 const { currentUser } = useAuth()
 const { showToast } = useToast()
+const { approvalRevision } = useApprovalNotifications()
+let runRefreshVersion = 0
+let runRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
 const selectedSessionId = ref('')
 const draft = ref('')
@@ -114,6 +118,7 @@ async function selectSession(sessionId: string) {
 
 async function sendMessage() {
   const session = selectedSession.value
+  const ownerToken = currentUser.value?.token
   const userMessage = draft.value.trim()
   if (!session || !userMessage || !canSend.value) return
   if (userMessage.length > MAX_MESSAGE_LENGTH) {
@@ -126,21 +131,25 @@ async function sendMessage() {
   persistConversation()
   draft.value = ''
   sending.value = true
+  // 正在发送时作废旧查询，不能让旧审批状态覆盖这次响应。
+  runRefreshVersion++
   await scrollToLatest()
 
   try {
     const result = await chatWithAgent({ sessionId: session.id, userMessage })
+    if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     // 后端直接返回暂停状态；展示原工具参数，不把它误报为执行成功。
     acceptRunResult(result)
     persistConversation()
     await scrollToLatest()
   } catch (error) {
+    if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     messages.value = messages.value.filter((message) => message.id !== pendingMessage.id)
     persistConversation()
     draft.value = userMessage
     showToast('error', '消息发送失败', error instanceof ApiError ? error.message : 'AI 助教暂时无法回复，请稍后重试')
   } finally {
-    sending.value = false
+    if (ownerToken === currentUser.value?.token) sending.value = false
     await nextTick()
     composer.value?.focus()
   }
@@ -159,28 +168,41 @@ function acceptRunResult(result: AgentRunResult) {
 
 // 切换或刷新页面后从数据库找回任务；旧会话的慢响应不能覆盖当前会话。
 async function restorePendingRun(sessionId: string) {
-  activeRun.value = null
+  const version = ++runRefreshVersion
+  const token = currentUser.value?.token
+  const knownRunId = activeRun.value?.runId
   loadingRun.value = true
   try {
-    const result = await getActiveAgentRun(sessionId)
-    if (selectedSessionId.value === sessionId) activeRun.value = result
+    // 已知任务按 runId 查询，才能接到另一个标签页恢复后的最终回答。
+    const result = knownRunId ? await getAgentRun(knownRunId) : await getActiveAgentRun(sessionId)
+    if (version !== runRefreshVersion || selectedSessionId.value !== sessionId
+        || token !== currentUser.value?.token || sending.value || approvalBusy.value) return
+    if (result) acceptRunResult(result)
+    else activeRun.value = null
   } catch (error) {
-    if (selectedSessionId.value === sessionId) showToast('error', '读取审批状态失败', error instanceof Error ? error.message : '请刷新后重试')
+    if (version === runRefreshVersion && selectedSessionId.value === sessionId) showToast('error', '读取审批状态失败', error instanceof Error ? error.message : '请刷新后重试')
   } finally {
-    if (selectedSessionId.value === sessionId) loadingRun.value = false
+    if (version === runRefreshVersion && selectedSessionId.value === sessionId
+        && token === currentUser.value?.token) loadingRun.value = false
   }
 }
 
 // 单项决定只保存用户选择；所有决定齐备后才显示“继续执行”。
 async function decideTool(request: ToolApprovalRequest, approved: boolean) {
   if (approvalBusy.value || !activeRun.value) return
+  const ownerToken = currentUser.value?.token
+  const sessionId = selectedSessionId.value
   approvalBusy.value = true
+  runRefreshVersion++
+  loadingRun.value = false
   try {
-    activeRun.value = await decideAgentTool(request.runId, request.batchNumber, request.toolCallId, approved)
+    const result = await decideAgentTool(request.runId, request.batchNumber, request.toolCallId, approved)
+    if (ownerToken === currentUser.value?.token && sessionId === selectedSessionId.value) activeRun.value = result
   } catch (error) {
+    if (ownerToken !== currentUser.value?.token) return
     showToast('error', '审批未完成', error instanceof Error ? error.message : '请刷新后重试')
   } finally {
-    approvalBusy.value = false
+    if (ownerToken === currentUser.value?.token) approvalBusy.value = false
   }
 }
 
@@ -188,26 +210,43 @@ async function decideTool(request: ToolApprovalRequest, approved: boolean) {
 async function continueRun() {
   if (approvalBusy.value || activeRun.value?.status !== 'APPROVAL_RESOLVED') return
   const runId = activeRun.value.runId
+  const ownerToken = currentUser.value?.token
+  const sessionId = selectedSessionId.value
   approvalBusy.value = true
+  runRefreshVersion++
+  loadingRun.value = false
   try {
-    acceptRunResult(await resumeAgentRun(runId))
+    const result = await resumeAgentRun(runId)
+    if (ownerToken !== currentUser.value?.token || sessionId !== selectedSessionId.value) return
+    acceptRunResult(result)
     await scrollToLatest()
   } catch (error) {
+    if (ownerToken !== currentUser.value?.token || sessionId !== selectedSessionId.value) return
     showToast('error', '任务恢复未完成', error instanceof Error ? error.message : '请查询当前状态')
     // 请求超时不等于后端没执行；查询状态，而不是自动重发原工具请求。
-    try { acceptRunResult(await getAgentRun(runId)) } catch { /* 保留当前卡片，允许手动刷新。 */ }
+    try {
+      const result = await getAgentRun(runId)
+      if (ownerToken === currentUser.value?.token && sessionId === selectedSessionId.value) acceptRunResult(result)
+    } catch { /* 保留当前卡片，允许手动刷新。 */ }
   } finally {
-    approvalBusy.value = false
+    if (ownerToken === currentUser.value?.token) approvalBusy.value = false
   }
 }
 
 // 只查询状态；RUNNING 时不自动重跑可能已经执行过的工具。
 async function refreshRun() {
   if (!activeRun.value || approvalBusy.value) return
+  const ownerToken = currentUser.value?.token
+  const sessionId = selectedSessionId.value
   approvalBusy.value = true
-  try { acceptRunResult(await getAgentRun(activeRun.value.runId)) }
+  runRefreshVersion++
+  loadingRun.value = false
+  try {
+    const result = await getAgentRun(activeRun.value.runId)
+    if (ownerToken === currentUser.value?.token && sessionId === selectedSessionId.value) acceptRunResult(result)
+  }
   catch (error) { showToast('error', '刷新失败', error instanceof Error ? error.message : '请稍后重试') }
-  finally { approvalBusy.value = false }
+  finally { if (ownerToken === currentUser.value?.token) approvalBusy.value = false }
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -215,6 +254,32 @@ function handleComposerKeydown(event: KeyboardEvent) {
   event.preventDefault()
   void sendMessage()
 }
+
+// 跨标签页退出或换号时，也不能继续展示上一个账号的消息。
+watch(() => currentUser.value?.token, () => {
+  runRefreshVersion++
+  messages.value = []
+  activeRun.value = null
+  sending.value = false
+  approvalBusy.value = false
+  loadingRun.value = false
+  draft.value = ''
+  if (currentUser.value?.token && selectedSessionId.value) loadConversation(selectedSessionId.value)
+})
+
+// 通知只安排查询，不自动提交决定或恢复任务。
+watch([approvalRevision, sending, approvalBusy], () => {
+  clearTimeout(runRefreshTimer)
+  if (currentUser.value?.token && !sending.value && !approvalBusy.value && selectedSessionId.value) {
+    runRefreshTimer = setTimeout(() => void restorePendingRun(selectedSessionId.value), 120)
+  }
+})
+
+// 离开页面后取消排队的刷新，正在返回的旧响应也会失效。
+onBeforeUnmount(() => {
+  runRefreshVersion++
+  clearTimeout(runRefreshTimer)
+})
 
 watch(
   [() => route.query.session, activeSessions],
@@ -224,6 +289,8 @@ watch(
       ? requestedId
       : activeSessions.value[0]?.id ?? ''
     if (nextId !== selectedSessionId.value) {
+      runRefreshVersion++
+      loadingRun.value = false
       selectedSessionId.value = nextId
       messages.value = []
       activeRun.value = null

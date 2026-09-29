@@ -53,6 +53,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.Objects;
+import java.sql.SQLException;
 
 // Harness 的业务实现类，负责安排模型调用流程，而不是负责拼接厂商 HTTP 请求。
 // 完整流程是“请求模型 -> 判断结果类型 -> 必要时执行工具 -> 回传工具结果 -> 再请求模型”。
@@ -584,11 +585,14 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
     }
 
-    // 提取失败不能覆盖已经生成的正常回答，因此这里隔离异常并只记录可观测信息。
+    // 分别记录索引读取、模型提取和审批保存；任何后置失败都不覆盖正常回答。
     private void extractMemoryCandidates(Long sessionId,
                                          String userMessage,
                                          String assistantAnswer,
                                          AgentRunContext runContext) {
+        String stage = "读取记忆索引";
+        int candidateCount = 0;
+        int savedApprovalCount = 0;
         try {
             // 记录缺失时保留主回答，不把“未知是否执行”当成“没有执行过”。
             if (!runContext.hasCompleteToolHistory()) {
@@ -598,22 +602,52 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 回答完成后重新加载有效索引，提取和保存共用这一份引用快照。
             MemoryExtractionContext extractionContext = new MemoryExtractionContext(
                     BaseContext.getCurrentId(), sessionId, loadMemoryIndex(sessionId), runContext.getToolExecutions());
+            // 模型返回的 JSON 会在提取服务中校验，成功后才进入审批保存阶段。
+            stage = "提取记忆候选";
             List<MemoryCandidate> candidates = memoryExtractionService.extract(
                     extractionContext, userMessage, assistantAnswer
             );
+            candidateCount = candidates.size();
+            stage = "保存记忆审批申请";
             // 自动提取只创建审批申请，不直接写入；用户确认后才进入原有事务写入服务。
             for (MemoryCandidate candidate : candidates) {
                 var request = memoryApprovalService.create(BaseContext.getCurrentId(), sessionId,
                         candidate, extractionContext);
+                // 每条申请独立提交；中途失败时日志要说明前面已经保存了多少条。
+                savedApprovalCount++;
                 log.info("自动提取记忆等待审批，sessionId={}，approvalId={}，operation={}，scope={}",
                         sessionId, request.getId(), candidate.getOperation(), candidate.getScope());
             }
             // 没有候选时不创建空审批；有候选时只记录申请数量，不宣称已经写入。
             log.info("记忆候选处理完成，等待用户审批，sessionId={}，candidateCount={}", sessionId, candidates.size());
         } catch (RuntimeException exception) {
-            log.warn("记忆候选提取或持久化失败，不影响本轮回答，sessionId={}，reason={}",
-                    sessionId, exception.getMessage());
+            logMemoryPostprocessingFailure(stage, sessionId, candidateCount, savedApprovalCount, exception);
         }
+    }
+
+    // 输出失败阶段和数据库错误码，不把完整 SQL、候选正文或认证信息写进日志。
+    private void logMemoryPostprocessingFailure(String stage, Long sessionId, int candidateCount,
+                                                int savedApprovalCount, RuntimeException exception) {
+        SQLException sqlError = null;
+        Throwable rootCause = exception;
+        // Spring 会包装 JDBC 异常，沿异常链找到数据库提供的错误码。
+        while (true) {
+            if (rootCause instanceof SQLException sql) sqlError = sql;
+            if (rootCause.getCause() == null || rootCause.getCause() == rootCause) break;
+            rootCause = rootCause.getCause();
+        }
+        String hint = "根据失败阶段和异常类型排查";
+        if (sqlError != null && sqlError.getErrorCode() == 1054) {
+            hint = "数据库缺少代码需要的字段，请核对实际表与完整建表定义；重新请求模型不能修复表结构";
+        } else if (sqlError != null && sqlError.getErrorCode() == 1146) {
+            hint = "数据库缺少代码需要的表，请核对实际数据库与完整建表定义";
+        }
+        // 已经提取成功却保存失败时，stage 和 candidateCount 会明确指出真正的失败点。
+        log.warn("记忆后置处理失败，不影响本轮回答，stage={}，sessionId={}，candidateCount={}，savedApprovalCount={}，"
+                        + "errorType={}，rootErrorType={}，sqlState={}，databaseErrorCode={}，hint={}",
+                stage, sessionId, candidateCount, savedApprovalCount, exception.getClass().getSimpleName(),
+                rootCause.getClass().getSimpleName(), sqlError == null ? "无" : sqlError.getSQLState(),
+                sqlError == null ? null : sqlError.getErrorCode(), hint);
     }
 
     // 记忆索引属于本次 Agent 请求的固定上下文，长期记忆按用户隔离，会话记忆按 session 隔离。

@@ -27,6 +27,28 @@ public class MemoryConsolidationService {
     private final MemoryConsolidationPersistenceService persistenceService;
     private final MemoryConsolidationApprovalService approvals;
 
+    // 入队前只读进度和审批状态，不加载正文、不请求模型，也不写入数据库。
+    public boolean shouldSchedule(Long userId, Long sessionId, MemoryScope scope) {
+        if (!properties.isEnabled()) {
+            return false;
+        }
+        Long ownerId = requireScopeOwner(userId, sessionId, scope);
+        MemoryConsolidationState state = progressRepository.find(scope, ownerId);
+        if (state == null) {
+            // 首次没有进度时用 COUNT 预估；真正初始化留给后台，提交后回调中不再写数据。
+            long initialCount = scope == MemoryScope.USER
+                    ? progressRepository.countActiveUserMemories(ownerId)
+                    : progressRepository.countActiveSessionMemories(ownerId);
+            state = new MemoryConsolidationState();
+            state.setScope(scope);
+            state.setOwnerId(ownerId);
+            state.setChangeCount(initialCount);
+            state.setProcessedCount(0);
+            log.debug("首次整理预检查，scope={}，ownerId={}，activeCount={}，未初始化进度", scope, ownerId, initialCount);
+        }
+        return isReady(state);
+    }
+
     // 用户和会话分别检查阈值，一类整理失败不阻止另一类，也不影响最终回答。
     public void consolidateIfNeeded(Long userId, Long sessionId) {
         if (!properties.isEnabled()) {
@@ -44,19 +66,13 @@ public class MemoryConsolidationService {
         }
     }
 
-    // 判断一个范围是否达到阈值，再读取完整快照并请求模型。
+    // 后台重新检查最新状态；排队期间可能已经有其他任务生成或处理了审批。
     public void consolidateScope(Long userId, Long sessionId, MemoryScope scope) {
         // 调度器按范围调用此入口，也必须遵守停用开关。
         if (!properties.isEnabled()) {
             return;
         }
-        if (userId == null || userId <= 0 || sessionId == null || sessionId <= 0 || scope == null) {
-            throw new IllegalArgumentException("整理任务缺少有效归属");
-        }
-        Long ownerId = scope == MemoryScope.USER ? userId : sessionId;
-        if (ownerId == null || ownerId <= 0) {
-            throw new IllegalArgumentException("记忆整理归属 ID 必须大于零");
-        }
+        Long ownerId = requireScopeOwner(userId, sessionId, scope);
         MemoryConsolidationState state = progressRepository.find(scope, ownerId);
         List<Long> ids = null;
         if (state == null) {
@@ -68,15 +84,7 @@ public class MemoryConsolidationService {
         if (state == null) {
             throw new IllegalStateException("记忆整理进度尚未建立");
         }
-        long pending = state.getChangeCount() - state.getProcessedCount();
-        if (pending < properties.getChangeThreshold()) {
-            log.debug("记忆整理未达阈值，scope={}，ownerId={}，pending={}，threshold={}",
-                    scope, ownerId, pending, properties.getChangeThreshold());
-            return;
-        }
-        // 相同版本被拒绝或已有申请时不再生成；不能用内存状态替代数据库中的审批决定。
-        if (approvals.hasProposal(state)) {
-            log.info("跳过重复整理提案，scope={}，ownerId={}，changeCount={}", scope, ownerId, state.getChangeCount());
+        if (!isReady(state)) {
             return;
         }
         if (ids == null) {
@@ -100,6 +108,31 @@ public class MemoryConsolidationService {
             log.info("整理检查完成，无记忆变更，scope={}，ownerId={}，checkedCount={}，conflictGroups={}",
                     scope, ownerId, ids.size(), plan.getConflicts().size());
         }
+    }
+
+    // 预检查和后台复查共用规则，避免两个入口使用不同阈值或漏掉已有审批。
+    private boolean isReady(MemoryConsolidationState state) {
+        long pending = state.getChangeCount() - state.getProcessedCount();
+        if (pending < properties.getChangeThreshold()) {
+            log.debug("记忆整理未达阈值，scope={}，ownerId={}，pending={}，threshold={}",
+                    state.getScope(), state.getOwnerId(), pending, properties.getChangeThreshold());
+            return false;
+        }
+        // 等待用户时不持有内存标记，靠数据库申请阻止重复生成；拒绝的同版本也跳过。
+        if (approvals.hasProposal(state)) {
+            log.info("跳过重复整理提案，scope={}，ownerId={}，changeCount={}",
+                    state.getScope(), state.getOwnerId(), state.getChangeCount());
+            return false;
+        }
+        return true;
+    }
+
+    // 两个入口都检查已验证的身份参数，再选择用户或会话对应的进度。
+    private Long requireScopeOwner(Long userId, Long sessionId, MemoryScope scope) {
+        if (userId == null || userId <= 0 || sessionId == null || sessionId <= 0 || scope == null) {
+            throw new IllegalArgumentException("整理任务缺少有效归属");
+        }
+        return scope == MemoryScope.USER ? userId : sessionId;
     }
 
     // 先读取索引中的 ID，按固定顺序为本次整理分配引用。

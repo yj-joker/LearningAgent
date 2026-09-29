@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { AgentChatPayload, AgentRunResult } from '@/types/api'
+import type { AgentChatPayload, AgentRunResult, MemoryApprovalView } from '@/types/api'
 
 export function chatWithAgent(payload: AgentChatPayload) {
   // 接口现在同时返回回答、运行状态和审批列表。
@@ -29,4 +29,15 @@ export function decideAgentTool(runId: string, batchNumber: number, toolCallId: 
 // 全批决定齐备后继续原任务，不重新提交用户问题。
 export function resumeAgentRun(runId: string) {
   return request<AgentRunResult>(`/agent/runs/${encodeURIComponent(runId)}/resume`, { method: 'POST' })
+}
+
+// 通知只提示刷新，审批正文仍由认证过的 HTTP 请求读取。
+export function getMemoryApprovals() {
+  return request<MemoryApprovalView[]>('/agent/memory-approvals')
+}
+
+// 用户点击后才提交决定；WebSocket 不会自动批准或继续任务。
+export function decideMemoryApproval(id: string, approved: boolean) {
+  return request<MemoryApprovalView>('/agent/memory-approvals/' + encodeURIComponent(id)
+    + (approved ? '/approve' : '/reject'), { method: 'POST' })
 }

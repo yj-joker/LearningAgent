@@ -13,6 +13,7 @@ import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.repository.MemoryApprovalRepository;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.utils.BaseContext;
+import com.yjjoker.learningagent.notification.ApprovalNotifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,6 +38,7 @@ public class MemoryApprovalService {
     private final LearningSessionRepository sessions;
     private final MemoryConsolidationApprovalService consolidationApprovals;
     private final MemoryConsolidationScheduler consolidationScheduler;
+    private final ApprovalNotifier notifier;
 
     // 创建待审批申请，并保存当时的候选和目标快照。
     @Transactional
@@ -46,6 +48,8 @@ public class MemoryApprovalService {
         try {
             MemoryApprovalRequest request = buildRequest(userId, sessionId, candidate, context);
             requireInserted(repository.insert(request));
+            // 自动提取的申请也主动通知用户；回滚不会发出提示。
+            notifier.changedAfterCommit(userId);
             log.info("记忆审批申请已创建，userId={}，sessionId={}，approvalId={}，operation={}，scope={}",
                     userId, sessionId, request.getId(), candidate.getOperation(), candidate.getScope());
             return request;
@@ -74,6 +78,7 @@ public class MemoryApprovalService {
             request.setDecidedAt(now);
             request.setUpdatedAt(now);
             log.info("整理审批已处理，待事务提交，approvalId={}，scope={}，status={}", request.getId(), request.getScope(), status);
+            notifier.changedAfterCommit(userId);
             return MemoryApprovalView.from(request);
         }
         try {
@@ -93,6 +98,7 @@ public class MemoryApprovalService {
                     userId, request.getSessionId(), approvalId, receipt.getMemoryIds().size());
             // 用户可能在聊天结束后才批准提取提案，因此写入提交后也要检查整理条件。
             consolidationScheduler.requestAfterCommit(userId, request.getSessionId());
+            notifier.changedAfterCommit(userId);
             return MemoryApprovalView.from(request);
         } catch (JacksonException exception) {
             throw new ClientDataErrorException("审批申请内容已损坏，请重新发起申请");
@@ -115,6 +121,7 @@ public class MemoryApprovalService {
         request.setDecidedAt(now);
         request.setUpdatedAt(now);
         log.info("记忆审批已拒绝，userId={}，sessionId={}，approvalId={}", userId, request.getSessionId(), approvalId);
+        notifier.changedAfterCommit(userId);
         return MemoryApprovalView.from(request);
     }
 

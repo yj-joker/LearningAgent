@@ -35,7 +35,9 @@ class AgentApprovalFlowTest {
     private final MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
     private final LlmClient llm = mock(LlmClient.class);
     private final MemoryReferenceRegistry references = new MemoryReferenceRegistry();
-    private final AgentApprovalService approvals = new AgentApprovalService(repository, sessions, history);
+    private final com.yjjoker.learningagent.notification.ApprovalNotifier notifier =
+            mock(com.yjjoker.learningagent.notification.ApprovalNotifier.class);
+    private final AgentApprovalService approvals = new AgentApprovalService(repository, sessions, history, notifier);
     // 字符串检查点真的经过序列化和反序列化，不直接复用暂停时的 Java 对象。
     private final Map<String, AgentApprovalRun> runs = new HashMap<>();
     private final List<ToolApprovalRequest> requests = new ArrayList<>();
@@ -122,6 +124,7 @@ class AgentApprovalFlowTest {
         AgentRunCheckpoint saved = approvals.restore(runs.get(result.getRunId()));
         assertEquals("a", saved.getMessages().getLast().getToolCalls().getFirst().id());
         assertNull(references.currentUserId());
+        verify(notifier).changedAfterCommit(7L);
     }
 
     // 换一次执行后保留历史、用户问题和原 callId；先执行工具，才调用模型组织答案。
@@ -152,6 +155,8 @@ class AgentApprovalFlowTest {
         verify(llm, times(2)).generate(any());
         verify(history, times(1)).loadHistory(9L);
         verify(history, times(1)).appendMessages(eq(9L), any());
+        // 暂停、审批决定、取得恢复权、完成分别通知；重复读完成结果不再通知。
+        verify(notifier, times(4)).changedAfterCommit(7L);
     }
 
     // 用户拒绝也要补一条同 ID 的 tool 结果，不能让 assistant 的工具请求悬空。

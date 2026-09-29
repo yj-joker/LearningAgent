@@ -9,6 +9,7 @@ import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import com.yjjoker.learningagent.notification.ApprovalNotifier;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ public class AgentApprovalService {
     private final AgentApprovalRepository repository;
     private final LearningSessionRepository sessions;
     private final ConversationMemoryService history;
+    private final ApprovalNotifier notifier;
 
     // 整批预检完成后一次保存；不执行工具，不调用模型，不持锁等待用户。
     @Transactional
@@ -71,6 +73,8 @@ public class AgentApprovalService {
         }
         log.info("审批检查点已保存，runId={}，batch={}，messageCount={}，approvalCount={}，未调用模型",
                 run.getRunId(), run.getBatchNumber(), checkpoint.getMessages().size(), reasons.size());
+        // 整批申请提交后提醒前端；不为通知再调用模型。
+        notifier.changedAfterCommit(run.getUserId());
         return view(run);
     }
 
@@ -96,6 +100,8 @@ public class AgentApprovalService {
         }
         log.info("工具审批已决定，runId={}，batch={}，toolCallId={}，approved={}，runStatus={}",
                 runId, batchNumber, callId, approved, run.getStatus());
+        // 同一用户的其他标签页也应看到本项决定和整批状态。
+        notifier.changedAfterCommit(run.getUserId());
         return view(run);
     }
 
@@ -113,6 +119,7 @@ public class AgentApprovalService {
         requireOne(repository.transition(runId, run.getUserId(), "APPROVAL_RESOLVED", "RUNNING"));
         run.setStatus(AgentRunStatus.RUNNING);
         log.info("已取得任务恢复权，runId={}，batch={}", runId, run.getBatchNumber());
+        notifier.changedAfterCommit(run.getUserId());
         return run;
     }
 
@@ -155,12 +162,19 @@ public class AgentApprovalService {
         }
         requireOne(repository.complete(runId, run.getUserId(), answer));
         history.appendMessages(sessionId, messages);
+        // 历史和完成状态一起提交，前端收到通知后才会读取最终回答。
+        notifier.changedAfterCommit(run.getUserId());
         log.info("恢复任务已完成，已保存历史并清理检查点正文，runId={}，messageCount={}", runId, messages.size());
     }
 
     // 未知系统异常不自动重跑可能已经产生副作用的工具，避免重复删除或写入。
+    @Transactional
     public void fail(String runId) {
-        repository.transition(runId, currentUser(), "RUNNING", "FAILED");
+        Long userId = currentUser();
+        // 只有确实完成状态变更才通知，避免把重复失败请求当成新事件。
+        if (repository.transition(runId, userId, "RUNNING", "FAILED") == 1) {
+            notifier.changedAfterCommit(userId);
+        }
         log.warn("恢复任务已停止，runId={}，不自动重放可能已经执行的工具", runId);
     }
 

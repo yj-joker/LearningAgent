@@ -182,6 +182,7 @@ export interface MemoryApprovalView {
   scope: 'USER' | 'SESSION'
   candidateJson: string
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'STALE'
+  decisionReason: string | null
 }
 
 // 待审批是正常的业务状态，不应显示成请求失败或宣称操作已经完成。

@@ -18,7 +18,6 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -49,8 +48,8 @@ class MemoryConsolidationConcurrencyMysqlTest {
         }
         dataSource = new DriverManagerDataSource(url(schema), env("MYSQL_USER", "root"), System.getenv("MYSQL_PASSWORD"));
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            statement.execute(new ClassPathResource("db/migration/memoryConsolidation.sql")
-                    .getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
+            // 测试库直接使用统一文件中的最新进度表定义。
+            statement.execute(tableDdl("memory_consolidation_state"));
             // 仅创建当前测试使用的两张空记忆表，不复制真实用户资料。
             for (String table : List.of("user_memories", "session_memories")) {
                 String owner = table.equals("user_memories") ? "user_id" : "session_id";
