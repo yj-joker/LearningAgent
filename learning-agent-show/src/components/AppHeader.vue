@@ -7,11 +7,13 @@ defineEmits<{ openMenu: [] }>()
 
 const route = useRoute()
 const pageTitle = computed(() => String(route.meta.title ?? '概览'))
+const now = new Date()
 const today = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
   day: 'numeric',
   weekday: 'short',
-}).format(new Date())
+}).format(now)
+const todayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 </script>
 
 <template>
@@ -24,9 +26,9 @@ const today = new Intl.DateTimeFormat('zh-CN', {
         <h1>{{ pageTitle }}</h1>
       </div>
     </div>
-    <div class="today-pill">
+    <time class="today-pill" :datetime="todayDate" aria-label="今天日期">
       <CalendarDays :size="17" />
       <span>{{ today }}</span>
-    </div>
+    </time>
   </header>
 </template>

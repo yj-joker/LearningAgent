@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 
 defineProps<{ open: boolean; collapsed: boolean }>()
-defineEmits<{ close: []; toggleCollapse: [] }>()
+const emit = defineEmits<{ close: []; toggleCollapse: [] }>()
 
 const navItems = [
   { label: '学习概览', to: '/', icon: LayoutDashboard },
@@ -23,6 +23,11 @@ const { currentUser, logout } = useAuth()
 function signOut() {
   logout()
   router.push({ name: 'login' })
+}
+
+function openCreateCourse() {
+  emit('close')
+  router.push({ name: 'courses', query: { create: '1' } })
 }
 </script>
 
@@ -62,7 +67,7 @@ function signOut() {
     </nav>
 
     <div class="sidebar-spacer" />
-    <RouterLink class="sidebar-create-link" to="/courses?create=1" title="创建课程" @click="$emit('close')"><Plus :size="17" /><span v-if="!collapsed">创建课程</span></RouterLink>
+    <button class="sidebar-create-link" type="button" title="创建课程" @click="openCreateCourse"><Plus :size="17" /><span v-if="!collapsed">创建课程</span></button>
 
     <div class="sidebar-footer">
       <span class="avatar">{{ currentUser?.username?.slice(0, 2).toUpperCase() || 'LA' }}</span>

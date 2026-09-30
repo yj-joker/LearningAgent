@@ -1511,7 +1511,7 @@ textarea::placeholder { color: #aeb6b3; }
 .modal-enter-from .modal-card,
 .modal-leave-to .modal-card { opacity: 0; transform: translateY(12px) scale(0.985); }
 .toast-enter-active,
-.toast-leave-active { transition: all 220ms ease; }
+.toast-leave-active { transition: opacity 220ms ease-out, transform 220ms ease-out; }
 .toast-enter-from,
 .toast-leave-to { opacity: 0; transform: translateX(18px); }
 
@@ -2277,31 +2277,6 @@ body::after {
 .auth-brand-panel::after { display: block; }
 .auth-form-panel { min-height: calc(100vh - 48px); padding: 24px; align-items: center; background: transparent; }
 .auth-form-wrap { width: min(430px, 100%); padding: 40px; background: #fff; border: 1px solid var(--line); border-radius: 30px; box-shadow: var(--shadow-lg); }
-
-@media (max-width: 1024px) {
-  .app-main { margin-left: 0; }
-  .app-shell.sidebar-collapsed .app-main { margin-left: 0; }
-  .sidebar { width: 268px; transform: translateX(-100%); }
-  .sidebar.is-open { transform: none; box-shadow: var(--shadow-lg); }
-  .sidebar.is-collapsed { width: 268px; }
-  .sidebar.is-open .sidebar-collapse { display: none; }
-}
-
-@media (max-width: 768px) {
-  .page-container { padding: 24px 20px 44px; }
-  .auth-page { display: block; padding: 14px; }
-  .auth-brand-panel { min-height: auto; padding: 24px; border-radius: 24px; }
-  .auth-brand-copy,
-  .auth-tip { display: none; }
-  .auth-form-panel { min-height: auto; padding: 14px 0 0; }
-  .auth-form-wrap { padding: 28px 24px; border-radius: 24px; }
-}
-
-@media (max-width: 390px) {
-  .page-container { padding-inline: 14px; }
-  .auth-page { padding: 10px; }
-  .auth-form-wrap { padding: 24px 18px; }
-}
 
 /* Final interaction override: keep the expand control visible in collapsed mode. */
 .sidebar.is-collapsed .brand-row { position: relative; }
@@ -3247,54 +3222,53 @@ body { background: var(--canvas); }
 
 /* Final cascade for the learning-agent visual reference. */
 :root {
-  --ink: #182927;
-  --ink-soft: #52625f;
-  --muted: #87938f;
-  --line: #e3e8e2;
-  --canvas: #f4f6f1;
-  --forest: #193d39;
-  --forest-deep: #112f2d;
-  --lime: #d9ff79;
-  --sage: #dceee2;
-  --sun: #fff0b9;
-  --lilac: #e7e0fb;
-  --cream: #f4eadc;
-  --shadow-sm: 0 1px 2px rgba(24, 41, 39, 0.05), 0 6px 16px -12px rgba(24, 41, 39, 0.16);
-  --shadow-lg: 0 2px 6px rgba(24, 41, 39, 0.05), 0 28px 60px -32px rgba(24, 41, 39, 0.3);
+  --ink: #14233b;
+  --ink-soft: #52647a;
+  --muted: #8192a2;
+  --line: #d8e9ed;
+  --canvas: #dff7ff;
+  --forest: #3d928d;
+  --forest-deep: #287774;
+  --lime: #f8e27c;
+  --sage: #d8f1ec;
+  --sun: #fff0ba;
+  --lilac: #ece9f7;
+  --cream: #f6e3e1;
+  --shadow-sm: 0 1px 2px rgba(20, 64, 80, .06), 0 10px 24px -18px rgba(27, 88, 105, .3);
+  --shadow-lg: 0 2px 6px rgba(20, 64, 80, .06), 0 28px 60px -32px rgba(27, 88, 105, .34);
 }
 
 body {
   background:
-    radial-gradient(1100px 620px at 8% -8%, rgba(220, 238, 226, 0.85), transparent 62%),
-    radial-gradient(900px 520px at 96% 4%, rgba(231, 224, 251, 0.45), transparent 60%),
-    radial-gradient(760px 520px at 50% 108%, rgba(255, 240, 185, 0.35), transparent 64%),
+    radial-gradient(720px 420px at 10% 0%, rgba(255, 255, 255, .35), transparent 68%),
+    radial-gradient(600px 420px at 96% 86%, rgba(248, 226, 124, .24), transparent 70%),
     var(--canvas);
 }
 
-.app-main { margin-left: 268px; }
+.app-main { margin-left: 244px; }
 .sidebar {
-  width: 268px;
+  width: 244px;
   padding: 20px 16px 16px;
-  color: rgba(255, 255, 255, 0.72);
-  background: linear-gradient(178deg, #1d4640 0%, var(--forest) 38%, var(--forest-deep) 100%);
-  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, .82);
+  background: radial-gradient(240px 220px at 10% 96%, rgba(248, 226, 124, .16), transparent 70%), linear-gradient(180deg, #42a9a2 0%, #319897 52%, #287f7d 100%);
+  border-right: 6px solid rgba(255, 255, 255, .24);
 }
-.sidebar::before { background: radial-gradient(260px 180px at 20% 8%, rgba(217, 255, 121, 0.16), transparent 70%); }
+.sidebar::before { background: radial-gradient(260px 180px at 20% 8%, rgba(255, 255, 255, .12), transparent 70%); }
 .brand-row { padding: 0 8px 20px; border-bottom-color: rgba(255, 255, 255, 0.08); }
-.brand-mark { width: 42px; height: 42px; color: var(--forest-deep); background: linear-gradient(160deg, #e6ff9c, var(--lime)); border-radius: 14px; box-shadow: 0 10px 26px -12px rgba(217, 255, 121, 0.8); }
+.brand-mark { width: 42px; height: 42px; color: #287774; background: #f8e27c; border-radius: 14px; box-shadow: 0 8px 18px rgba(17, 104, 107, .22); }
 .brand strong { color: #fff; }
-.brand small { color: rgba(255, 255, 255, 0.5); }
-.sidebar-section-label { margin: 27px 12px 10px; color: rgba(255, 255, 255, 0.34); }
-.sidebar-nav a { min-height: 42px; color: rgba(255, 255, 255, 0.66); border-radius: 14px; }
-.sidebar-nav a:hover { color: #fff; background: rgba(255, 255, 255, 0.07); }
-.sidebar-nav a.router-link-active { color: #fff; background: rgba(255, 255, 255, 0.11); box-shadow: none; }
-.sidebar-nav a.router-link-active svg { color: var(--lime); }
-.sidebar-nav a.router-link-active::after { right: auto; left: 0; width: 3px; height: 20px; background: var(--lime); border-radius: 0 3px 3px 0; }
-.sidebar-create-link { display: flex; min-height: 38px; margin: 0 4px 14px; padding: 0 12px; gap: 8px; align-items: center; justify-content: center; color: var(--forest-deep); background: linear-gradient(160deg, #e6ff9c, var(--lime)); border-radius: 11px; }
+.brand small { color: rgba(255, 255, 255, .64); }
+.sidebar-section-label { margin: 27px 12px 10px; color: rgba(255, 255, 255, .62); }
+.sidebar-nav a { min-height: 42px; color: rgba(255, 255, 255, .8); border-radius: 14px; }
+.sidebar-nav a:hover { color: #fff; background: rgba(255, 255, 255, .12); }
+.sidebar-nav a.router-link-active { color: #287774; background: #fff; box-shadow: 0 9px 20px -16px rgba(9, 80, 82, .8); }
+.sidebar-nav a.router-link-active svg { color: #319897; }
+.sidebar-nav a.router-link-active::after { display: none; }
+.sidebar-create-link { display: flex; min-height: 38px; margin: 0 4px 14px; padding: 0 12px; gap: 8px; align-items: center; justify-content: center; color: #287774; background: #f8e27c; border-radius: 11px; }
 .sidebar-footer { margin: 0; padding: 14px 5px 2px; color: rgba(255, 255, 255, 0.7); border-top-color: rgba(255, 255, 255, 0.08); }
 .sidebar-footer strong { color: #fff; }
-.sidebar-footer small { color: rgba(255, 255, 255, 0.45); }
-.avatar { color: var(--forest-deep); background: var(--lime); border-radius: 12px; }
+.sidebar-footer small { color: rgba(255, 255, 255, .62); }
+.avatar { color: #287774; background: #f8e27c; border-radius: 12px; }
 .logout-button { color: rgba(255, 255, 255, 0.55); }
 .sidebar-collapse { display: grid; width: 27px; height: 27px; padding: 0; place-items: center; color: rgba(255, 255, 255, 0.6); background: rgba(255, 255, 255, 0.08); border: 0; border-radius: 8px; cursor: pointer; }
 .sidebar-collapse svg { transition: transform 220ms ease; }
@@ -3308,26 +3282,65 @@ body {
 .sidebar.is-collapsed .sidebar-create-link { margin-inline: 0; padding: 0; }
 .sidebar.is-collapsed .sidebar-footer { justify-content: center; padding-inline: 0; }
 .sidebar.is-collapsed .sidebar-footer > .logout-button { display: none; }
-.topbar { height: 72px; padding: 0 28px; background: rgba(255, 255, 255, 0.78); border-bottom-color: rgba(24, 41, 39, 0.07); backdrop-filter: blur(18px) saturate(160%); }
+.topbar { height: 72px; padding: 0 28px; background: rgba(255, 255, 255, .82); border-bottom-color: rgba(49, 152, 151, .2); backdrop-filter: blur(18px) saturate(160%); }
 .topbar h1 { font-size: 19px; font-weight: 660; }
-.today-pill { border-radius: 999px; }
-.page-container { max-width: 1360px; min-height: calc(100vh - 72px); padding: 32px 32px 56px; }
+.topbar h1, .workspace-summary h2, .metric-card strong, .panel-header h3, .next-action-panel h3 { color: var(--ink); }
+.today-pill { color: #52647a; border-color: #cfe4e8; border-radius: 999px; }
+.today-pill { cursor: default; user-select: none; }
+.page-container { max-width: 1400px; min-height: calc(100vh - 72px); padding: 32px 32px 56px; }
 .panel { border-radius: 18px; box-shadow: var(--shadow-sm); }
 .button { min-height: 40px; border-radius: 10px; }
-.button-primary { color: var(--forest-deep); background: var(--lime); }
-.button-secondary { border-radius: 10px; }
+.button-primary { color: #fff; background: #319897; border-color: #319897; }
+.button-primary:hover:not(:disabled) { background: #287f7d; }
+.button-secondary { color: #52647a; background: #fff; border-color: #cfe4e8; border-radius: 10px; }
+.button-secondary:hover:not(:disabled) { border-color: #7abbb8; }
 .modal-card { border-radius: 24px; box-shadow: var(--shadow-lg); }
+.workspace-summary { border-color: rgba(49, 152, 151, .45); border-radius: 24px 24px 24px 9px; background: linear-gradient(115deg, rgba(255, 255, 255, .98), rgba(242, 252, 252, .96) 64%, rgba(255, 246, 211, .72)), #fff; box-shadow: 0 20px 48px -34px rgba(23, 88, 105, .48); }
+.workspace-summary p { color: #71869a; }
+.metric-card { border-color: var(--line); background: #fff; box-shadow: 0 13px 30px -25px rgba(27, 88, 105, .45); }
+.metric-card:nth-child(2) { background: #f0fbfb; }
+.metric-card:nth-child(3) { background: #fff8dc; }
+.metric-icon-course { color: #287774; background: #d9f1ec; }
+.metric-icon-active { color: #397aa4; background: #dff2fb; }
+.metric-icon-complete { color: #9b7b29; background: #fff0b9; }
+.activity-panel, .next-action-panel { border-color: var(--line); background: rgba(255, 255, 255, .94); box-shadow: 0 16px 38px -30px rgba(27, 88, 105, .46); }
+.next-action-panel nav a:hover { background: #e4f6f2; }
 .auth-page { min-height: 100vh; padding: 24px; gap: 24px; grid-template-columns: minmax(0, 1.05fr) minmax(360px, 1fr); background: transparent; }
-.auth-brand-panel { min-height: calc(100vh - 48px); padding: 40px; border-radius: 30px; background: linear-gradient(165deg, #1d4640 0%, var(--forest) 45%, var(--forest-deep) 100%); box-shadow: var(--shadow-lg); }
-.auth-form-panel { min-height: calc(100vh - 48px); padding: 24px; background: transparent; }
-.auth-form-wrap { width: min(430px, 100%); padding: 40px; background: #fff; border: 1px solid var(--line); border-radius: 30px; box-shadow: var(--shadow-lg); }
+.auth-brand-panel { min-height: calc(100vh - 48px); padding: 40px; border-radius: 30px; background: radial-gradient(440px 320px at 14% 78%, rgba(248, 226, 124, .16), transparent 70%), linear-gradient(145deg, #2d9e9b 0%, #319897 58%, #287774 100%); box-shadow: var(--shadow-lg); }
+.auth-brand-panel::before { display: block; inset: 0; width: auto; height: auto; opacity: .23; border: 0; border-radius: 0; background-image: linear-gradient(rgba(255, 255, 255, .18) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, .18) 1px, transparent 1px); background-size: 34px 34px; mask-image: linear-gradient(to bottom right, #000, transparent 82%); }
+.auth-brand-panel::after { display: block; right: -180px; bottom: -180px; width: 430px; height: 430px; border-color: rgba(255, 255, 255, .24); }
+.auth-brand-decoration { position: absolute; z-index: 1; right: clamp(28px, 8vw, 120px); bottom: 9%; width: 310px; height: 250px; pointer-events: none; }
+.auth-decoration-grid { position: absolute; inset: 34px 16px 22px 28px; opacity: .46; border: 1px solid rgba(255, 255, 255, .2); border-radius: 20px; background-image: linear-gradient(rgba(255, 255, 255, .13) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, .13) 1px, transparent 1px); background-size: 28px 28px; transform: rotate(-7deg); }
+.auth-brand-decoration .auth-orbit { border-color: rgba(255, 255, 255, .38); }
+.auth-brand-decoration .auth-orbit-one { width: 300px; height: 138px; }
+.auth-brand-decoration .auth-orbit-two { width: 190px; height: 270px; }
+.auth-brand-decoration .auth-art-card { width: 132px; height: 132px; color: #287774; background: #f8e27c; }
+.auth-brand-decoration .auth-art-note { right: 0; bottom: 17px; color: #287774; background: #fff; }
+.auth-decoration-dot { position: absolute; display: block; width: 10px; height: 10px; background: #f8e27c; border: 2px solid #287774; border-radius: 50%; }
+.auth-decoration-dot.dot-one { top: 22px; left: 28px; }
+.auth-decoration-dot.dot-two { right: 29px; bottom: 34px; width: 7px; height: 7px; background: #bfe9dd; }
+.auth-feature-list li svg { flex: 0 0 auto; color: #f8e27c; }
+.auth-form-panel { min-height: calc(100vh - 48px); padding: 24px; background: rgba(223, 247, 255, .72); }
+.auth-form-wrap { width: min(430px, 100%); padding: 40px; background: rgba(255, 255, 255, .95); border: 1px solid #cfe4e8; border-radius: 22px; box-shadow: 0 24px 52px -35px rgba(28, 85, 105, .55); }
+.auth-form-wrap h2 { color: var(--ink); }
+.auth-input-wrap input { border-color: #cfe4e8; }
+.auth-input-wrap input:focus { border-color: #319897; box-shadow: 0 0 0 4px rgba(49, 152, 151, .13); }
+.auth-submit { color: #fff; background: #319897; }
+.admin-app-shell { background: #e8f7fa; }
+.admin-sidebar { background: linear-gradient(180deg, #2b8585, #215e69); }
+.admin-login-page { background: var(--canvas); }
+.admin-login-brand { background: linear-gradient(145deg, #2d9e9b, #287774); }
+.admin-login-form-panel { background: rgba(255, 255, 255, .76); }
+.admin-login-submit { background: #319897; border-color: #319897; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid #f8e27c; outline-offset: 3px; box-shadow: 0 0 0 4px rgba(40, 119, 116, .25); }
 
 @media (max-width: 1024px) {
   .app-main { margin-left: 0; }
-  .sidebar { width: 268px; transform: translateX(-100%); }
+  .sidebar { width: 244px; transform: translateX(-100%); }
   .sidebar.is-open { transform: none; box-shadow: var(--shadow-lg); }
-  .sidebar.is-collapsed { width: 268px; }
+  .sidebar.is-collapsed { width: 244px; }
   .sidebar.is-open .sidebar-collapse { display: none; }
+  .app-shell > .sidebar { animation: none !important; }
 }
 
 @media (max-width: 768px) {
@@ -3343,4 +3356,417 @@ body {
   .page-container { padding-inline: 14px; }
   .auth-page { padding: 10px; }
   .auth-form-wrap { padding: 24px 18px; }
+}
+
+@media (max-width: 900px) {
+  .auth-brand-decoration { right: 3%; bottom: 4%; transform: scale(.8); transform-origin: right bottom; }
+}
+
+@media (max-width: 680px) {
+  .auth-brand-decoration { right: -36px; bottom: -112px; transform: scale(.58); transform-origin: right bottom; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-brand-decoration, .dashboard-view > *, .dashboard-view > *.is-revealed { animation: none !important; opacity: 1; transform: none; }
+}
+
+/* Motion pass: composed, interruptible micro-interactions for a busy B2B
+   workspace. Only transform/opacity run continuously; layout never animates. */
+:root {
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --motion-medium: 320ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-soft: cubic-bezier(.4, 0, .2, 1);
+}
+
+.page-enter-active {
+  transition: opacity var(--motion-medium) var(--ease-out), transform var(--motion-medium) var(--ease-out);
+}
+.page-leave-active {
+  transition: opacity var(--motion-fast) ease-out, transform var(--motion-fast) ease-out;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--motion-base) var(--ease-soft);
+}
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity var(--motion-base) var(--ease-soft);
+}
+.modal-enter-active .modal-card,
+.modal-leave-active .modal-card {
+  transition: transform var(--motion-base) var(--ease-out), opacity var(--motion-base) var(--ease-out);
+}
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-base) var(--ease-out);
+}
+
+.auth-brand-decoration {
+  animation: learning-float 12s var(--ease-soft) infinite alternate;
+  transform-origin: center;
+}
+.auth-brand-decoration .auth-art-card {
+  animation: learning-card-drift 7s var(--ease-soft) infinite alternate;
+}
+.auth-brand-decoration .auth-art-note {
+  animation: learning-note-drift 5.5s var(--ease-soft) infinite alternate;
+}
+.auth-decoration-dot.dot-one { animation: learning-pulse 3.8s var(--ease-soft) infinite; }
+
+@keyframes learning-float {
+  from { transform: translate3d(0, 0, 0) rotate(-1deg); }
+  to { transform: translate3d(-10px, -8px, 0) rotate(1deg); }
+}
+
+@keyframes learning-card-drift {
+  from { transform: translate(-50%, -50%) rotate(-7deg); }
+  to { transform: translate(-50%, calc(-50% - 5px)) rotate(-4deg); }
+}
+
+@keyframes learning-note-drift {
+  from { transform: rotate(-4deg) translateY(0); }
+  to { transform: rotate(-2deg) translateY(-4px); }
+}
+
+@keyframes learning-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 226, 124, 0); }
+  50% { box-shadow: 0 0 0 7px rgba(248, 226, 124, .18); }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-nav a,
+  .button,
+  .icon-button,
+  .metric-card,
+  .course-library-item,
+  .next-action-panel nav a {
+    transition: transform var(--motion-base) var(--ease-out),
+      opacity var(--motion-fast) ease-out,
+      color var(--motion-fast) ease-out,
+      background-color var(--motion-fast) ease-out,
+      border-color var(--motion-fast) ease-out,
+      box-shadow var(--motion-base) var(--ease-out);
+  }
+
+  .sidebar-nav a:hover { transform: translateX(3px); }
+  .sidebar-nav a.router-link-active:hover { transform: translateX(1px); }
+  .metric-card:hover,
+  .course-library-item:hover { transform: translateY(-3px); }
+  .button:not(:disabled):active,
+  .icon-button:not(:disabled):active { transform: scale(.98); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-brand-decoration,
+  .auth-brand-decoration .auth-art-card,
+  .auth-brand-decoration .auth-art-note,
+  .auth-decoration-dot.dot-one {
+    animation: none !important;
+  }
+  .page-enter-active,
+  .page-leave-active,
+  .fade-enter-active,
+  .fade-leave-active,
+  .modal-enter-active,
+  .modal-leave-active,
+  .modal-enter-active .modal-card,
+  .modal-leave-active .modal-card,
+  .toast-enter-active,
+  .toast-leave-active,
+  .sidebar-nav a,
+  .button,
+  .icon-button,
+  .metric-card,
+  .course-library-item,
+  .next-action-panel nav a {
+    transition-duration: .01ms !important;
+  }
+}
+
+/* Study motifs: a quiet visual signature for the ice-blue canvas.
+   The vector is embedded in CSS so it adds no asset request and never
+   participates in layout or interaction. Keep it behind every surface. */
+body::before {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  opacity: .82;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 900' preserveAspectRatio='none'%3E%3Cpath d='M124 156l12 34 34 12-34 12-12 34-12-34-34-12 34-12z' fill='%23319997' fill-opacity='.16'/%3E%3Cpath d='M1286 118l9 26 26 9-26 9-9 26-9-26-26-9 26-9z' fill='%23f8e27c' fill-opacity='.3'/%3E%3Cpath d='M1138 674c62-56 155-54 207 3-51 4-88 28-121 70-26-32-53-56-86-73z' fill='%23b9ebf2' fill-opacity='.72'/%3E%3Cpath d='M1138 674c59-6 111-20 170-42' fill='none' stroke='%23319997' stroke-opacity='.16' stroke-width='2'/%3E%3Cpath d='M70 718c99-75 210-62 292 17' fill='none' stroke='%23319997' stroke-opacity='.11' stroke-width='2' stroke-dasharray='4 13'/%3E%3Ccircle cx='218' cy='701' r='4' fill='%23f8e27c' fill-opacity='.52'/%3E%3Ccircle cx='1084' cy='226' r='3' fill='%23319997' fill-opacity='.22'/%3E%3C/svg%3E") center / cover no-repeat;
+}
+
+@media (max-width: 680px) {
+  body::before {
+    opacity: .56;
+    background-size: auto 760px;
+    background-position: 58% 12%;
+  }
+}
+
+/* The create action is a real control (not a decorative link). Keep its
+   hit-area above ambient art and give the click/focus states a clear cue. */
+.sidebar-create-link {
+  position: relative;
+  z-index: 2;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  transition: transform var(--motion-base) var(--ease-out),
+    background-color var(--motion-fast) ease-out,
+    box-shadow var(--motion-base) var(--ease-out);
+}
+
+.sidebar-create-link:hover {
+  background: #ffeb98;
+  box-shadow: 0 10px 22px -14px rgba(248, 226, 124, .9);
+  transform: translateY(-1px);
+}
+
+.sidebar-create-link:active { transform: translateY(0) scale(.98); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-create-link { transition-duration: .01ms !important; }
+}
+
+/* Polish motion: one composed entrance per surface. It only uses opacity and
+   transform, so content remains interactive throughout and layout is stable. */
+@media (prefers-reduced-motion: no-preference) {
+  .resource-view,
+  .chapters-view,
+  .knowledge-points-view,
+  .agent-chat-view,
+  .admin-users-view {
+    animation: surface-enter var(--motion-medium) var(--ease-out) both;
+  }
+
+  .auth-brand-panel,
+  .auth-form-wrap,
+  .admin-login-brand,
+  .admin-login-form-wrap {
+    animation: surface-enter var(--motion-medium) var(--ease-out) both;
+  }
+
+  .auth-form-wrap,
+  .admin-login-form-wrap { animation-delay: 70ms; }
+}
+
+@keyframes surface-enter {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* Visible, but still restrained, section choreography for first paint. */
+@media (prefers-reduced-motion: no-preference) {
+  .resource-view > .page-heading,
+  .resource-view > .course-library-panel,
+  .chapters-view > .page-heading,
+  .chapters-view > .chapter-course-selection,
+  .chapters-view > .chapter-workspace,
+  .knowledge-points-view > .page-heading,
+  .knowledge-points-view > .knowledge-selection-section,
+  .knowledge-points-view > .knowledge-workspace,
+  .agent-chat-view > .agent-chat-heading,
+  .agent-chat-view > .agent-chat-layout,
+  .admin-users-view > .admin-page-heading,
+  .admin-users-view > .admin-stats-grid,
+  .admin-users-view > .admin-filter-card,
+  .admin-users-view > .admin-table-card {
+    animation: surface-section-enter 360ms var(--ease-out) both;
+  }
+
+  .resource-view > .course-library-panel,
+  .chapters-view > .chapter-course-selection,
+  .chapters-view > .chapter-workspace,
+  .knowledge-points-view > .knowledge-selection-section,
+  .knowledge-points-view > .knowledge-workspace,
+  .agent-chat-view > .agent-chat-layout,
+  .admin-users-view > .admin-stats-grid { animation-delay: 55ms; }
+
+  .admin-users-view > .admin-filter-card { animation-delay: 105ms; }
+  .admin-users-view > .admin-table-card { animation-delay: 155ms; }
+}
+
+@keyframes surface-section-enter {
+  from { opacity: 0; transform: translate3d(0, 16px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+/* Directional entrance pass: different roles get different arrivals so the
+   page reads as a sequence, not one block fading in at once. */
+@media (prefers-reduced-motion: no-preference) {
+  .resource-view,
+  .chapters-view,
+  .knowledge-points-view,
+  .agent-chat-view,
+  .admin-users-view { animation: none; }
+
+  .resource-view > .page-heading,
+  .chapters-view > .page-heading,
+  .knowledge-points-view > .page-heading,
+  .agent-chat-view > .agent-chat-heading,
+  .admin-users-view > .admin-page-heading {
+    animation: entrance-from-side 280ms var(--ease-out) both;
+  }
+
+  .resource-view > .course-library-panel,
+  .resource-view > .session-history-panel,
+  .chapters-view > .chapter-course-selection,
+  .chapters-view > .chapter-workspace,
+  .knowledge-points-view > .knowledge-selection-section,
+  .knowledge-points-view > .knowledge-workspace,
+  .agent-chat-view > .agent-chat-layout,
+  .admin-users-view > .admin-filter-card {
+    animation: entrance-from-bottom 300ms var(--ease-out) 55ms both;
+  }
+
+  .admin-users-view > .admin-stats-grid {
+    animation: entrance-from-scale 260ms var(--ease-out) 45ms both;
+  }
+
+  .admin-users-view > .admin-table-card {
+    animation: entrance-from-bottom 300ms var(--ease-out) 105ms both;
+  }
+
+  .dashboard-view > :nth-child(1).is-revealed { animation-name: entrance-from-left; }
+  .dashboard-view > :nth-child(2).is-revealed { animation-name: entrance-from-scale; }
+  .dashboard-view > :nth-child(3).is-revealed { animation-name: entrance-from-bottom; }
+
+  .auth-brand-panel { animation: entrance-from-left 300ms var(--ease-out) both; }
+  .auth-form-wrap { animation: entrance-from-right 300ms var(--ease-out) 70ms both; }
+  .admin-login-brand { animation: entrance-from-left 300ms var(--ease-out) both; }
+  .admin-login-form-wrap { animation: entrance-from-right 300ms var(--ease-out) 70ms both; }
+}
+
+@keyframes entrance-from-side {
+  from { opacity: 0; transform: translate3d(-18px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes entrance-from-left {
+  from { opacity: 0; transform: translate3d(-24px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes entrance-from-right {
+  from { opacity: 0; transform: translate3d(24px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes entrance-from-bottom {
+  from { opacity: 0; transform: translate3d(0, 18px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes entrance-from-scale {
+  from { opacity: 0; transform: translate3d(0, 8px, 0) scale(.97); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .resource-view,
+  .chapters-view,
+  .knowledge-points-view,
+  .agent-chat-view,
+  .admin-users-view,
+  .resource-view > *,
+  .chapters-view > *,
+  .knowledge-points-view > *,
+  .agent-chat-view > *,
+  .admin-users-view > *,
+  .auth-brand-panel,
+  .auth-form-wrap,
+  .admin-login-brand,
+  .admin-login-form-wrap {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Auth polish: give the first impression room to breathe while keeping the
+   form available immediately. The extra rhythm is isolated to auth surfaces. */
+@media (prefers-reduced-motion: no-preference) {
+  .auth-brand-panel,
+  .admin-login-brand {
+    animation-duration: 480ms;
+    animation-timing-function: var(--ease-out);
+  }
+
+  .auth-form-wrap,
+  .admin-login-form-wrap {
+    animation-duration: 480ms;
+    animation-delay: 110ms;
+    animation-timing-function: var(--ease-out);
+  }
+
+  .auth-brand-copy,
+  .admin-login-copy {
+    animation: auth-copy-in 360ms var(--ease-out) 155ms both;
+  }
+
+  .auth-tip,
+  .admin-back-link {
+    animation: auth-copy-in 320ms var(--ease-out) 235ms both;
+  }
+}
+
+@keyframes auth-copy-in {
+  from { opacity: 0; transform: translate3d(0, 12px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-brand-copy,
+  .auth-tip,
+  .admin-login-copy,
+  .admin-back-link {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Workspace handoff: when auth resolves into the app shell, introduce the
+   navigation chrome as one quiet layer before the dashboard sections reveal.
+   This is mount-only CSS; route logic and interaction timing stay untouched. */
+@media (prefers-reduced-motion: no-preference) {
+  .app-shell > .sidebar {
+    animation: workspace-sidebar-in 360ms var(--ease-out) both;
+  }
+
+  .app-shell > .app-main {
+    animation: workspace-main-in 380ms var(--ease-out) both;
+  }
+
+  .app-shell .topbar {
+    animation: workspace-topbar-in 320ms var(--ease-out) 55ms both;
+  }
+}
+
+@keyframes workspace-sidebar-in {
+  from { opacity: 0; transform: translate3d(-10px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes workspace-main-in {
+  from { opacity: 0; transform: translate3d(8px, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes workspace-topbar-in {
+  from { opacity: 0; transform: translate3d(0, -6px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell > .sidebar,
+  .app-shell > .app-main,
+  .app-shell .topbar {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
