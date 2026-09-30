@@ -80,5 +80,22 @@ export function useActivity() {
     persist()
   }
 
-  return { activities, recentActivities, courseCount, activeSessionCount, knownCourses, addActivity, clearActivities }
+  function removeSessionActivities(sessionId: string) {
+    activities.value = activities.value.filter((item) =>
+      !((item.kind === 'session-created' || item.kind === 'session-completed')
+        && String(item.resourceId) === sessionId),
+    )
+    persist()
+  }
+
+  return {
+    activities,
+    recentActivities,
+    courseCount,
+    activeSessionCount,
+    knownCourses,
+    addActivity,
+    clearActivities,
+    removeSessionActivities,
+  }
 }

@@ -1829,6 +1829,8 @@ textarea::placeholder { color: #aeb6b3; }
 .auth-notice p { margin: 0; font-size: 9px; line-height: 1.5; }
 .auth-notice-success { color: #4f7157; background: #e9f4e7; border: 1px solid #d9ebd5; }
 .auth-notice-success span { color: white; background: #74a87e; }
+.auth-notice-warning { color: #865f46; background: #f9efd9; border: 1px solid #eee0c2; }
+.auth-notice-warning span { color: white; background: #c28a55; }
 
 @media (max-width: 900px) {
   .auth-page { grid-template-columns: minmax(290px, 0.8fr) minmax(390px, 1.2fr); }
@@ -3114,7 +3116,8 @@ body { background: var(--canvas); }
 .agent-no-session p { max-width: 390px; margin: 0 0 20px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .session-record-actions { display: flex !important; margin-top: 11px; gap: 7px !important; justify-content: flex-start !important; }
 .session-chat-button,
-.session-record-actions .session-complete-button { min-height: 31px; margin-top: 0; padding: 0 11px; font-size: 9px; }
+.session-record-actions .session-complete-button,
+.session-record-actions .session-delete-button { min-height: 31px; margin-top: 0; padding: 0 11px; font-size: 9px; }
 
 @media (max-width: 860px) {
   .agent-chat-layout { height: auto; min-height: 0; grid-template-columns: 1fr; }
@@ -3531,6 +3534,250 @@ body::before {
   .sidebar-create-link { transition-duration: .01ms !important; }
 }
 
+/* Framed course-creation guide: the supplied images remain untouched and
+   are layered here as decorative presentation assets. */
+.sidebar-create-zone {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  margin: 0 4px 14px;
+  padding: 8px 7px 8px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, .17), transparent 27%),
+    linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(248, 226, 124, .08));
+  border: 1px solid rgba(248, 226, 124, .36);
+  border-radius: 24px 24px 24px 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .14),
+    0 14px 24px -22px rgba(5, 75, 78, .8);
+}
+
+.sidebar-create-zone::before {
+  position: absolute;
+  right: -52px;
+  bottom: -76px;
+  width: 180px;
+  height: 134px;
+  content: '';
+  border: 1px solid rgba(255, 255, 255, .17);
+  border-radius: 50%;
+  transform: rotate(-17deg);
+  pointer-events: none;
+}
+
+.sidebar-create-zone::after {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 42px;
+  height: 42px;
+  content: '';
+  border: 1px dashed rgba(217, 255, 121, .27);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.sidebar-zone-emoji {
+  position: absolute;
+  z-index: 4;
+  display: block;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 54px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 3px 3px rgba(7, 73, 75, .18));
+}
+
+.sidebar-zone-emoji-lightbulb {
+  top: 3px;
+  left: 0;
+  transform: rotate(-7deg);
+}
+
+.sidebar-zone-emoji-help {
+  top: 3px;
+  right: 0;
+  transform: rotate(30deg);
+  transform-origin: center;
+}
+
+.sidebar-zone-spark {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, .62);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.sidebar-zone-spark-one {
+  top: 92px;
+  right: 20px;
+}
+
+.sidebar-zone-spark-two {
+  right: 29px;
+  bottom: 56px;
+  width: 5px;
+  height: 5px;
+  border-color: rgba(217, 255, 121, .7);
+}
+
+.sidebar-visual {
+  position: relative;
+  z-index: 2;
+  min-height: 124px;
+  margin: 31px 0 8px;
+  overflow: hidden;
+  border-radius: 17px 17px 17px 5px;
+}
+
+.sidebar-visual > img {
+  position: absolute;
+  z-index: 1;
+  inset: 0 1px -4px;
+  display: block;
+  width: calc(100% - 2px);
+  height: calc(100% + 4px);
+  object-fit: contain;
+  object-position: center bottom;
+  filter: drop-shadow(0 9px 9px rgba(7, 73, 75, .16));
+}
+
+.sidebar-visual-ring {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  border: 1px solid rgba(217, 255, 121, .3);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.sidebar-visual-ring-one {
+  top: 18px;
+  right: 18px;
+  width: 8px;
+  height: 8px;
+}
+
+.sidebar-visual-ring-two {
+  right: 32px;
+  bottom: 19px;
+  width: 5px;
+  height: 5px;
+  border-color: rgba(255, 255, 255, .35);
+}
+
+.sidebar-visual-dot {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  width: 5px;
+  height: 5px;
+  background: var(--lime);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(217, 255, 121, .1);
+  pointer-events: none;
+}
+
+.sidebar-visual-dot-one {
+  top: 34px;
+  left: 24px;
+}
+
+.sidebar-visual-dot-two {
+  right: 23px;
+  bottom: 35px;
+  width: 4px;
+  height: 4px;
+  background: rgba(255, 255, 255, .75);
+  box-shadow: none;
+}
+
+.sidebar-create-copy {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  min-width: 0;
+  padding: 0 6px;
+  gap: 4px;
+  color: rgba(255, 255, 255, .78);
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.sidebar-create-copy strong {
+  min-width: 0;
+  color: #fff;
+  font-family: inherit;
+  font-size: 15pt;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.sidebar-create-copy span {
+  min-width: 0;
+  color: rgba(255, 255, 255, .72);
+  font-family: inherit;
+  font-size: 14pt;
+  font-weight: 400;
+  line-height: 1.28;
+}
+
+.sidebar-create-zone > .sidebar-create-link {
+  position: relative;
+  z-index: 3;
+  width: min(100%, 168px);
+  min-width: 0;
+  margin: 9px auto 0;
+}
+
+.sidebar-create-zone.is-collapsed {
+  margin: 0 0 14px;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.sidebar-create-zone.is-collapsed > .sidebar-create-link {
+  width: auto;
+  margin: 0;
+}
+
+@media (max-height: 760px) and (min-width: 1025px) {
+  .sidebar-create-zone {
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .sidebar-zone-emoji {
+    font-size: 50px;
+  }
+
+  .sidebar-visual {
+    min-height: 102px;
+    margin-top: 26px;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-create-zone,
+  .sidebar-visual,
+  .sidebar-visual > img {
+    transition: none !important;
+  }
+}
+
 /* Polish motion: one composed entrance per surface. It only uses opacity and
    transform, so content remains interactive throughout and layout is stable. */
 @media (prefers-reduced-motion: no-preference) {
@@ -3769,4 +4016,50 @@ body::before {
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* Nested workspace navigation keeps the existing sidebar treatment and
+   makes the whole row responsible for navigation and disclosure. */
+.sidebar-nav-group { display: grid; gap: 3px; }
+.sidebar-nav-nested { margin: 0; }
+.sidebar-nav-parent { position: relative; }
+.sidebar-nav-parent.router-link-active { color: #fff; background: rgba(255, 255, 255, 0.11); }
+.sidebar-nav-parent.router-link-active::after { display: none; }
+.sidebar-nav-parent > span { min-width: 0; flex: 1; }
+.sidebar-nav-chevron { margin-left: auto; transition: transform 220ms ease; }
+.sidebar-nav-chevron.is-flipped { transform: rotate(180deg); }
+.sidebar-subnav { display: grid; gap: 3px; margin: 0 0 2px 18px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, 0.16); }
+.sidebar-subnav .sidebar-subnav { margin-left: 16px; }
+.sidebar-subnav a { min-height: 37px; padding: 0 12px; gap: 10px; border-radius: 11px; color: rgba(255, 255, 255, 0.56); font-size: 12.5px; }
+.sidebar-subnav a:hover { color: #fff; background: rgba(255, 255, 255, 0.07); }
+.sidebar-subnav a.router-link-active { color: #fff; background: rgba(255, 255, 255, 0.11); box-shadow: none; }
+.sidebar-subnav a.router-link-active::after { right: 9px; left: auto; width: 4px; height: 4px; border-radius: 50%; box-shadow: none; }
+.sidebar-nav-group.is-active > .sidebar-nav-parent > svg:first-child { color: var(--lime); }
+.page-heading-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Keep nested module states identical to the active course-management row. */
+.sidebar-nav-parent.is-module-active,
+.sidebar-nav-parent.router-link-active,
+.sidebar-subnav a.is-module-active,
+.sidebar-subnav a.router-link-active {
+  color: #287774;
+  background: #fff;
+  box-shadow: 0 9px 20px -16px rgba(9, 80, 82, .8);
+}
+
+.sidebar-nav-parent.is-module-active > svg:first-child,
+.sidebar-subnav a.is-module-active > svg,
+.sidebar-nav-parent.router-link-active > svg:first-child,
+.sidebar-subnav a.router-link-active > svg {
+  color: #319897;
+}
+
+.sidebar-nav-parent.is-module-active::after,
+.sidebar-subnav a.is-module-active::after {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .page-heading-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .page-heading-actions .button { width: 100%; }
 }

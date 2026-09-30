@@ -160,7 +160,7 @@ export interface LearningSessionVO {
   id: ApiId
   courseId?: ApiId
   sessionTitle: string
-  sessionStatus: SessionStatus
+  sessionStatus?: SessionStatus | null
   createAt?: string | null
   updateAt?: string | null
   createdAt?: string | null

@@ -2,9 +2,12 @@
 import { computed } from 'vue'
 import type { CourseType, SessionStatus } from '@/types/api'
 
-const props = defineProps<{ status: CourseType | SessionStatus }>()
+type StatusValue = CourseType | SessionStatus
+type DisplayStatus = StatusValue | 'UNKNOWN'
 
-const labels: Record<CourseType | SessionStatus, string> = {
+const props = defineProps<{ status?: StatusValue | null }>()
+
+const labels: Record<StatusValue, string> = {
   PRIVATE: '私有',
   PENDING: '待审核',
   PUBLISHED: '已发布',
@@ -12,11 +15,19 @@ const labels: Record<CourseType | SessionStatus, string> = {
   COMPLETED: '已完成',
   CANCELED: '已取消',
 }
-const label = computed(() => labels[props.status])
+const normalizedStatus = computed<DisplayStatus>(() => {
+  const status = props.status
+  return status && Object.prototype.hasOwnProperty.call(labels, status)
+    ? status
+    : 'UNKNOWN'
+})
+const label = computed(() => normalizedStatus.value === 'UNKNOWN'
+  ? '未知状态'
+  : labels[normalizedStatus.value])
 </script>
 
 <template>
-  <span class="status-badge" :class="`status-${status.toLowerCase()}`">
+  <span class="status-badge" :class="`status-${normalizedStatus.toLowerCase()}`">
     <i />{{ label }}
   </span>
 </template>

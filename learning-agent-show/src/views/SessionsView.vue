@@ -1,23 +1,25 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Bot, CheckCircle2, MessageSquareText, Play, Plus, Target } from 'lucide-vue-next'
+import { ArrowRight, Bot, CheckCircle2, MessageSquareText, Play, Plus, Target, Trash2 } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
-import { completeSession, createSession } from '@/api/sessions'
+import { completeSession, createSession, deleteLearningSession } from '@/api/sessions'
 import { useActivity } from '@/composables/useActivity'
 import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
 const router = useRouter()
-const { activities, knownCourses, addActivity } = useActivity()
+const { activities, knownCourses, addActivity, removeSessionActivities } = useActivity()
 const { showToast } = useToast()
 
 const createOpen = ref(false)
 const creating = ref(false)
 const completingId = ref<string | null>(null)
+const deletingSessionId = ref<string | null>(null)
+const deleteTarget = ref<{ id: string; title: string } | null>(null)
 const errors = reactive({ courseId: '', sessionTitle: '' })
 const form = reactive({ courseId: '', sessionTitle: '' })
 
@@ -55,7 +57,7 @@ async function submitCreate() {
       kind: 'session-created',
       title: result.sessionTitle,
       description: `课程：${selectedCourse.value.courseName}`,
-      status: result.sessionStatus,
+      status: result.sessionStatus ?? 'ACTIVE',
       resourceId: String(result.id),
     })
     showToast('success', '学习会话已开始', `${result.sessionTitle} 正在进行中`)
@@ -78,7 +80,7 @@ async function finishSession(item: { id: string; title: string }) {
       kind: 'session-completed',
       title: result.sessionTitle || item.title,
       description: '已完成本次学习目标',
-      status: result.sessionStatus,
+      status: result.sessionStatus ?? 'COMPLETED',
       resourceId: item.id,
     })
     showToast('success', '学习会话已完成', result.sessionTitle || item.title)
@@ -86,6 +88,26 @@ async function finishSession(item: { id: string; title: string }) {
     showToast('error', '完成失败', error instanceof ApiError ? error.message : '学习会话完成失败，请稍后重试')
   } finally {
     completingId.value = null
+  }
+}
+
+function closeDeleteDialog() {
+  if (!deletingSessionId.value) deleteTarget.value = null
+}
+
+async function confirmDeleteSession() {
+  const target = deleteTarget.value
+  if (!target || deletingSessionId.value) return
+  deletingSessionId.value = target.id
+  try {
+    await deleteLearningSession(target.id)
+    removeSessionActivities(target.id)
+    deleteTarget.value = null
+    showToast('success', '学习会话已删除', target.title)
+  } catch (error) {
+    showToast('error', '删除失败', error instanceof ApiError ? error.message : '学习会话删除失败，请稍后重试')
+  } finally {
+    deletingSessionId.value = null
   }
 }
 </script>
@@ -108,10 +130,19 @@ async function finishSession(item: { id: string; title: string }) {
             <div><h4>{{ item.title }}</h4><StatusBadge :status="item.status" /></div>
             <p>{{ item.description }}</p>
             <time>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</time>
-            <div v-if="item.kind === 'session-created' && item.resourceId" class="session-record-actions">
-              <RouterLink class="button button-primary session-chat-button" :to="{ name: 'agent-chat', query: { session: item.resourceId } }"><Bot :size="14" /> 与 AI 学习</RouterLink>
-              <button class="button button-secondary session-complete-button" :disabled="completingId === item.resourceId" @click="finishSession({ id: item.resourceId, title: item.title })">
-                {{ completingId === item.resourceId ? '完成中…' : '完成会话' }}
+            <div v-if="item.resourceId" class="session-record-actions">
+              <template v-if="item.kind === 'session-created'">
+                <RouterLink class="button button-primary session-chat-button" :to="{ name: 'agent-chat', query: { session: item.resourceId } }"><Bot :size="14" /> 与 AI 学习</RouterLink>
+                <button class="button button-secondary session-complete-button" :disabled="completingId === item.resourceId" @click="finishSession({ id: item.resourceId, title: item.title })">
+                  {{ completingId === item.resourceId ? '完成中…' : '完成会话' }}
+                </button>
+              </template>
+              <button
+                class="button button-secondary session-delete-button"
+                :disabled="Boolean(deletingSessionId)"
+                @click="deleteTarget = { id: item.resourceId, title: item.title }"
+              >
+                <Trash2 :size="14" />{{ deletingSessionId === item.resourceId ? '删除中…' : '删除会话' }}
               </button>
             </div>
           </div>
@@ -145,6 +176,24 @@ async function finishSession(item: { id: string; title: string }) {
           <button class="button button-primary" :disabled="creating">{{ creating ? '创建中…' : '开始学习' }} <ArrowRight v-if="!creating" :size="17" /></button>
         </footer>
       </form>
+    </ModalDialog>
+
+    <ModalDialog
+      :open="Boolean(deleteTarget)"
+      title="删除学习会话"
+      :description="deleteTarget ? `确认删除“${deleteTarget.title}”？` : ''"
+      @close="closeDeleteDialog"
+    >
+      <div class="delete-chapter-confirm">
+        <span><Trash2 :size="23" /></span>
+        <p>会话将从当前列表和 AI 助教中移除，相关历史数据仍保留在系统中。</p>
+      </div>
+      <footer class="form-actions">
+        <button type="button" class="button button-secondary" :disabled="Boolean(deletingSessionId)" @click="closeDeleteDialog">取消</button>
+        <button class="button chapter-delete-button" :disabled="Boolean(deletingSessionId)" @click="confirmDeleteSession">
+          {{ deletingSessionId ? '删除中…' : '确认删除' }}
+        </button>
+      </footer>
     </ModalDialog>
   </div>
 </template>

@@ -15,3 +15,9 @@ export function completeSession(sessionId: ApiId) {
     method: 'PUT',
   })
 }
+
+export function deleteLearningSession(sessionId: ApiId) {
+  return request<void>(`/agent/delete/${encodeURIComponent(String(sessionId))}`, {
+    method: 'DELETE',
+  })
+}

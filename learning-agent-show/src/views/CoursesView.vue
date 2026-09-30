@@ -101,7 +101,10 @@ function statusDescription(course: KnownCourse) {
   <div class="resource-view">
     <section class="page-heading">
       <div><span class="section-kicker">我的课程</span><h2>课程管理</h2><p>管理课程内容、章节和发布状态。</p></div>
-      <button class="button button-primary" @click="createOpen = true"><Plus :size="18" /> 创建课程</button>
+      <div class="page-heading-actions">
+        <RouterLink class="button button-secondary" :to="{ path: '/chapters', query: { from: 'courses' } }"><ListTree :size="17" /> 章节编排</RouterLink>
+        <button class="button button-primary" @click="createOpen = true"><Plus :size="18" /> 创建课程</button>
+      </div>
     </section>
 
     <section class="course-library-panel">
@@ -121,7 +124,7 @@ function statusDescription(course: KnownCourse) {
             <time>最近更新 {{ new Date(course.updatedAt).toLocaleString('zh-CN') }}</time>
           </div>
           <footer>
-            <RouterLink class="button button-secondary" :to="`/chapters/${course.courseId}`"><ListTree :size="16" /> 编辑章节</RouterLink>
+            <RouterLink class="button button-secondary" :to="{ path: `/chapters/${course.courseId}`, query: { from: 'courses' } }"><ListTree :size="16" /> 编辑章节</RouterLink>
             <button
               v-if="course.courseType === 'PRIVATE'"
               class="button button-primary"

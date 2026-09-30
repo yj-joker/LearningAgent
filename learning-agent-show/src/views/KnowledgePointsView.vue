@@ -92,6 +92,8 @@ const activeCourseId = computed(() => typeof route.params.courseId === 'string' 
 const activeChapterId = computed(() => typeof route.params.chapterId === 'string' ? route.params.chapterId : '')
 const knownCourse = computed(() => knownCourses.value.find((course) => course.courseId === activeCourseId.value) ?? null)
 const selectedChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) ?? null)
+const showChapterBackButton = computed(() => route.query.from === 'chapters')
+const showSidebarBackButton = computed(() => !activeCourseId.value && route.query.from === 'sidebar')
 const sortedChapters = computed(() => [...chapters.value].sort((a, b) => a.sortOrder - b.sortOrder))
 const sortedKnowledgePoints = computed(() => [...knowledgePoints.value].sort((a, b) => a.sortOrder - b.sortOrder))
 const canReorder = computed(() => pointsLoaded.value && knownCourse.value?.courseType === 'PRIVATE' && !ordering.value)
@@ -144,6 +146,14 @@ function goBack() {
     router.push({ name: 'knowledge-points', params: { courseId: activeCourseId.value } })
   } else {
     router.push({ name: 'knowledge-points' })
+  }
+}
+
+function goBackToChapters() {
+  if (activeCourseId.value) {
+    router.push({ name: 'chapters', params: { courseId: activeCourseId.value }, query: { from: 'knowledge-points' } })
+  } else {
+    router.push({ name: 'chapters', query: { from: 'knowledge-points' } })
   }
 }
 
@@ -502,7 +512,10 @@ watch(() => [route.params.courseId, route.params.chapterId], () => {
         <h2>知识点管理</h2>
         <p>在章节中添加和整理知识点，私有课程可以直接拖动调整顺序。</p>
       </div>
-      <button v-if="activeCourseId" class="button button-secondary" @click="goBack"><ChevronLeft :size="17" /> {{ activeChapterId ? '返回章节选择' : '返回课程选择' }}</button>
+      <div class="page-heading-actions">
+        <button v-if="showChapterBackButton || showSidebarBackButton" class="button button-secondary" @click="goBackToChapters"><ChevronLeft :size="17" /> 返回章节编排</button>
+        <button v-else-if="activeCourseId" class="button button-secondary" @click="goBack"><ChevronLeft :size="17" /> {{ activeChapterId ? '返回章节选择' : '返回课程选择' }}</button>
+      </div>
     </section>
 
     <section v-if="!activeCourseId" class="knowledge-selection-section">

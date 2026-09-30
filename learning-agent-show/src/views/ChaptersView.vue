@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   ArrowRight,
   BookOpenText,
@@ -61,6 +61,7 @@ const activeCourseId = computed(() => {
 const knownCourse = computed(() => knownCourses.value.find((course) => course.courseId === activeCourseId.value) ?? null)
 const courseStatus = computed(() => knownCourse.value?.courseType ?? null)
 const courseName = computed(() => knownCourse.value?.courseName || '未选择课程')
+const showCourseManagementBackButton = computed(() => route.query.from === 'courses' || route.query.from === 'sidebar' || route.query.from === 'knowledge-points')
 const canReorder = computed(() => loaded.value && courseStatus.value === 'PRIVATE' && !ordering.value)
 const sortedChapters = computed(() => [...chapters.value].sort((a, b) => a.sortOrder - b.sortOrder))
 
@@ -350,7 +351,11 @@ watch(() => route.params.courseId, (value) => {
         <h2>章节编排</h2>
         <p>选择课程后添加章节，私有课程可以直接拖动调整顺序。</p>
       </div>
-      <button v-if="activeCourseId" class="button button-secondary" @click="router.push({ name: 'chapters' })"><ChevronLeft :size="17" /> 返回课程选择</button>
+      <div class="page-heading-actions">
+        <RouterLink class="button button-secondary" :to="{ path: '/knowledge-points', query: { from: 'chapters' } }"><Lightbulb :size="17" /> 知识点管理</RouterLink>
+        <button v-if="showCourseManagementBackButton" class="button button-secondary" @click="router.push({ name: 'courses' })"><ChevronLeft :size="17" /> 返回课程管理</button>
+        <button v-else-if="activeCourseId" class="button button-secondary" @click="router.push({ name: 'chapters' })"><ChevronLeft :size="17" /> 返回课程选择</button>
+      </div>
     </section>
 
     <section v-if="!activeCourseId" class="chapter-course-selection">
@@ -435,7 +440,7 @@ watch(() => route.params.courseId, (value) => {
               <h4>{{ chapter.title }}</h4>
             </div>
             <div class="chapter-row-actions">
-              <button :draggable="false" :aria-label="`管理 ${chapter.title} 的知识点`" title="管理知识点" @click="router.push({ name: 'knowledge-points', params: { courseId: activeCourseId, chapterId: chapter.id } })"><Lightbulb :size="16" /></button>
+              <button :draggable="false" :aria-label="`管理 ${chapter.title} 的知识点`" title="管理知识点" @click="router.push({ name: 'knowledge-points', params: { courseId: activeCourseId, chapterId: chapter.id }, query: { from: 'chapters' } })"><Lightbulb :size="16" /></button>
               <button :draggable="false" :aria-label="`修改 ${chapter.title}`" title="修改章节" @click="openEditEditor(chapter)"><Pencil :size="16" /></button>
               <button :draggable="false" class="danger" :aria-label="`删除 ${chapter.title}`" title="删除章节" @click="deletingChapter = chapter"><Trash2 :size="16" /></button>
             </div>
