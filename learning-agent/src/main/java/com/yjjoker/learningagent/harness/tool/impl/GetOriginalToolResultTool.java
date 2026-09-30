@@ -54,7 +54,7 @@ public class GetOriginalToolResultTool implements Tool {
                 "properties", Map.of(
                         "recoveryRef", Map.of(
                                 "type", "string",
-                                "description", "截断结果中的恢复引用，例如 result_1；必须原样复制"
+                                "description", "当前截断结果中的完整 recoveryRef，包含任务标识；必须原样复制，不能使用旧任务引用"
                         ),
                         "toolCallId", Map.of(
                                 "type", "string",

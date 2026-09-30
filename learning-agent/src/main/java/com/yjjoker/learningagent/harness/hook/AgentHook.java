@@ -4,11 +4,11 @@ import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 
 // AgentHook 表示 Agent Loop 中预留的扩展点。
-// 当前阶段只观察流程；后续可以增加权限检查、参数校验等实现，而不必把逻辑都塞进 Harness。
+// Hook 提出校验、拒绝或审批要求；是否执行、暂停和恢复由 Harness 决定。
 public interface AgentHook {
 
     // Harness 找到工具、但尚未执行 execute() 时调用。
-    // 现在的日志 Hook 只记录工具名称；将来的安全 Hook 可以在这里拒绝不允许的调用。
+    // 整批预检和审批后复查都可能调用；这里不能执行写入等业务副作用。
     default ToolCallHookResult beforeToolExecution(AgentRunContext context, ToolCall toolCall) {
         return ToolCallHookResult.allow();
     }

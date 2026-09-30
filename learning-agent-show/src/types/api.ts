@@ -172,6 +172,39 @@ export interface AgentChatPayload {
   userMessage: string
 }
 
+// 同一 runId 的申请来自一次模型响应；内容只是提案，尚未写入记忆。
+export interface MemoryApprovalView {
+  id: ApiId
+  sessionId: ApiId
+  // 整批整理不是单条更新，页面根据类型读取对应的方案结构。
+  approvalType: 'CHANGE' | 'CONSOLIDATION'
+  operation: 'CREATE' | 'UPDATE' | 'DELETE' | null
+  scope: 'USER' | 'SESSION'
+  candidateJson: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'STALE'
+}
+
+// 待审批是正常的业务状态，不应显示成请求失败或宣称操作已经完成。
+export interface AgentRunResult {
+  runId: string
+  batchNumber: number
+  status: 'COMPLETED' | 'WAITING_APPROVAL' | 'APPROVAL_RESOLVED' | 'RUNNING' | 'FAILED'
+  answer: string
+  approvals: ToolApprovalRequest[]
+}
+
+// 通用工具审批；工具原参数只展示，用户只能提交决定，不能修改它。
+export interface ToolApprovalRequest {
+  runId: string
+  batchNumber: number
+  toolCallId: string
+  toolName: string
+  arguments: string
+  reason: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  decisionReason: string | null
+}
+
 export type ActivityKind = 'course-created' | 'course-published' | 'session-created' | 'session-completed'
 
 export interface ActivityRecord {

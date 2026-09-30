@@ -3,13 +3,13 @@ package com.yjjoker.learningagent.harness;
 import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
+import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryCandidate;
-import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
@@ -19,6 +19,7 @@ import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -122,10 +123,15 @@ public final class AgentHarnessTestFactory {
                                              StructuredMemoryService structuredMemoryService,
                                              MemoryReferenceRegistry referenceRegistry) {
         // 测试仍然使用生产完整构造器，确保依赖关系和真实运行一致。
+        // Spring 在生产环境自动发现记录 Hook；直接构造的测试需要显式补上它。
+        List<AgentHook> installedHooks = new ArrayList<>(hooks);
+        if (installedHooks.stream().noneMatch(ToolExecutionRecordingHook.class::isInstance)) {
+            installedHooks.add(new ToolExecutionRecordingHook());
+        }
         return new AgentHarnessServiceImpl(
                 llmClient,
                 toolRegistry,
-                hooks,
+                installedHooks,
                 conversationMemoryService,
                 sessionRepository,
                 contextManager,
@@ -135,7 +141,8 @@ public final class AgentHarnessTestFactory {
                 structuredMemoryService,
                 referenceRegistry,
                 new NoopMemoryExtractionService(),
-                new MemoryCandidatePersistenceService(structuredMemoryService)
+                mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class),
+                mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class)
         );
     }
 

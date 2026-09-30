@@ -1,6 +1,9 @@
 package com.yjjoker.learningagent.harness.llm.model;
 
 import lombok.Getter;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
@@ -8,6 +11,7 @@ import java.util.List;
 // 普通消息、模型提出的工具调用、工具执行结果都放进同一个消息列表，按发生顺序组成上下文。
 // @Getter 会在编译时为下面四个字段生成 getXxx() 方法，源码中不再重复手写简单读取方法。
 @Getter
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class LlmMessage {
 
     // role 表示消息来源，目前会使用 system、user、assistant 和 tool 四种值。
@@ -31,13 +35,15 @@ public class LlmMessage {
     // 只有上下文摘要消息为 true，避免通过正文前缀猜测消息类型。
     private final boolean summary;
 
-    private LlmMessage(String role,
-                       String originalContent,
-                       String contextContent,
-                       List<ToolCall> toolCalls,
-                       String toolCallId,
-                       boolean contextReplayable,
-                       boolean summary) {
+    // 检查点恢复原消息，保留原调用 ID、压缩副本和重放标记，不重新生成它们。
+    @JsonCreator
+    private LlmMessage(@JsonProperty("role") String role,
+                       @JsonProperty("originalContent") String originalContent,
+                       @JsonProperty("contextContent") String contextContent,
+                       @JsonProperty("toolCalls") List<ToolCall> toolCalls,
+                       @JsonProperty("toolCallId") String toolCallId,
+                       @JsonProperty("contextReplayable") boolean contextReplayable,
+                       @JsonProperty("summary") boolean summary) {
         this.role = role;
         this.originalContent = originalContent;
         this.contextContent = contextContent;

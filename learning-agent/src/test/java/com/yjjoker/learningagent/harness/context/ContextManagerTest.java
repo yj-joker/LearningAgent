@@ -64,7 +64,9 @@ class ContextManagerTest {
         assertTrue(compactedJson.get("success").asBoolean());
         assertFalse(compactedJson.get("retryable").asBoolean());
         assertTrue(compactedJson.get("content").asString().contains("工具结果已截断"));
-        assertEquals("result_1", compactedJson.get("recoveryRef").asString());
+        String reference = compactedJson.get("recoveryRef").asString();
+        assertTrue(reference.startsWith("result_") && reference.endsWith("_1"));
+        assertTrue(compactedJson.get("content").asString().contains("恢复引用=" + reference));
         assertTrue(compactedJson.get("content").asString().length() <= 80);
 
         // 用户问题和 assistant 工具请求不能因为压缩而丢失。
@@ -89,6 +91,23 @@ class ContextManagerTest {
 
         assertEquals(50, result.get(1).getContent().length());
         assertTrue(result.get(1).getContent().contains("工具结果已截断"));
+    }
+
+    // 单工具预算装不下完整引用时保留引用，不能生成无法召回的半截编号。
+    @Test
+    void shouldKeepCompleteReferenceEvenWhenMarkerExceedsToolBudget() {
+        ContextManager manager = new ContextManager(100, 10);
+        RecoveryReferenceRegistry registry = new RecoveryReferenceRegistry();
+        List<LlmMessage> messages = List.of(LlmMessage.toolResult("original", "资料".repeat(100)));
+        List<LlmMessage> result = manager.prepareForLlmRequest(messages, registry);
+        String reference = registry.references().getFirst();
+        assertEquals("\n[工具结果已截断，恢复引用=" + reference + "]", result.getFirst().getContent());
+        assertEquals("original", registry.resolve(reference));
+        assertTrue(manager.estimateCharacters(result) <= 95);
+
+        // 即使只剩引用，总上下文超限也必须拒绝，不能因保留标记而绕过安全水位。
+        assertThrows(ContextWindowExceededException.class,
+                () -> new ContextManager(40, 10).prepareForLlmRequest(messages, registry));
     }
 
     @Test
@@ -124,20 +143,20 @@ class ContextManagerTest {
     @Test
     @DisplayName("所有工具结果都在百分之九十五安全水位触发压缩")
     void shouldApplySafeContextRatioToEveryToolResult() {
-        ContextManager manager = new ContextManager(100, 20, 2, 300, 0.95);
+        ContextManager manager = new ContextManager(200, 60, 2, 300, 0.95);
         List<LlmMessage> messages = List.of(
-                LlmMessage.user("问".repeat(50)),
-                LlmMessage.toolResult("c", "结果".repeat(19))
+                LlmMessage.user("问".repeat(90)),
+                LlmMessage.toolResult("c", "果".repeat(95))
         );
 
-        // 原消息没有超过 100 字符硬上限，但超过 95% 安全水位，因此仍需压缩工具正文。
-        assertTrue(manager.estimateCharacters(messages) <= 100);
-        assertTrue(manager.estimateCharacters(messages) > 95);
+        // 原消息没超过 200 字符硬上限，但超过 95% 水位；预算也要容纳完整任务引用。
+        assertTrue(manager.estimateCharacters(messages) <= 200);
+        assertTrue(manager.estimateCharacters(messages) > 190);
 
         List<LlmMessage> compacted = manager.prepareForLlmRequest(messages);
 
-        assertEquals(20, compacted.get(1).getContent().length());
-        assertEquals("结果".repeat(19), compacted.get(1).getOriginalContent());
+        assertEquals(60, compacted.get(1).getContent().length());
+        assertEquals("果".repeat(95), compacted.get(1).getOriginalContent());
         assertEquals(compacted.get(1).getContent(), compacted.get(1).getContextContent());
     }
 
@@ -197,8 +216,8 @@ class ContextManagerTest {
     void shouldRemoveRecoveryReferencesForToolsOutsideCurrentContext() {
         ContextManager manager = new ContextManager(1_000, 100);
         RecoveryReferenceRegistry registry = new RecoveryReferenceRegistry();
-        assertEquals("result_1", registry.register("call_old"));
-        assertEquals("result_2", registry.register("call_recent"));
+        String oldRef = registry.register("call_old");
+        String recentRef = registry.register("call_recent");
 
         List<LlmMessage> messages = List.of(
                 LlmMessage.system("系统规则"),
@@ -209,8 +228,33 @@ class ContextManagerTest {
 
         manager.prepareForLlmRequest(messages, registry);
 
-        assertEquals("call_recent", registry.resolve("result_2"));
-        assertNull(registry.resolve("result_1"));
+        assertEquals("call_recent", registry.resolve(recentRef));
+        assertNull(registry.resolve(oldRef));
+    }
+
+    // 新任务重新展示历史结果时，顶层字段与正文提示必须同步，原始结果保持不变。
+    @Test
+    void shouldRefreshBothStructuredAndPlainRecoveryMarkers() {
+        ContextManager manager = new ContextManager(10_000, 300);
+        RecoveryReferenceRegistry previous = new RecoveryReferenceRegistry("00000000-0000-0000-0000-000000000001");
+        String oldRef = previous.register("original");
+        String oldText = "资料正文\n[工具结果已截断，原始结果未删除；恢复引用=" + oldRef + "]";
+        String structured = JSON_MAPPER.writeValueAsString(java.util.Map.of("success", true, "content", oldText, "recoveryRef", oldRef));
+        RecoveryReferenceRegistry current = new RecoveryReferenceRegistry("00000000-0000-0000-0000-000000000002");
+        var input = List.of(LlmMessage.system("规则"),
+                LlmMessage.toolResult("original", "完整原文").withContextContent(structured),
+                LlmMessage.toolResult("plain", "另一份原文").withContextContent(oldText));
+        var output = manager.prepareForLlmRequest(input, current);
+        JsonNode json = JSON_MAPPER.readTree(output.get(1).getContent());
+        String newRef = json.get("recoveryRef").asString();
+        assertEquals("result_2_1", newRef);
+        assertTrue(json.get("content").asString().contains("恢复引用=" + newRef));
+        assertFalse(output.get(1).getContent().contains(oldRef));
+        assertFalse(output.get(2).getContent().contains(oldRef));
+        assertTrue(output.get(2).getContent().contains("恢复引用=result_2_2"));
+        assertEquals("完整原文", output.get(1).getOriginalContent());
+        assertNull(current.resolve(oldRef));
+        assertEquals("original", current.resolve(newRef));
     }
 
     // 仅用于生成与真实 ToolExecutionResult 相同结构的 JSON，避免测试依赖手写转义字符串。

@@ -34,8 +34,10 @@ public class LoggingAgentHook implements AgentHook {
 
     @Override
     public void afterRun(AgentRunContext context) {
-        log.info("Agent 任务结束，runId={}, successful={}, executedTools={}, durationMs={}, failureType={}",
+        // afterRun 表示本次执行片段结束；审批中的任务尚未完成。
+        log.info("Agent 本次执行结束，runId={}, waitingApproval={}, successful={}, executedTools={}, durationMs={}, failureType={}",
                 context.getRunId(),
+                context.isWaitingApproval(),
                 context.isSuccessful(),
                 context.getExecutedToolNames(),
                 context.getElapsedMilliseconds(),

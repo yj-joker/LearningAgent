@@ -35,6 +35,10 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
     private static final int MAX_MEMORY_TOPIC_LENGTH = 128;
     private static final int MAX_MEMORY_SUMMARY_LENGTH = 1_000;
     private static final int MAX_MEMORY_CONTENT_LENGTH = 20_000;
+    // 原始结果仍保存在运行轨迹中；提取只接收记忆写操作，查询和召回结果不占提取预算。
+    private static final int MAX_MEMORY_WRITE_RESULT_CHARACTERS = 1_000;
+    private static final int MAX_TOOL_RECORDS = 50;
+    private static final int MAX_TOOL_HISTORY_CHARACTERS = 12_000;
 
     private final LlmClient llmClient;
     private final LlmRetryExecutor llmRetryExecutor;
@@ -67,11 +71,11 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
             return List.of();
         }
 
-        // 只发送本轮对话和索引，不发送历史聊天、数据库主键或记忆正文。
+        // 发送本轮对话、最新索引和受限工具信息，不发送完整聊天历史、数据库主键或原始参数。
         Long sessionId = context.getSessionId();
         String extractionInput = buildExtractionInput(context, userMessage, assistantAnswer);
-        log.info("记忆提取索引已准备，sessionId={}，indexCount={}，inputCharacters={}",
-                sessionId, context.getTargets().size(), extractionInput.length());
+        log.info("记忆提取索引已准备，sessionId={}，indexCount={}，toolRecordCount={}，inputCharacters={}",
+                sessionId, context.getTargets().size(), context.getToolExecutions().size(), extractionInput.length());
 
         // 格式错误最多修复有限次数，避免提取模型无限循环。
         int maxAttempts = Math.max(1, retryProperties.getMaxAttempts());
@@ -96,7 +100,7 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
                     throw exception;
                 }
 
-                // 把简短错误原因带回下一次请求，让模型只修正格式问题。
+                // 把错误原因带回下一次请求，修正格式或移除越界候选；不能靠重试放宽后端限制。
                 repairHint = exception.getMessage();
                 log.warn("记忆候选格式错误，将请求模型修复，sessionId={}，attempt={}，nextAttempt={}，reason={}",
                         sessionId, attempt, attempt + 1, repairHint);
@@ -123,7 +127,73 @@ public class LlmMemoryExtractionService implements MemoryExtractionService {
             entry.put("memoryTopic", target.getMemoryTopic());
             entry.put("memorySummary", target.getMemorySummary());
         }
+        appendToolHistory(input, context);
         return input.toString();
+    }
+
+    // 不转发调用 ID 和参数字段；记忆结果只发摘录，其中的文字仍按不可信数据处理。
+    private void appendToolHistory(tools.jackson.databind.node.ObjectNode input, MemoryExtractionContext context) {
+        var records = context.getMemoryWriteExecutions();
+        if (records.size() > MAX_TOOL_RECORDS) {
+            // 不悄悄丢掉某次操作，超限时保留主回答并跳过本轮自动提取。
+            throw new IllegalStateException("本轮工具轨迹超过数量上限，跳过自动提取");
+        }
+        // 模型提前看到后端约束，减少无效候选；最终仍由 Validator 再次执行相同校验。
+        var policy = input.putObject("memoryWritePolicy");
+        policy.put("automaticWritesBlocked", context.hasUnconfirmedMemoryWrites());
+        var blockedScopes = policy.putArray("blockedCreateScopes");
+        context.getBlockedCreateScopes().forEach(scope -> blockedScopes.add(scope.name()));
+        var protectedRefs = policy.putArray("protectedMemoryRefs");
+        context.getTargets().stream().filter(context::isProtectedMemoryTarget)
+                .forEach(target -> protectedRefs.add(target.getMemoryRef()));
+        var history = input.putArray("toolExecutions");
+        for (var record : records) {
+            var item = history.addObject();
+            item.put("executionRef", "execution_" + record.getSequence());
+            item.put("toolName", record.getToolName());
+            item.put("status", record.getStatus().name());
+            item.put("memoryWriteTool", true);
+            var result = record.getResult();
+            var receipt = result == null ? null : result.memoryWriteReceipt();
+            item.put("writeCommitted", receipt != null);
+            if (result == null) {
+                // 异常只说明未取得可靠结果，不能推断数据库一定没有变化。
+                item.put("resultAvailable", false);
+                continue;
+            }
+            item.put("resultAvailable", true);
+            item.put("resultCharacters", safeLength(result.getContent()));
+            if (!result.isSuccess()) {
+                // 错误代码用于判断失败类型，不附带可能包含敏感信息的错误消息。
+                item.put("errorCode", result.getErrorCode());
+            }
+            if (receipt != null) {
+                // 凭据中的主键只在后端使用，模型接收当前引用和业务 key。
+                item.put("operation", receipt.getOperation().name());
+                item.put("scope", receipt.getScope().name());
+                var keys = item.putArray("affectedMemoryKeys");
+                receipt.getMemoryKeys().forEach(keys::add);
+                var refs = item.putArray("affectedMemoryRefs");
+                context.currentRefsFor(receipt).forEach(refs::add);
+                String content = result.getContent() == null ? "" : result.getContent();
+                int limit = Math.min(content.length(), MAX_MEMORY_WRITE_RESULT_CHARACTERS);
+                // 不拆开一个 Unicode 代理对，避免中文扩展字符或表情被截坏。
+                if (limit > 0 && limit < content.length() && Character.isHighSurrogate(content.charAt(limit - 1))) {
+                    limit--;
+                }
+                item.put("resultExcerpt", content.substring(0, limit));
+                item.put("resultTruncated", limit < content.length());
+            }
+        }
+        // 数量和字符双重限制；结果过大不能通过省略操作来伪造完整记录。
+        int characters = history.toString().length() + policy.toString().length();
+        if (characters > MAX_TOOL_HISTORY_CHARACTERS) {
+            throw new IllegalStateException("本轮工具轨迹超过字符预算，跳过自动提取");
+        }
+        log.info("记忆写操作已加入提取，sessionId={}，allRecordCount={}，writeRecordCount={}，historyCharacters={}，automaticWritesBlocked={}",
+                context.getSessionId(), context.getToolExecutions().size(), records.size(), characters,
+                context.hasUnconfirmedMemoryWrites());
+        // TODO 新增实际记忆写工具时，事务服务返回后使用 memoryWriteSuccess 提供真实凭据，不解析模型正文充当凭据。
     }
 
     // 请求一次无工具记忆提取，不处理格式错误。

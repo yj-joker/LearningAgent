@@ -5,6 +5,9 @@ import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.*;
 import com.yjjoker.learningagent.harness.memory.impl.LlmMemoryExtractionService;
 import com.yjjoker.learningagent.harness.memory.model.*;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
@@ -73,6 +76,27 @@ class LlmMemoryExtractionServiceTest {
         assertTrue(client.requests.get(1).get(1).getContent().contains("sport"));
     }
 
+    // 删除已完成后没有目标，修复反馈应要求移除该候选，同时保留其他独立事实。
+    @Test
+    void shouldRepairEmptyDeleteWithoutDroppingIndependentFact() {
+        AgentRunContext run = new AgentRunContext();
+        recordResult(run, true, ToolExecutionResult.memoryWriteSuccess("已删除运动偏好",
+                new MemoryWriteReceipt(DELETE, USER, USER_ID, List.of(1L), List.of("sport"))));
+        MemoryCandidate goal = candidate(CREATE, SESSION, List.of(), "本次学习事务", "goal", "学习事务");
+        SequenceClient client = new SequenceClient(
+                response(candidate(DELETE, USER, List.of(), "忘记运动偏好", null, null), goal),
+                response(goal));
+
+        var result = service(client).extract(contextWithTrace(run), "忘记运动偏好，本次学习事务", "已处理");
+
+        assertEquals(1, result.size());
+        assertEquals(SESSION, result.getFirst().getScope());
+        assertEquals(2, client.requests.size());
+        String feedback = client.requests.getLast().get(1).getContent();
+        assertTrue(feedback.contains("移除此无目标候选"));
+        assertTrue(feedback.contains("保留其他合法独立候选"));
+    }
+
     // 不允许把会话索引的引用用来修改用户长期记忆。
     @Test
     void shouldRejectWrongScope() {
@@ -135,6 +159,215 @@ class LlmMemoryExtractionServiceTest {
         LlmClient client = mock(LlmClient.class);
         assertTrue(service(client).extract(emptyContext(), " ", "回答").isEmpty());
         verifyNoInteractions(client);
+    }
+
+    // 普通工具留在运行记录里，连名称和状态也不占用提取上下文。
+    @Test
+    void shouldProjectOrdinaryToolWithoutArgumentsOrBody() {
+        AgentRunContext run = new AgentRunContext();
+        recordResult(run, false, ToolExecutionResult.success("PRIVATE_BUSINESS_BODY"));
+        SequenceClient client = new SequenceClient(response());
+        service(client).extract(contextWithTrace(run), "查询资料", "查到了");
+        String input = client.requests.getFirst().get(1).getContent();
+        assertTrue(new JsonMapper().readTree(input).get("toolExecutions").isEmpty());
+        assertFalse(input.contains("execution_1"));
+        assertFalse(input.contains("PRIVATE_BUSINESS_BODY"));
+        assertFalse(input.contains("PRIVATE_ARGUMENT"));
+        assertFalse(input.contains("private_call_id"));
+        assertEquals("PRIVATE_BUSINESS_BODY", run.getToolExecutions().getFirst().getResult().getContent());
+    }
+
+    // 记忆写结果只发送有限摘录；截断不能拆开表情，原始结果仍在本轮记录中。
+    @Test
+    void shouldBoundMemoryExcerptWithoutChangingOriginalResult() {
+        AgentRunContext run = new AgentRunContext();
+        String original = "记".repeat(999) + "😀" + "PRIVATE_TAIL";
+        recordResult(run, true, committedResult(original));
+        SequenceClient client = new SequenceClient(response());
+        service(client).extract(contextWithTrace(run), "查询记忆", "查到了");
+        var item = new JsonMapper().readTree(client.requests.getFirst().get(1).getContent())
+                .get("toolExecutions").get(0);
+        assertEquals(999, item.get("resultExcerpt").asString().length());
+        assertTrue(item.get("resultTruncated").asBoolean());
+        assertEquals(original.length(), item.get("resultCharacters").asInt());
+        assertEquals(original, run.getToolExecutions().getFirst().getResult().getContent());
+    }
+
+    // 未执行的拒绝与执行后返回的业务失败是两种状态，错误正文不转发。
+    @Test
+    void shouldKeepRejectionAndBusinessFailureDistinct() {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall rejected = new ToolCall("rejected", "query", "{}");
+        run.requestToolExecution(rejected);
+        run.classifyToolExecution(rejected, true);
+        run.rejectToolExecution(rejected, ToolExecutionResult.failure("DENIED", "PRIVATE_ERROR", false));
+        recordResult(run, true, ToolExecutionResult.failure("NOT_FOUND", "PRIVATE_ERROR", true));
+        SequenceClient client = new SequenceClient(response());
+        service(client).extract(contextWithTrace(run), "查询资料", "未查到");
+        String input = client.requests.getFirst().get(1).getContent();
+        var history = new JsonMapper().readTree(input).get("toolExecutions");
+        assertEquals("REJECTED", history.get(0).get("status").asString());
+        assertEquals("FAILED", history.get(1).get("status").asString());
+        assertEquals("NOT_FOUND", history.get(1).get("errorCode").asString());
+        assertFalse(input.contains("PRIVATE_ERROR"));
+    }
+
+    // 记忆工具返回的旧事实不能冒充本轮用户原话，通过后端校验而不只依赖提示词。
+    @Test
+    void shouldRejectEvidenceOnlyPresentInToolResult() {
+        AgentRunContext run = new AgentRunContext();
+        recordResult(run, true, committedResult("我喜欢羽毛球"));
+        SequenceClient client = new SequenceClient(response(
+                candidate(CREATE, USER, List.of(), "我喜欢羽毛球", "sport", "喜欢羽毛球")));
+        assertThrows(MemoryExtractionFormatException.class,
+                () -> service(client).extract(contextWithTrace(run), "查询旧记忆", "你喜欢羽毛球"));
+        assertEquals(2, client.requests.size());
+        // 格式修复始终复用相同的执行记录，不能中途换成另一轮的结果。
+        assertTrue(client.requests.get(1).get(1).getContent().contains("execution_1"));
+    }
+
+    // 查询工具不会阻止提取用户在同一轮明确提供的新事实。
+    @Test
+    void shouldExtractNewUserFactAfterReadingMemory() {
+        AgentRunContext run = new AgentRunContext();
+        recordResult(run, false, ToolExecutionResult.success("喜欢羽毛球"));
+        SequenceClient client = new SequenceClient(response(
+                candidate(CREATE, USER, List.of(), "叫我小林", "nickname", "称呼为小林")));
+        var candidates = service(client).extract(contextWithTrace(run), "查询旧记忆，以后叫我小林", "好的");
+        assertEquals(1, candidates.size());
+        assertEquals("nickname", candidates.getFirst().getMemoryKey());
+    }
+
+    // 超过数量上限时整轮停止提取，不能静默只保留前五十次操作。
+    @Test
+    void shouldRejectOversizedTraceBeforeCallingModel() {
+        AgentRunContext run = new AgentRunContext();
+        for (int index = 0; index < 51; index++) {
+            recordResult(run, true, committedResult("ok"));
+        }
+        LlmClient client = mock(LlmClient.class);
+        assertThrows(IllegalStateException.class,
+                () -> service(client).extract(contextWithTrace(run), "问题", "回答"));
+        verifyNoInteractions(client);
+    }
+
+    // 即使调用次数不多，大段记忆摘录累积也不能超过提取输入的字符预算。
+    @Test
+    void shouldRejectTraceCharacterOverflowBeforeCallingModel() {
+        AgentRunContext run = new AgentRunContext();
+        for (int index = 0; index < 12; index++) {
+            recordResult(run, true, committedResult("记".repeat(1_000)));
+        }
+        LlmClient client = mock(LlmClient.class);
+        assertThrows(IllegalStateException.class,
+                () -> service(client).extract(contextWithTrace(run), "问题", "回答"));
+        verifyNoInteractions(client);
+    }
+
+    // 查询再多也只保存在运行记录中，不触发写操作的数量和字符限制。
+    @Test
+    void shouldIgnoreReadOnlyCallsWhenApplyingExtractionBudget() {
+        AgentRunContext run = new AgentRunContext();
+        for (int index = 0; index < 60; index++) {
+            recordResult(run, false, ToolExecutionResult.success("资料".repeat(5_000)));
+        }
+        SequenceClient client = new SequenceClient(response(
+                candidate(CREATE, USER, List.of(), "叫我小林", "nickname", "称呼为小林")));
+        assertEquals(1, service(client).extract(contextWithTrace(run), "叫我小林", "好的").size());
+        assertEquals(60, run.getToolExecutions().size());
+        assertTrue(new JsonMapper().readTree(client.requests.getFirst().get(1).getContent())
+                .get("toolExecutions").isEmpty());
+    }
+
+    // 主循环旧引用与提取索引顺序不同，凭据必须按真实 ID 重新绑定当前引用。
+    @Test
+    void shouldRemapCommittedTargetsWithoutSendingDatabaseIds() {
+        AgentRunContext run = new AgentRunContext();
+        var receipt = new MemoryWriteReceipt(UPDATE, USER, USER_ID, List.of(900001L), List.of("sport"));
+        recordResult(run, true, ToolExecutionResult.memoryWriteSuccess("已修改", receipt));
+        var snapshot = new MemoryExtractionContext(USER_ID, SESSION_ID,
+                new MemoryIndexSnapshot(List.of(user(900002L, "nickname", "小林"),
+                        user(900001L, "sport", "喜欢篮球")), List.of()), run.getToolExecutions());
+        SequenceClient client = new SequenceClient(response());
+        service(client).extract(snapshot, "修改完成了吗", "完成了");
+        String input = client.requests.getFirst().get(1).getContent();
+        var json = new JsonMapper().readTree(input);
+        var item = json.get("toolExecutions").get(0);
+        assertEquals("memory_2", item.get("affectedMemoryRefs").get(0).asString());
+        assertTrue(item.get("writeCommitted").asBoolean());
+        assertEquals("USER", json.get("memoryWritePolicy").get("blockedCreateScopes").get(0).asString());
+        assertEquals("memory_2", json.get("memoryWritePolicy").get("protectedMemoryRefs").get(0).asString());
+        assertFalse(input.contains("900001"));
+        assertFalse(input.contains("ownerId"));
+    }
+
+    // 只有 success=true 的自然语言结果不够，缺少凭据时模型不能补做写入。
+    @Test
+    void shouldRepairCandidateWhenWriteReceiptIsMissing() {
+        AgentRunContext run = new AgentRunContext();
+        recordResult(run, true, ToolExecutionResult.success("我已经保存了"));
+        SequenceClient client = new SequenceClient(response(
+                candidate(CREATE, USER, List.of(), "喜欢篮球", "sport", "喜欢篮球")), response());
+        assertTrue(service(client).extract(contextWithTrace(run), "喜欢篮球", "好的").isEmpty());
+        assertEquals(2, client.requests.size());
+        var input = new JsonMapper().readTree(client.requests.getFirst().get(1).getContent());
+        assertTrue(input.get("memoryWritePolicy").get("automaticWritesBlocked").asBoolean());
+        assertFalse(input.get("toolExecutions").get(0).get("writeCommitted").asBoolean());
+        assertTrue(client.requests.get(1).get(1).getContent().contains("不得自动补做"));
+    }
+
+    // 凭据不能通过普通工具响应暴露；事务没有结束时不能提前生成成功结果。
+    @Test
+    void shouldKeepReceiptInternalAndRejectSuccessBeforeCommit() {
+        var receipt = new MemoryWriteReceipt(CREATE, USER, USER_ID, List.of(900001L), List.of("sport"));
+        String json = new JsonMapper().writeValueAsString(ToolExecutionResult.memoryWriteSuccess("保存完成", receipt));
+        assertFalse(json.contains("900001"));
+        assertFalse(json.contains("writeReceipt"));
+        org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            assertThrows(IllegalStateException.class, () -> ToolExecutionResult.memoryWriteSuccess("尚未提交", receipt));
+        } finally {
+            // 清理模拟事务标记，避免影响后续测试。
+            org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+    }
+
+    // 每个请求独占记录；保存快照后继续执行其他工具，不会改变已交给提取的快照。
+    @Test
+    void shouldIsolateRunsAndRejectPendingTrace() {
+        AgentRunContext first = new AgentRunContext();
+        AgentRunContext second = new AgentRunContext();
+        recordResult(first, false, ToolExecutionResult.success("第一次"));
+        var snapshot = contextWithTrace(first);
+        recordResult(first, false, ToolExecutionResult.success("第二次"));
+        assertEquals(1, snapshot.getToolExecutions().size());
+        assertEquals(2, first.getToolExecutions().getLast().getSequence());
+        assertTrue(second.getToolExecutions().isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.getToolExecutions().clear());
+        second.requestToolExecution(new ToolCall("pending", "query", "{}"));
+        assertFalse(second.hasCompleteToolHistory());
+        assertThrows(IllegalStateException.class, () -> contextWithTrace(second));
+    }
+
+    // 通过真实运行上下文建立一条已完成记录，避免绕过生产状态转换。
+    private void recordResult(AgentRunContext run, boolean memoryWriteTool, ToolExecutionResult result) {
+        ToolCall call = new ToolCall("private_call_id", "query", "PRIVATE_ARGUMENT");
+        run.requestToolExecution(call);
+        run.classifyToolExecution(call, memoryWriteTool);
+        run.startToolExecution(call);
+        run.completeToolExecution(call, result);
+    }
+
+    // 提取索引为空，测试只关注本轮工具记录。
+    private MemoryExtractionContext contextWithTrace(AgentRunContext run) {
+        return new MemoryExtractionContext(USER_ID, SESSION_ID,
+                new MemoryIndexSnapshot(List.of(), List.of()), run.getToolExecutions());
+    }
+
+    // 测试使用合成的已提交目标，只验证约束，不修改真实数据库。
+    private ToolExecutionResult committedResult(String content) {
+        return ToolExecutionResult.memoryWriteSuccess(content,
+                new MemoryWriteReceipt(CREATE, USER, USER_ID, List.of(1L), List.of("savedFact")));
     }
 
     // 建立真实提取服务，只有模型响应由测试提供。

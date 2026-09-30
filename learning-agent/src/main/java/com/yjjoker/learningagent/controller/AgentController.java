@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.controller;
 import com.yjjoker.learningagent.dto.AgentChatRequest;
 import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.harness.service.AgentHarnessService;
+import com.yjjoker.learningagent.vo.AgentRunResult;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -25,7 +26,8 @@ public class AgentController {
 
     @PostMapping("/chat")
     @Operation(summary = "智能体聊天")
-    public Result<String> chat(@Valid @RequestBody AgentChatRequest request) {
+    // 正常回答和等待审批共用一个接口，前端通过 status 区分，不需要再问一次模型。
+    public Result<AgentRunResult> chat(@Valid @RequestBody AgentChatRequest request) {
         return Result.success(agentHarnessService.run(request.getSessionId(), request.getUserMessage()));
     }
 

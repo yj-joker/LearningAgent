@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Bot, BookOpenText, MessageSquareText, Send, Sparkles, UserRound } from 'lucide-vue-next'
-import { chatWithAgent } from '@/api/agent'
+import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeAgentRun } from '@/api/agent'
+import type { AgentRunResult, ToolApprovalRequest } from '@/types/api'
 import { ApiError } from '@/api/client'
 import { useActivity } from '@/composables/useActivity'
 import { useAuth } from '@/composables/useAuth'
@@ -37,6 +38,10 @@ const selectedSessionId = ref('')
 const draft = ref('')
 const messages = ref<ChatMessage[]>([])
 const sending = ref(false)
+// 审批状态来自后端，等待期间没有挂起中的聊天请求。
+const activeRun = ref<AgentRunResult | null>(null)
+const approvalBusy = ref(false)
+const loadingRun = ref(false)
 const messageList = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 
@@ -63,7 +68,7 @@ const activeSessions = computed<ActiveSession[]>(() => {
 
 const selectedSession = computed(() => activeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
 const remainingCharacters = computed(() => MAX_MESSAGE_LENGTH - draft.value.length)
-const canSend = computed(() => Boolean(selectedSession.value && draft.value.trim() && !sending.value && remainingCharacters.value >= 0))
+const canSend = computed(() => Boolean(selectedSession.value && draft.value.trim() && !sending.value && !approvalBusy.value && !loadingRun.value && !activeRun.value && remainingCharacters.value >= 0))
 
 function conversationStorageKey(sessionId: string) {
   const owner = encodeURIComponent(currentUser.value?.username || 'guest')
@@ -103,14 +108,14 @@ async function scrollToLatest() {
 }
 
 async function selectSession(sessionId: string) {
-  if (sending.value || sessionId === selectedSessionId.value) return
+  if (sending.value || approvalBusy.value || sessionId === selectedSessionId.value) return
   await router.replace({ name: 'agent-chat', query: { session: sessionId } })
 }
 
 async function sendMessage() {
   const session = selectedSession.value
   const userMessage = draft.value.trim()
-  if (!session || !userMessage || sending.value) return
+  if (!session || !userMessage || !canSend.value) return
   if (userMessage.length > MAX_MESSAGE_LENGTH) {
     showToast('error', '内容过长', `每次最多输入 ${MAX_MESSAGE_LENGTH} 个字符`)
     return
@@ -124,8 +129,9 @@ async function sendMessage() {
   await scrollToLatest()
 
   try {
-    const answer = await chatWithAgent({ sessionId: session.id, userMessage })
-    messages.value.push(createMessage('assistant', answer || '本次没有生成回复，请稍后再试。'))
+    const result = await chatWithAgent({ sessionId: session.id, userMessage })
+    // 后端直接返回暂停状态；展示原工具参数，不把它误报为执行成功。
+    acceptRunResult(result)
     persistConversation()
     await scrollToLatest()
   } catch (error) {
@@ -138,6 +144,70 @@ async function sendMessage() {
     await nextTick()
     composer.value?.focus()
   }
+}
+
+// 同一任务的最终回答使用稳定编号，重复恢复响应不会重复显示答案。
+function acceptRunResult(result: AgentRunResult) {
+  activeRun.value = result.status === 'COMPLETED' || result.status === 'FAILED' ? null : result
+  const id = result.status === 'COMPLETED' ? 'run-' + result.runId + '-completed' : 'run-' + result.runId + '-' + result.batchNumber
+  const message = { ...createMessage('assistant', result.answer), id }
+  const index = messages.value.findIndex(item => item.id === id)
+  if (index < 0) messages.value.push(message)
+  else messages.value[index] = message
+  persistConversation()
+}
+
+// 切换或刷新页面后从数据库找回任务；旧会话的慢响应不能覆盖当前会话。
+async function restorePendingRun(sessionId: string) {
+  activeRun.value = null
+  loadingRun.value = true
+  try {
+    const result = await getActiveAgentRun(sessionId)
+    if (selectedSessionId.value === sessionId) activeRun.value = result
+  } catch (error) {
+    if (selectedSessionId.value === sessionId) showToast('error', '读取审批状态失败', error instanceof Error ? error.message : '请刷新后重试')
+  } finally {
+    if (selectedSessionId.value === sessionId) loadingRun.value = false
+  }
+}
+
+// 单项决定只保存用户选择；所有决定齐备后才显示“继续执行”。
+async function decideTool(request: ToolApprovalRequest, approved: boolean) {
+  if (approvalBusy.value || !activeRun.value) return
+  approvalBusy.value = true
+  try {
+    activeRun.value = await decideAgentTool(request.runId, request.batchNumber, request.toolCallId, approved)
+  } catch (error) {
+    showToast('error', '审批未完成', error instanceof Error ? error.message : '请刷新后重试')
+  } finally {
+    approvalBusy.value = false
+  }
+}
+
+// 继续同一个 runId，不再调用聊天接口重复提交原问题。
+async function continueRun() {
+  if (approvalBusy.value || activeRun.value?.status !== 'APPROVAL_RESOLVED') return
+  const runId = activeRun.value.runId
+  approvalBusy.value = true
+  try {
+    acceptRunResult(await resumeAgentRun(runId))
+    await scrollToLatest()
+  } catch (error) {
+    showToast('error', '任务恢复未完成', error instanceof Error ? error.message : '请查询当前状态')
+    // 请求超时不等于后端没执行；查询状态，而不是自动重发原工具请求。
+    try { acceptRunResult(await getAgentRun(runId)) } catch { /* 保留当前卡片，允许手动刷新。 */ }
+  } finally {
+    approvalBusy.value = false
+  }
+}
+
+// 只查询状态；RUNNING 时不自动重跑可能已经执行过的工具。
+async function refreshRun() {
+  if (!activeRun.value || approvalBusy.value) return
+  approvalBusy.value = true
+  try { acceptRunResult(await getAgentRun(activeRun.value.runId)) }
+  catch (error) { showToast('error', '刷新失败', error instanceof Error ? error.message : '请稍后重试') }
+  finally { approvalBusy.value = false }
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -156,7 +226,11 @@ watch(
     if (nextId !== selectedSessionId.value) {
       selectedSessionId.value = nextId
       messages.value = []
-      if (nextId) loadConversation(nextId)
+      activeRun.value = null
+      if (nextId) {
+        loadConversation(nextId)
+        void restorePendingRun(nextId)
+      }
       void scrollToLatest()
     }
   },
@@ -244,6 +318,23 @@ onMounted(() => composer.value?.focus())
           </article>
         </div>
 
+        <section v-if="activeRun" class="agent-approval-panel" aria-label="工具审批">
+          <strong>{{ activeRun.answer }}</strong>
+          <p>审批仅表示允许执行，工具的实际结果会在继续任务后显示。</p>
+          <article v-for="approval in activeRun.approvals" :key="approval.batchNumber + ':' + approval.toolCallId">
+            <strong>{{ approval.toolName }} · {{ approval.status }}</strong>
+            <p>{{ approval.reason }}</p>
+            <pre>{{ approval.arguments }}</pre>
+            <div v-if="approval.status === 'PENDING'">
+              <button :disabled="approvalBusy" @click="decideTool(approval, true)">同意</button>
+              <button :disabled="approvalBusy" @click="decideTool(approval, false)">拒绝</button>
+            </div>
+          </article>
+          <button v-if="activeRun.status === 'APPROVAL_RESOLVED'" :disabled="approvalBusy" @click="continueRun">继续执行原任务</button>
+          <button :disabled="approvalBusy" @click="refreshRun">刷新状态</button>
+          <span v-if="approvalBusy">正在处理，请勿重复提交…</span>
+        </section>
+
         <form class="agent-composer" @submit.prevent="sendMessage">
           <div>
             <textarea
@@ -273,3 +364,10 @@ onMounted(() => composer.value?.focus())
     </section>
   </div>
 </template>
+
+<style scoped>
+.agent-approval-panel { margin: 1rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 12px; }
+.agent-approval-panel article { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid #e2e8f0; }
+.agent-approval-panel pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-approval-panel button { margin: .4rem .6rem .4rem 0; padding: .4rem .8rem; border: 1px solid #94a3b8; border-radius: 6px; }
+</style>

@@ -24,7 +24,7 @@ import java.util.Set;
 public class ContextManager {
 
     private static final JsonMapper JSON_MAPPER = new JsonMapper();
-    private static final String TRUNCATED_MARKER_PREFIX = "\n[工具结果已截断，原始结果未删除；恢复引用=";
+    private static final String TRUNCATED_MARKER_PREFIX = "\n[工具结果已截断，恢复引用=";
 
     private final int maxContextCharacters;
     private final int maxToolResultCharacters;
@@ -356,15 +356,15 @@ public class ContextManager {
         return truncate(content, maxToolResultCharacters, reference);
     }
 
-    // 截断文本，保留指定长度，末尾添加省略标记。
+    // 截断正文时保留完整恢复标记，不能把引用一起截断。
     private String truncate(String text, int maxCharacters, String reference) {
         if (text.length() <= maxCharacters) {
             return text;
         }
         String marker = TRUNCATED_MARKER_PREFIX + reference + "]";
-        // 如果设置的最大tool结果长度小于等于省略标记长度，则按照设置的长度进行截断
+        // 极小的单工具预算只保留标记；总上下文仍按实际长度检查，超限不会放行。
         if (maxCharacters <= marker.length()) {
-            return text.substring(0, maxCharacters);
+            return marker;
         }
         return text.substring(0, maxCharacters - marker.length()) + marker;
     }
@@ -376,23 +376,40 @@ public class ContextManager {
             if (node != null && node.isObject()) {
                 ObjectNode objectNode = (ObjectNode) node;
                 objectNode.put("recoveryRef", reference);
+                JsonNode resultContent = objectNode.get("content");
+                if (resultContent != null && resultContent.isTextual()) {
+                    // 正文里的截断提示也可能带旧编号，必须和顶层 recoveryRef 一起更新。
+                    objectNode.put("content", replaceRecoveryMarkers(resultContent.asString(), reference));
+                }
                 return JSON_MAPPER.writeValueAsString(objectNode);
             }
         } catch (JacksonException ignored) {
             // 普通文本结果使用下面的标记方式，不影响恢复流程。
         }
 
-        String markerStart = "\n[工具结果已截断";
-        int start = content.indexOf(markerStart);
-        if (start >= 0) {
-            int end = content.indexOf(']', start);
-            if (end >= 0) {
-                return content.substring(0, start)
-                        + TRUNCATED_MARKER_PREFIX + reference + "]"
-                        + content.substring(end + 1);
-            }
+        // 普通文本也同步已有标记，没有标记时再补一个，避免重复堆积提示。
+        String refreshed = replaceRecoveryMarkers(content, reference);
+        int markerStart = content.indexOf("\n[工具结果已截断");
+        if (markerStart >= 0 && content.indexOf(']', markerStart) >= 0) {
+            return refreshed;
         }
         return content + TRUNCATED_MARKER_PREFIX + reference + "]";
+    }
+
+    // 只更新截断提示中的引用，不替换正文里的任意词语；多个旧提示也不能留下混用编号。
+    private String replaceRecoveryMarkers(String content, String reference) {
+        StringBuilder refreshed = new StringBuilder();
+        int cursor = 0;
+        int start;
+        while ((start = content.indexOf("\n[工具结果已截断", cursor)) >= 0) {
+            int end = content.indexOf(']', start);
+            if (end < 0) {
+                break;
+            }
+            refreshed.append(content, cursor, start).append(TRUNCATED_MARKER_PREFIX).append(reference).append(']');
+            cursor = end + 1;
+        }
+        return refreshed.append(content.substring(cursor)).toString();
     }
 
     // 安全获取字符串长度，避免空指针异常

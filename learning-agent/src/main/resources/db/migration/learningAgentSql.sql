@@ -125,6 +125,98 @@ CREATE TABLE IF NOT EXISTS session_memories (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话结构化记忆表';
 
+-- 记忆整理进度；已有数据库可单独执行 memoryConsolidation.sql。
+  CREATE TABLE IF NOT EXISTS memory_consolidation_state (
+    scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION，两类记忆分别整理',
+    owner_id BIGINT UNSIGNED NOT NULL COMMENT '对应的用户 ID 或会话 ID',
+    change_count BIGINT NOT NULL DEFAULT 0 COMMENT '初始有效记录数加正常记忆变更次数',
+    processed_count BIGINT NOT NULL DEFAULT 0 COMMENT '上次成功整理覆盖的变更次数',
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '进度更新时间，不用于推断事实新旧',
+    PRIMARY KEY (scope, owner_id),
+    CONSTRAINT chk_memory_consolidation_scope CHECK (scope IN ('USER', 'SESSION')),
+    CONSTRAINT chk_memory_consolidation_counts CHECK (processed_count >= 0 AND change_count >= processed_count)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci
+      COMMENT = '记忆整理触发与完成进度';
+
+  -- 记忆写入审批申请；先保存候选和快照，用户批准后才修改记忆表。
+  CREATE TABLE IF NOT EXISTS memory_approval_requests (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审批申请主键',
+      user_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属用户',
+      session_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属学习会话',
+      approval_type VARCHAR(24) NOT NULL DEFAULT 'CHANGE' COMMENT 'CHANGE 或 CONSOLIDATION',
+      operation VARCHAR(20) NULL COMMENT '单条变更的操作；整理方案为空',
+      scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION',
+      candidate_json JSON NOT NULL COMMENT '按申请类型保存单条候选或整批方案',
+      target_snapshot_json JSON NOT NULL COMMENT '单条目标快照或完整整理快照',
+      snapshot_change_count BIGINT NULL COMMENT '整理看到的累计变更数',
+      snapshot_processed_count BIGINT NULL COMMENT '整理看到的已处理数',
+      status VARCHAR(20) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING、APPROVED、REJECTED 或 STALE',
+      consolidation_owner_id BIGINT UNSIGNED GENERATED ALWAYS AS
+          (CASE WHEN approval_type = 'CONSOLIDATION' THEN IF(scope = 'USER', user_id, session_id) ELSE NULL END) STORED,
+      pending_consolidation_key VARCHAR(80) GENERATED ALWAYS AS
+          (CASE WHEN approval_type = 'CONSOLIDATION' AND status = 'PENDING'
+           THEN CONCAT(scope, ':', IF(scope = 'USER', user_id, session_id)) ELSE NULL END) STORED,
+      decision_reason VARCHAR(500) DEFAULT NULL COMMENT '用户拒绝或审批说明',
+      created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+      updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+      decided_at DATETIME(6) DEFAULT NULL,
+      PRIMARY KEY (id),
+      KEY idx_memory_approval_user_status (user_id, status, created_at),
+      KEY idx_memory_approval_session_status (session_id, status, created_at),
+      UNIQUE KEY uk_pending_consolidation (pending_consolidation_key),
+      UNIQUE KEY uk_consolidation_version (scope, consolidation_owner_id, snapshot_change_count, snapshot_processed_count),
+      CONSTRAINT chk_memory_approval_type CHECK (approval_type IN ('CHANGE', 'CONSOLIDATION')),
+      CONSTRAINT chk_memory_approval_payload CHECK
+          ((approval_type = 'CHANGE' AND operation IS NOT NULL AND snapshot_change_count IS NULL AND snapshot_processed_count IS NULL)
+           OR (approval_type = 'CONSOLIDATION' AND operation IS NULL AND snapshot_change_count IS NOT NULL
+               AND snapshot_processed_count IS NOT NULL AND snapshot_processed_count >= 0 AND snapshot_change_count > snapshot_processed_count)),
+      CONSTRAINT chk_memory_approval_operation CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
+      CONSTRAINT chk_memory_approval_scope CHECK (scope IN ('USER', 'SESSION')),
+      CONSTRAINT chk_memory_approval_status CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'STALE'))
+  ) ENGINE = InnoDB
+      DEFAULT CHARSET = utf8mb4
+      COLLATE = utf8mb4_unicode_ci
+      COMMENT = '结构化记忆审批申请';
+
+-- 通用审批：运行检查点 + 本次工具调用的审批，两者不依赖记忆业务。
+-- 手动执行此增量脚本；不删除旧审批表或修改旧申请，已有旧申请仍走旧接口。
+CREATE TABLE IF NOT EXISTS agent_approval_runs (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '整个逻辑任务编号，恢复时不变',
+    user_id BIGINT UNSIGNED NOT NULL,
+    session_id BIGINT UNSIGNED NOT NULL,
+    batch_number INT UNSIGNED NOT NULL COMMENT '每次暂停加一，旧批准不能授权新批次',
+    status VARCHAR(32) NOT NULL,
+    checkpoint_json JSON NOT NULL COMMENT '完整消息、待执行请求、引用映射、预算与已执行轨迹',
+    answer MEDIUMTEXT NULL COMMENT '最终答案，重复恢复直接返回',
+    active_session_id BIGINT UNSIGNED GENERATED ALWAYS AS
+        (CASE WHEN status IN ('WAITING_APPROVAL','APPROVAL_RESOLVED','RUNNING') THEN session_id ELSE NULL END) STORED,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_agent_approval_active_session (active_session_id),
+    KEY idx_agent_approval_owner (user_id, status, created_at),
+    CONSTRAINT chk_agent_run_state CHECK (status IN ('WAITING_APPROVAL','APPROVAL_RESOLVED','RUNNING','COMPLETED','FAILED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用 Agent 暂停与恢复检查点';
+
+CREATE TABLE IF NOT EXISTS agent_tool_approvals (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    batch_number INT UNSIGNED NOT NULL,
+    tool_call_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    tool_name VARCHAR(128) NOT NULL,
+    -- 用 LONGTEXT 保留原参数字符串，JSON 列会规范化空格，影响逐字核对已批准参数。
+    arguments_json LONGTEXT NOT NULL,
+    reason VARCHAR(500) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    decision_reason VARCHAR(500) NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    decided_at DATETIME(6) NULL,
+    PRIMARY KEY (run_id, batch_number, tool_call_id),
+    CONSTRAINT fk_tool_approval_run FOREIGN KEY (run_id) REFERENCES agent_approval_runs(run_id),
+    CONSTRAINT chk_tool_approval_state CHECK (status IN ('PENDING','APPROVED','REJECTED')),
+    CONSTRAINT chk_tool_approval_args CHECK (JSON_VALID(arguments_json))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用工具审批决定，不代表执行结果';
+
 -- 学习会话消息表
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',
