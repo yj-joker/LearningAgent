@@ -1,27 +1,21 @@
 CREATE DATABASE IF NOT EXISTS `learning_agent`;
 
 -- 用户表
-CREATE TABLE IF NOT EXISTS user (
-                                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户主键',
-                                     username VARCHAR(64) NOT NULL COMMENT '用户名',
-                                     password VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',
-                                     avatar_url VARCHAR(512) DEFAULT NULL COMMENT '头像 URL',
-                                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-                                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-
-                                     PRIMARY KEY (id),
-                                     UNIQUE KEY uk_users_username (username)
+CREATE TABLE IF NOT EXISTS `users` (
+                                       `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户主键',
+                                       `username` VARCHAR(64) NOT NULL COMMENT '用户名',
+                                       `password` VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',
+                                       `avatar_url` VARCHAR(512) DEFAULT NULL COMMENT '头像 URL',
+                                       `role` VARCHAR(20) NOT NULL DEFAULT 'USER' COMMENT '用户角色：USER-普通用户，ADMIN-管理员',
+                                       `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                                       `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+                                       PRIMARY KEY (`id`),
+                                       UNIQUE KEY `uk_users_username` (`username`),
+                                       CONSTRAINT `chk_users_role` CHECK (`role` IN ('USER', 'ADMIN'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '用户表';
-ALTER TABLE user
-    ADD COLUMN `role` VARCHAR(20) NOT NULL DEFAULT 'USER'
-        COMMENT '用户角色：user-普通用户，admin-管理员'
-        AFTER avatar_url,
-    ADD CONSTRAINT chk_users_role
-        CHECK (`role` IN ('USER', 'ADMIN'));
 
 -- 课程表
 CREATE TABLE IF NOT EXISTS courses (
@@ -77,6 +71,41 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话表';
 
+-- 任务计划：只保存目标与限制，不复制聊天历史，也不依赖已经产生审批记录。
+CREATE TABLE IF NOT EXISTS agent_task_plans (
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '复用 Harness 任务编号，审批恢复时不变',
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户，由后端登录上下文提供',
+    session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话，逻辑外键',
+    goal VARCHAR(2000) NOT NULL COMMENT '任务目标',
+    constraints_text VARCHAR(2000) NULL COMMENT '用户限制，不保存完整历史',
+    version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '计划版本，后续用于拒绝旧版本覆盖',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (run_id),
+    KEY idx_task_plan_owner_session (user_id, session_id, created_at),
+    CONSTRAINT chk_task_plan_version CHECK (version >= 1),
+    CONSTRAINT chk_task_plan_goal CHECK (CHAR_LENGTH(TRIM(goal)) > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 任务计划';
+
+-- 步骤与计划通过 run_id 关联；服务在同一事务中保存两张表，避免留下半份计划。
+CREATE TABLE IF NOT EXISTS agent_task_steps (
+    step_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '固定步骤编号，调整顺序时不变',
+    run_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '所属计划，逻辑外键',
+    position INT UNSIGNED NOT NULL COMMENT '执行顺序，从 1 开始，不作为步骤身份',
+    description VARCHAR(1000) NOT NULL COMMENT '这一步要做什么',
+    completion_criteria VARCHAR(1000) NOT NULL COMMENT '怎样才算完成',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    result_summary VARCHAR(2000) NULL COMMENT '简短结果、依据或受阻原因，不保存完整工具正文',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (step_id),
+    UNIQUE KEY uk_task_step_position (run_id, position),
+    CONSTRAINT chk_task_step_position CHECK (position >= 1),
+    CONSTRAINT chk_task_step_description CHECK (CHAR_LENGTH(TRIM(description)) > 0),
+    CONSTRAINT chk_task_step_criteria CHECK (CHAR_LENGTH(TRIM(completion_criteria)) > 0),
+    CONSTRAINT chk_task_step_status CHECK (status IN ('PENDING','IN_PROGRESS','COMPLETED','BLOCKED','CANCELED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 任务步骤';
+
 -- 用户长期记忆；只保存结构化事实，不替代完整会话消息。
 CREATE TABLE IF NOT EXISTS user_memories (
                                              id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '长期记忆主键',
@@ -125,7 +154,7 @@ CREATE TABLE IF NOT EXISTS session_memories (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话结构化记忆表';
 
--- 记忆整理进度；已有数据库可单独执行 memoryConsolidation.sql。
+-- 记忆整理进度；当前开发阶段统一维护完整建表定义。
   CREATE TABLE IF NOT EXISTS memory_consolidation_state (
     scope VARCHAR(20) NOT NULL COMMENT 'USER 或 SESSION，两类记忆分别整理',
     owner_id BIGINT UNSIGNED NOT NULL COMMENT '对应的用户 ID 或会话 ID',
@@ -140,6 +169,8 @@ CREATE TABLE IF NOT EXISTS session_memories (
       COMMENT = '记忆整理触发与完成进度';
 
   -- 记忆写入审批申请；先保存候选和快照，用户批准后才修改记忆表。
+  -- 完整建表定义只用于新建表；IF NOT EXISTS 不会给已经存在的旧表补字段。
+  -- 更新审批代码后应核对实际表结构，不能仅靠重启后端或重复执行 CREATE 更新旧表。
   CREATE TABLE IF NOT EXISTS memory_approval_requests (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '审批申请主键',
       user_id BIGINT UNSIGNED NOT NULL COMMENT '申请所属用户',

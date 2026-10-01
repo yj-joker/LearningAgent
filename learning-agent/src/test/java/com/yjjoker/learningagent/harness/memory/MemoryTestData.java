@@ -4,9 +4,13 @@ import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.harness.memory.model.*;
 import tools.jackson.databind.json.JsonMapper;
+import org.springframework.core.io.ClassPathResource;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 // 为目标识别测试准备固定数据，不访问用户的真实数据库。
 final class MemoryTestData {
@@ -15,6 +19,23 @@ final class MemoryTestData {
 
     // 测试数据只通过静态方法创建。
     private MemoryTestData() {
+    }
+
+    // 从统一建表文件提取一张表，测试不再依赖单独的增量脚本。
+    static String tableDdl(String table) throws IOException {
+        // 表名来自测试代码；固定白名单避免误提取其他业务表或拼接任意 SQL。
+        if (!List.of("learning_sessions", "user_memories", "session_memories",
+                "memory_consolidation_state", "memory_approval_requests").contains(table)) {
+            throw new IllegalArgumentException("不支持的记忆测试表：" + table);
+        }
+        String schema = new ClassPathResource("db/migration/learningAgentSql.sql")
+                .getContentAsString(StandardCharsets.UTF_8);
+        var match = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS " + Pattern.quote(table) + "\\s*\\(.*?;").matcher(schema);
+        // 缺少定义时立即失败，不能用过时的备用建表 SQL 掩盖问题。
+        if (!match.find()) {
+            throw new IllegalStateException("统一建表文件缺少：" + table);
+        }
+        return match.group();
     }
 
     // 创建有效的长期记忆，固定更新时间用于检查旧快照。

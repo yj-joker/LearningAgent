@@ -1,9 +1,14 @@
 import { computed, ref } from 'vue'
 import { loginUser } from '@/api/auth'
 import type { UserCredentials, UserVO } from '@/types/api'
-import { clearStoredUser, readRoleFromToken, readStoredUser, storeUser } from '@/utils/authStorage'
+import { AUTH_STORAGE_KEY, clearStoredUser, readRoleFromToken, readStoredUser, storeUser } from '@/utils/authStorage'
 
 const currentUser = ref<UserVO | null>(readStoredUser())
+
+// 其他标签页退出或切换账号时同步身份，通知连接也随之关闭或重新认证。
+window.addEventListener('storage', event => {
+  if (event.key === AUTH_STORAGE_KEY || event.key === null) currentUser.value = readStoredUser()
+})
 
 export function useAuth() {
   const isAuthenticated = computed(() => Boolean(currentUser.value?.token))

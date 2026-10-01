@@ -35,6 +35,8 @@ class MemoryConsolidationApprovalTest {
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
     private final MemoryConsolidator model = mock(MemoryConsolidator.class);
     private final MemoryConsolidationScheduler scheduler = mock(MemoryConsolidationScheduler.class);
+    private final com.yjjoker.learningagent.notification.ApprovalNotifier notifier =
+            mock(com.yjjoker.learningagent.notification.ApprovalNotifier.class);
     private final MemoryConsolidationProperties properties = new MemoryConsolidationProperties();
     private final List<MemoryApprovalRequest> saved = new ArrayList<>();
     private MemoryConsolidationService coordinator;
@@ -70,7 +72,7 @@ class MemoryConsolidationApprovalTest {
         proposed = plan();
         when(model.consolidate(any())).thenReturn(proposed);
 
-        // 用内存申请列表模拟查询和状态条件；唯一索引由单独的迁移脚本提供。
+        // 用内存申请列表模拟查询和状态条件；真实唯一索引来自统一建表文件。
         when(requests.insert(any())).thenAnswer(call -> {
             MemoryApprovalRequest request = call.getArgument(0);
             request.setId((long) saved.size() + 1);
@@ -87,14 +89,121 @@ class MemoryConsolidationApprovalTest {
                         || (Objects.equals(r.getSnapshotChangeCount(), call.<Long>getArgument(2))
                         && Objects.equals(r.getSnapshotProcessedCount(), call.<Long>getArgument(3))))).count());
         var writer = new MemoryConsolidationPersistenceService(memories, progress);
-        var proposalService = new MemoryConsolidationApprovalService(requests, sessions, writer);
+        var proposalService = new MemoryConsolidationApprovalService(requests, sessions, writer, notifier);
         coordinator = new MemoryConsolidationService(properties, progress, memories, model, writer, proposalService);
-        approvals = new MemoryApprovalService(requests, mock(MemoryCandidatePersistenceService.class), sessions, proposalService, scheduler);
+        approvals = new MemoryApprovalService(requests, mock(MemoryCandidatePersistenceService.class), sessions, proposalService, scheduler, notifier);
     }
 
     // 清除登录身份，避免污染其他单元测试。
     @AfterEach
     void cleanup() { BaseContext.removeCurrentId(); }
+
+    // 未达阈值只读进度，不能加载记忆正文、查询审批或请求模型。
+    @Test
+    void precheckSkipsBelowThresholdWithoutLoadingMemories() {
+        state.setChangeCount(39);
+        state.setProcessedCount(20);
+        assertFalse(coordinator.shouldSchedule(USER_ID, SESSION_ID, USER));
+        verifyNoInteractions(memories, model, requests);
+        verify(progress, never()).initialize(any(), anyLong(), anyLong());
+    }
+
+    // 达到阈值仅代表可以排队，预检查本身不生成方案也不写审批。
+    @Test
+    void eligiblePrecheckStillDoesNotGenerateOrPersist() {
+        assertTrue(coordinator.shouldSchedule(USER_ID, SESSION_ID, USER));
+        verifyNoInteractions(memories, model);
+        verify(requests, never()).insert(any());
+        verify(progress, never()).initialize(any(), anyLong(), anyLong());
+        verify(progress, never()).markProcessed(any(), anyLong(), anyLong(), anyLong());
+    }
+
+    // 首次没有进度时仅 COUNT；即使数量达标也不能在提交后回调里初始化数据库。
+    @Test
+    void firstPrecheckCountsWithoutInitializingProgress() {
+        when(progress.find(USER, USER_ID)).thenReturn(null);
+        when(progress.countActiveUserMemories(USER_ID)).thenReturn(19L, 20L);
+        assertFalse(coordinator.shouldSchedule(USER_ID, SESSION_ID, USER));
+        assertTrue(coordinator.shouldSchedule(USER_ID, SESSION_ID, USER));
+        verifyNoInteractions(memories, model);
+        verify(progress, never()).initialize(any(), anyLong(), anyLong());
+        verify(progress, never()).countActiveSessionMemories(anyLong());
+    }
+
+    // USER 与 SESSION 的首次统计不能串用归属或表。
+    @Test
+    void firstSessionPrecheckUsesSessionCount() {
+        when(progress.countActiveSessionMemories(SESSION_ID)).thenReturn(20L);
+        assertTrue(coordinator.shouldSchedule(USER_ID, SESSION_ID, MemoryScope.SESSION));
+        verify(progress).countActiveSessionMemories(SESSION_ID);
+        verify(progress, never()).countActiveUserMemories(anyLong());
+        verifyNoInteractions(memories, model);
+    }
+
+    // 开关关闭时连预检查查询也不执行。
+    @Test
+    void disabledPrecheckDoesNotQueryDatabase() {
+        properties.setEnabled(false);
+        assertFalse(coordinator.shouldSchedule(USER_ID, SESSION_ID, USER));
+        verifyNoInteractions(progress, memories, requests, model);
+    }
+
+    // 等待审批时由数据库状态拦截，不需要一直占住内存去重标记。
+    @Test
+    void existingProposalIsSkippedBeforeQueueing() {
+        coordinator.consolidateScope(USER_ID, SESSION_ID, USER);
+        var queued = new ArrayList<Runnable>();
+        var dispatcher = new MemoryConsolidationScheduler(coordinator, queued::add);
+        clearInvocations(model, memories);
+        dispatcher.request(USER_ID, SESSION_ID);
+        assertTrue(queued.isEmpty());
+        verifyNoInteractions(model, memories);
+        assertEquals(1, saved.size());
+        // 后台生成提案的入口同样登记通知，而不是依赖聊天 HTTP 响应。
+        verify(notifier).changedAfterCommit(USER_ID);
+    }
+
+    // 排队期间进度已经完成，后台必须复查并跳过，不能沿用入队前的结论。
+    @Test
+    void workerRechecksProgressAfterQueueing() {
+        var queued = new ArrayList<Runnable>();
+        var dispatcher = new MemoryConsolidationScheduler(coordinator, queued::add);
+        dispatcher.request(USER_ID, SESSION_ID);
+        assertEquals(1, queued.size());
+        state.setProcessedCount(20);
+        queued.getFirst().run();
+        verifyNoInteractions(model, memories);
+        assertTrue(saved.isEmpty());
+        // 复查后跳过也必须释放标记，后续新变更可以再次入队。
+        state.setChangeCount(40);
+        dispatcher.request(USER_ID, SESSION_ID);
+        assertEquals(2, queued.size());
+    }
+
+    // 排队后另一个任务先保存了申请，当前工作线程不得重复请求模型。
+    @Test
+    void workerRechecksProposalsAfterQueueing() {
+        var queued = new ArrayList<Runnable>();
+        var dispatcher = new MemoryConsolidationScheduler(coordinator, queued::add);
+        dispatcher.request(USER_ID, SESSION_ID);
+        coordinator.consolidateScope(USER_ID, SESSION_ID, USER);
+        clearInvocations(model, memories);
+        queued.getFirst().run();
+        verifyNoInteractions(model, memories);
+        assertEquals(1, saved.size());
+    }
+
+    // 即使未开启 MySQL 集成测试，也要检查统一建表文件能提供全部测试表。
+    @Test
+    void loadsAllMemoryTablesFromUnifiedSchema() throws Exception {
+        for (String table : List.of("learning_sessions", "user_memories", "session_memories",
+                "memory_consolidation_state", "memory_approval_requests")) {
+            assertTrue(tableDdl(table).startsWith("CREATE TABLE IF NOT EXISTS " + table));
+        }
+        String approvalsDdl = tableDdl("memory_approval_requests");
+        assertTrue(approvalsDdl.contains("uk_pending_consolidation"));
+        assertTrue(approvalsDdl.contains("uk_consolidation_version"));
+    }
 
     // 后台只创建提案；批准时使用已保存 JSON，不使用后来被修改的模型对象。
     @Test

@@ -5,6 +5,8 @@ import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.harness.approval.AgentApprovalService;
 import com.yjjoker.learningagent.harness.service.AgentHarnessService;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -13,22 +15,26 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/agent/runs")
 @RequiredArgsConstructor
+@Tag(name = "审批接口")
 public class AgentApprovalController {
     private final AgentApprovalService approvals;
     private final AgentHarnessService harness;
 
     // 浏览器不必记住 runId；服务端按当前用户和会话找回尚未结束的任务。
+    @Operation(summary = "查询当前用户会话的进行中的任务")
     @GetMapping
     public Result<AgentRunResult> active(@RequestParam Long sessionId) {
         return Result.success(approvals.active(sessionId));
     }
 
+    @Operation(summary = "查询指定任务")
     // 页面刷新后用 runId 查询当前批次，不需要再次询问模型。
     @GetMapping("/{runId}")
     public Result<AgentRunResult> get(@PathVariable String runId) {
         return Result.success(approvals.get(runId));
     }
 
+    @Operation(summary = "批准工具调用")
     // 批准只保存决定；请求体不允许指定执行参数，执行始终使用检查点里的原请求。
     @PostMapping("/{runId}/approvals/{batchNumber}/{toolCallId}")
     public Result<AgentRunResult> decide(@PathVariable String runId, @PathVariable int batchNumber,
@@ -38,6 +44,7 @@ public class AgentApprovalController {
                 request.getApproved(), request.getReason()));
     }
 
+    @Operation(summary = "恢复任务")
     // 全批审批结束后继续原任务；不会先要求模型重新规划相同工具。
     @PostMapping("/{runId}/resume")
     public Result<AgentRunResult> resume(@PathVariable String runId) {

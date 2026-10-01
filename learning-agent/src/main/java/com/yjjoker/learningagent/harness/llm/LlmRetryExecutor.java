@@ -35,7 +35,12 @@ public class LlmRetryExecutor {
 
     public LlmResponse generateWithoutTools(LlmClient client, List<LlmMessage> messages) {
         // 摘要请求也需要重试，但仍保持“不提供业务工具”的调用方式。
-        return execute("summary", () -> client.generateWithoutTools(messages));
+        return generateWithoutTools("summary", client, messages);
+    }
+
+    // 规划等独立调用共用网络重试，但日志保留各自阶段，便于定位失败。
+    public LlmResponse generateWithoutTools(String requestType, LlmClient client, List<LlmMessage> messages) {
+        return execute(requestType, () -> client.generateWithoutTools(messages));
     }
 
     private LlmResponse execute(String requestType, Supplier<LlmResponse> request) {

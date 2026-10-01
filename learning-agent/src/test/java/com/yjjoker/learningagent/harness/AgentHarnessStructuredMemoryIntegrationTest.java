@@ -18,6 +18,13 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryOperation;
 import com.yjjoker.learningagent.harness.memory.model.MemoryScope;
 import com.yjjoker.learningagent.harness.memory.model.MemoryWriteReceipt;
 import com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler;
+import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
+import com.yjjoker.learningagent.harness.memory.model.MemoryApprovalRequest;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.BadSqlGrammarException;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
@@ -394,6 +401,84 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         verify(client, never()).generateWithoutTools(anyList());
     }
 
+    // 模型成功后才遇到数据库缺列，不能把它误报成模型格式错误或重试提取。
+    @Test
+    void shouldIdentifyApprovalPersistenceFailureWithoutRetryingExtraction() {
+        BaseContext.setCurrentId(USER_ID);
+        LlmClient client = mock(LlmClient.class);
+        when(client.generate(anyList())).thenReturn(new TextLlmResponse("正常回答"));
+        when(client.generateWithoutTools(anyList())).thenReturn(new TextLlmResponse(validCandidateJson()));
+        MemoryApprovalService approvals = mock(MemoryApprovalService.class);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenThrow(
+                new BadSqlGrammarException("审批保存", "不应输出的SQL或正文",
+                        new java.sql.SQLSyntaxErrorException("Unknown column approval_type", "42S22", 1054)));
+        AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
+                mock(ConversationMemoryService.class), mock(MemoryConsolidationScheduler.class),
+                List.of(), List.of(), new MemoryReferenceRegistry(), approvals);
+        ListAppender<ILoggingEvent> captured = captureHarnessLogs();
+        try {
+            assertEquals("正常回答", harness.run(SESSION_ID, "请记住我喜欢篮球").getAnswer());
+            String failure = captured.list.stream().map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("记忆后置处理失败")).findFirst().orElseThrow();
+            assertTrue(failure.contains("stage=保存记忆审批申请"));
+            assertTrue(failure.contains("candidateCount=1"));
+            assertTrue(failure.contains("savedApprovalCount=0"));
+            assertTrue(failure.contains("sqlState=42S22"));
+            assertTrue(failure.contains("databaseErrorCode=1054"));
+            assertFalse(failure.contains("不应输出的SQL或正文"));
+            verify(client, org.mockito.Mockito.times(1)).generateWithoutTools(anyList());
+            verify(approvals).create(anyLong(), anyLong(), any(), any());
+        } finally { stopCapturing(captured); }
+    }
+
+    // 真正的格式错误发生在提取阶段，不能进入审批入库。
+    @Test
+    void shouldIdentifyExtractionFailureBeforeSavingApproval() {
+        BaseContext.setCurrentId(USER_ID);
+        LlmClient client = mock(LlmClient.class);
+        when(client.generate(anyList())).thenReturn(new TextLlmResponse("正常回答"));
+        when(client.generateWithoutTools(anyList())).thenReturn(new TextLlmResponse("这不是合法JSON"));
+        MemoryApprovalService approvals = mock(MemoryApprovalService.class);
+        AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
+                mock(ConversationMemoryService.class), mock(MemoryConsolidationScheduler.class),
+                List.of(), List.of(), new MemoryReferenceRegistry(), approvals);
+        ListAppender<ILoggingEvent> captured = captureHarnessLogs();
+        try {
+            assertEquals("正常回答", harness.run(SESSION_ID, "请记住我喜欢篮球").getAnswer());
+            String failure = captured.list.stream().map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("记忆后置处理失败")).findFirst().orElseThrow();
+            assertTrue(failure.contains("stage=提取记忆候选"));
+            assertTrue(failure.contains("candidateCount=0"));
+            org.mockito.Mockito.verifyNoInteractions(approvals);
+            verify(client, org.mockito.Mockito.times(2)).generateWithoutTools(anyList());
+        } finally { stopCapturing(captured); }
+    }
+
+    // 只收集 Harness 自己的日志，避免把提取服务的其他提示混入失败阶段断言。
+    private ListAppender<ILoggingEvent> captureHarnessLogs() {
+        Logger logger = (Logger) LoggerFactory.getLogger(AgentHarnessServiceImpl.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.setContext(logger.getLoggerContext());
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    // 测试结束移除监听，防止其他测试写入旧的日志集合。
+    private void stopCapturing(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(AgentHarnessServiceImpl.class)).detachAppender(appender);
+        appender.stop();
+    }
+
+    // 构造通过真实解析和候选校验的 JSON，数据库错误必须发生在提取成功以后。
+    private String validCandidateJson() {
+        return """
+                {"memories":[{"scope":"USER","operation":"CREATE","targetMemoryRefs":[],
+                "userEvidence":"请记住我喜欢篮球","memoryKey":"sport","memoryTopic":"运动偏好",
+                "memorySummary":"喜欢篮球","memoryContent":"用户喜欢篮球"}]}
+                """;
+    }
+
     // 主模型先调用工具再回答，提取模型返回空候选；三个调用分别验证。
     private LlmClient toolThenAnswerClient(String toolName, String arguments) {
         LlmClient client = mock(LlmClient.class);
@@ -441,6 +526,20 @@ class AgentHarnessStructuredMemoryIntegrationTest {
     private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
                                                   ConversationMemoryService history, MemoryConsolidationScheduler consolidation,
                                                   List<Tool> tools, List<AgentHook> hooks, MemoryReferenceRegistry references) {
+        MemoryApprovalService approvals = mock(MemoryApprovalService.class);
+        when(approvals.create(anyLong(), anyLong(), any(), any())).thenAnswer(invocation -> {
+            MemoryApprovalRequest request = new MemoryApprovalRequest();
+            request.setId(1L);
+            return request;
+        });
+        return extractionHarness(client, store, history, consolidation, tools, hooks, references, approvals);
+    }
+
+    // 测试单独替换审批服务以模拟保存失败，不向生产类增加测试构造器。
+    private AgentHarnessService extractionHarness(LlmClient client, StructuredMemoryService store,
+                                                  ConversationMemoryService history, MemoryConsolidationScheduler consolidation,
+                                                  List<Tool> tools, List<AgentHook> hooks, MemoryReferenceRegistry references,
+                                                  MemoryApprovalService approvals) {
         LearningSessionRepository repository = mock(LearningSessionRepository.class);
         LearningSession session = new LearningSession();
         session.setId(SESSION_ID);
@@ -448,19 +547,15 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(repository.findSessionById(SESSION_ID)).thenReturn(Optional.of(session));
         LlmRetryExecutor retry = new LlmRetryExecutor();
-        var approvals = mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class);
-        when(approvals.create(anyLong(), anyLong(), any(), any())).thenAnswer(invocation -> {
-            var request = new com.yjjoker.learningagent.harness.memory.model.MemoryApprovalRequest();
-            request.setId(1L);
-            return request;
-        });
         // 显式安装生产整理 Hook，验证主循环只提交通知而不直接整理。
         var installedHooks = new java.util.ArrayList<>(hooks);
         installedHooks.add(new com.yjjoker.learningagent.harness.hook.MemoryConsolidationHook(consolidation));
         return new AgentHarnessServiceImpl(client, new ToolRegistry(tools), installedHooks, history, repository,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null, retry,
                 store, references, new LlmMemoryExtractionService(client, retry),
-                approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class));
+                approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class),
+                mock(com.yjjoker.learningagent.harness.plan.service.AgentTaskPlanService.class),
+                mock(com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner.class));
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

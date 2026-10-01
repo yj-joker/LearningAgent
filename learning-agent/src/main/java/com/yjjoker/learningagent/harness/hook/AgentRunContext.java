@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.hook;
 
 import lombok.Getter;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionRecord;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 
@@ -20,11 +21,18 @@ public class AgentRunContext {
     // 供结束 Hook 传递任务归属，不把请求线程的 ThreadLocal 带到后台线程。
     private Long userId;
     private Long sessionId;
+    // 模式属于本次逻辑任务，审批恢复时必须保持不变。
+    private AgentMode mode = AgentMode.CHAT;
 
     // Harness 验证会话归属后设置，模型参数不能覆盖这里的身份。
     public void bindSession(Long userId, Long sessionId) {
         this.userId = Objects.requireNonNull(userId);
         this.sessionId = Objects.requireNonNull(sessionId);
+    }
+
+    // 绑定后端确认的运行模式，不接受模型在循环中自行修改。
+    public void bindMode(AgentMode mode) {
+        this.mode = mode == null ? AgentMode.CHAT : mode;
     }
 
     // 新任务分配编号；后续恢复继续使用这个编号，不创建另一个业务任务。

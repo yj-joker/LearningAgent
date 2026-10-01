@@ -11,6 +11,14 @@ import org.apache.ibatis.annotations.Update;
 // 只记录整理进度；记忆正文仍保存在原有的两张表中。
 @Mapper
 public interface MemoryConsolidationRepository {
+    // 没有整理进度时只统计有效记录，不把全部索引和正文带回请求线程。
+    @Select("SELECT COUNT(*) FROM user_memories WHERE user_id = #{userId} AND status = 'ACTIVE'")
+    long countActiveUserMemories(@Param("userId") Long userId);
+
+    // 会话记忆单独计数，不能用用户范围的数量判断当前会话是否需要整理。
+    @Select("SELECT COUNT(*) FROM session_memories WHERE session_id = #{sessionId} AND status = 'ACTIVE'")
+    long countActiveSessionMemories(@Param("sessionId") Long sessionId);
+
     // 第一次把已有记忆数量计入待整理工作；重复调用不重置进度。
     @Insert("INSERT INTO memory_consolidation_state (scope, owner_id, change_count, processed_count) "
             + "VALUES (#{scope}, #{ownerId}, #{initialCount}, 0) ON DUPLICATE KEY UPDATE owner_id = owner_id")

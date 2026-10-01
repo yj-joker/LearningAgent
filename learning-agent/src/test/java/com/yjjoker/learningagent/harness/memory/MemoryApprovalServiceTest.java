@@ -51,7 +51,9 @@ class MemoryApprovalServiceTest {
             mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationApprovalService.class);
     private final com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler scheduler =
             mock(com.yjjoker.learningagent.harness.memory.service.MemoryConsolidationScheduler.class);
-    private final MemoryApprovalService service = new MemoryApprovalService(repository, persistence, sessions, consolidation, scheduler);
+    private final com.yjjoker.learningagent.notification.ApprovalNotifier notifier =
+            mock(com.yjjoker.learningagent.notification.ApprovalNotifier.class);
+    private final MemoryApprovalService service = new MemoryApprovalService(repository, persistence, sessions, consolidation, scheduler, notifier);
 
     @BeforeEach
     void setUp() {
@@ -87,6 +89,7 @@ class MemoryApprovalServiceTest {
         assertEquals(7L, request.getId());
         assertEquals(MemoryApprovalStatus.PENDING, request.getStatus());
         verify(repository).insert(any());
+        verify(notifier).changedAfterCommit(USER_ID);
         verifyNoInteractions(persistence);
     }
 
@@ -107,6 +110,7 @@ class MemoryApprovalServiceTest {
                 eq("请记住我喜欢篮球"), any(MemoryCandidate.class));
         // 自动提取的申请在聊天结束后批准，也会安排提交后的整理检查。
         verify(scheduler).requestAfterCommit(USER_ID, SESSION_ID);
+        verify(notifier).changedAfterCommit(USER_ID);
     }
 
     // 拒绝只更新申请状态，不执行记忆写入。
@@ -120,6 +124,7 @@ class MemoryApprovalServiceTest {
         var result = service.reject(7L, "用户暂不确认");
 
         assertEquals(MemoryApprovalStatus.REJECTED, result.getStatus());
+        verify(notifier).changedAfterCommit(USER_ID);
         verifyNoInteractions(persistence);
     }
 

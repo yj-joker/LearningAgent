@@ -170,6 +170,8 @@ export interface LearningSessionVO {
 export interface AgentChatPayload {
   sessionId: ApiId
   userMessage: string
+  // 省略时后端仍按问答处理，旧调用方无需同时升级。
+  mode?: 'CHAT' | 'FOCUS'
 }
 
 // 同一 runId 的申请来自一次模型响应；内容只是提案，尚未写入记忆。
@@ -182,6 +184,7 @@ export interface MemoryApprovalView {
   scope: 'USER' | 'SESSION'
   candidateJson: string
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'STALE'
+  decisionReason: string | null
 }
 
 // 待审批是正常的业务状态，不应显示成请求失败或宣称操作已经完成。
