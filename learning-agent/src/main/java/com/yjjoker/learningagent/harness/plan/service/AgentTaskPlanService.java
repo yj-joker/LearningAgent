@@ -32,7 +32,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.Optional;
 
-// 管理计划的创建、读取和安全更新；暂不注册工具、不调用模型，也不改变 AgentLoop。
+// 管理计划和步骤的事务读写；模型调用与审批由外层处理，不在事务中等待网络。
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -47,14 +47,14 @@ public class AgentTaskPlanService {
     private final AgentTaskPlanRepository repository;
     private final LearningSessionRepository sessions;
 
-    // 一次保存目标和全部步骤；runId 由 Harness 提供，不从模型输出中获取。
+    // 一次保存目标和全部步骤；planId 由后端生成，不从模型输出中获取。
     @Transactional
-    public AgentTaskPlan create(String runId, Long sessionId, CreateTaskPlanRequest request) {
+    public AgentTaskPlan create(String planId, Long sessionId, CreateTaskPlanRequest request) {
         Long userId = requireCurrentUser();
-        String canonicalRunId = requireRunId(runId);
+        String canonicalPlanId = requirePlanId(planId);
         requireSession(userId, sessionId, true);
         // 先校验并复制所有输入，任何一步不合法时都不开始写数据库。
-        AgentTaskPlan plan = preparePlan(canonicalRunId, userId, sessionId, request);
+        AgentTaskPlan plan = preparePlan(canonicalPlanId, userId, sessionId, request);
         String stage = "保存计划";
         try {
             // 不先查询“是否存在”，直接让数据库主键处理重复或并发创建。
@@ -72,63 +72,66 @@ public class AgentTaskPlanService {
                 }
             }
             // 方法返回后 Spring 才提交事务，所以这里不提前宣称提交成功。
-            log.info("任务计划已写入，等待事务提交，runId={}，sessionId={}，version={}，stepCount={}",
-                    canonicalRunId, sessionId, plan.getVersion(), plan.getSteps().size());
+            log.info("任务计划已写入，等待事务提交，planId={}，sessionId={}，version={}，stepCount={}",
+                    canonicalPlanId, sessionId, plan.getVersion(), plan.getSteps().size());
             return plan;
         } catch (RuntimeException exception) {
             // 保留原异常交给事务回滚；日志只记录阶段和异常类型，不输出 SQL 或任务正文。
-            log.warn("任务计划保存失败，将回滚，runId={}，sessionId={}，stage={}，errorType={}",
-                    canonicalRunId, sessionId, stage, exception.getClass().getSimpleName());
+            log.warn("任务计划保存失败，将回滚，planId={}，sessionId={}，stage={}，errorType={}",
+                    canonicalPlanId, sessionId, stage, exception.getClass().getSimpleName());
             throw exception;
         }
     }
 
     // 按当前用户和会话读取完整计划；已完成会话可查看，已取消会话不可访问。
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AgentTaskPlan load(String runId, Long sessionId) {
+    public AgentTaskPlan load(String planId, Long sessionId) {
         Long userId = requireCurrentUser();
-        String canonicalRunId = requireRunId(runId);
+        String canonicalPlanId = requirePlanId(planId);
         requireSession(userId, sessionId, false);
-        AgentTaskPlan plan = repository.findPlan(userId, sessionId, canonicalRunId)
+        AgentTaskPlan plan = repository.findPlan(userId, sessionId, canonicalPlanId)
                 .orElseThrow(() -> new ClientDataErrorException("任务计划不存在或无权访问"));
         // 目标和步骤使用同一读取快照，避免刚读完版本就混入另一事务的新步骤。
-        List<AgentTaskStep> steps = repository.findSteps(userId, sessionId, canonicalRunId);
+        List<AgentTaskStep> steps = repository.findSteps(userId, sessionId, canonicalPlanId);
         if (steps.isEmpty()) {
-            log.error("任务计划缺少步骤，runId={}，sessionId={}", canonicalRunId, sessionId);
+            log.error("任务计划缺少步骤，planId={}，sessionId={}", canonicalPlanId, sessionId);
             throw new IllegalStateException("任务计划缺少步骤，请检查保存结果");
         }
         plan.setSteps(steps);
-        log.info("任务计划读取完成，runId={}，sessionId={}，version={}，stepCount={}",
-                canonicalRunId, sessionId, plan.getVersion(), steps.size());
+        log.info("任务计划读取完成，planId={}，sessionId={}，version={}，stepCount={}",
+                canonicalPlanId, sessionId, plan.getVersion(), steps.size());
         return plan;
     }
 
-    // 读取当前任务已有计划；没有计划时返回 null，供专注模式首次进入时创建。
+    // 按独立计划编号查询；没有计划时返回 null，不推断它是不是会话的当前目标。
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public AgentTaskPlan loadIfPresent(String runId, Long sessionId) {
+    public AgentTaskPlan loadIfPresent(String planId, Long sessionId) {
         Long userId = requireCurrentUser();
-        String canonicalRunId = requireRunId(runId);
+        String canonicalPlanId = requirePlanId(planId);
         requireSession(userId, sessionId, false);
-        Optional<AgentTaskPlan> stored = repository.findPlan(userId, sessionId, canonicalRunId);
+        Optional<AgentTaskPlan> stored = repository.findPlan(userId, sessionId, canonicalPlanId);
         if (stored.isEmpty()) {
             return null;
         }
         AgentTaskPlan plan = stored.get();
-        List<AgentTaskStep> steps = repository.findSteps(userId, sessionId, canonicalRunId);
+        List<AgentTaskStep> steps = repository.findSteps(userId, sessionId, canonicalPlanId);
         if (steps.isEmpty()) {
             throw new IllegalStateException("任务计划缺少步骤，请检查保存结果");
         }
         plan.setSteps(steps);
-        log.info("任务已有计划，复用当前计划，runId={}，sessionId={}，version={}，stepCount={}",
-                canonicalRunId, sessionId, plan.getVersion(), steps.size());
+        log.info("任务已有计划，复用当前计划，planId={}，sessionId={}，version={}，stepCount={}",
+                canonicalPlanId, sessionId, plan.getVersion(), steps.size());
         return plan;
     }
 
     // 按调用方读取的版本保存完整步骤列表；目标和用户限制不在这个更新入口中修改。
+    // 会话目标切换由 SessionGoalService 管理，只换当前指向，不改这里的历史步骤。
+    // TODO 学习计划修改工具后续复用通用审批；本阶段不接入跨会话学习安排。
+    // TODO 计划更新与记忆写入共用审批等基础能力，但保留独立业务校验，不套用记忆提取与去重。
     @Transactional
-    public AgentTaskPlan update(String runId, Long sessionId, UpdateTaskPlanRequest request) {
+    public AgentTaskPlan update(String planId, Long sessionId, UpdateTaskPlanRequest request) {
         Long userId = requireCurrentUser();
-        String canonicalRunId = requireRunId(runId);
+        String canonicalPlanId = requirePlanId(planId);
         requireSession(userId, sessionId, true);
         requireUpdateRequest(request);
         long expectedVersion = request.getExpectedVersion();
@@ -136,21 +139,21 @@ public class AgentTaskPlanService {
         String stage = "检查计划版本";
         try {
             // 条件更新把“检查版本”和“取得修改权”合成一步；失败时不能自动换版本重试。
-            if (repository.advanceVersion(userId, sessionId, canonicalRunId, expectedVersion, now) != 1) {
-                log.warn("任务计划版本冲突或不可访问，runId={}，sessionId={}，expectedVersion={}，需要重新读取",
-                        canonicalRunId, sessionId, expectedVersion);
+            if (repository.advanceVersion(userId, sessionId, canonicalPlanId, expectedVersion, now) != 1) {
+                log.warn("任务计划版本冲突或不可访问，planId={}，sessionId={}，expectedVersion={}，需要重新读取",
+                        canonicalPlanId, sessionId, expectedVersion);
                 throw new ClientDataErrorException("任务计划已变化或不存在，请重新读取计划后再修改");
             }
             stage = "校验步骤变化";
             // 用当前读取得锁定后的数据，不使用本事务早期可能建立的旧读取快照。
-            AgentTaskPlan plan = repository.findPlanForUpdate(userId, sessionId, canonicalRunId)
+            AgentTaskPlan plan = repository.findPlanForUpdate(userId, sessionId, canonicalPlanId)
                     .orElseThrow(() -> new IllegalStateException("取得版本后未找到任务计划"));
             if (plan.getVersion() != expectedVersion + 1) {
                 throw new IllegalStateException("取得的计划版本不一致");
             }
-            Map<String, AgentTaskStep> originals = indexStoredSteps(canonicalRunId,
-                    repository.findStepsForUpdate(userId, sessionId, canonicalRunId));
-            List<AgentTaskStep> updated = prepareUpdatedSteps(canonicalRunId, originals, request.getSteps(), now);
+            Map<String, AgentTaskStep> originals = indexStoredSteps(canonicalPlanId,
+                    repository.findStepsForUpdate(userId, sessionId, canonicalPlanId));
+            List<AgentTaskStep> updated = prepareUpdatedSteps(canonicalPlanId, originals, request.getSteps(), now);
             long changedCount = updated.stream().filter(step -> !sameStep(originals.get(step.getStepId()), step)).count();
             if (changedCount == 0) {
                 // 抛出异常会一并撤销刚递增的版本，重复提交相同内容不制造新版本。
@@ -158,7 +161,7 @@ public class AgentTaskPlanService {
             }
             stage = "调整步骤顺序";
             // 旧位置先暂存到 21～40，再逐步写回新位置；其他事务看不到中间顺序。
-            if (repository.parkStepPositions(userId, sessionId, canonicalRunId, MAX_STEPS) != originals.size()) {
+            if (repository.parkStepPositions(userId, sessionId, canonicalPlanId, MAX_STEPS) != originals.size()) {
                 throw new IllegalStateException("待调整的步骤数量不一致");
             }
             stage = "保存步骤变化";
@@ -171,19 +174,19 @@ public class AgentTaskPlanService {
                 }
                 if (!sameStep(original, step)) {
                     // 只记录状态和顺序，不记录学习目标、资料正文或完成说明。
-                    log.info("任务步骤已写入，等待事务提交，runId={}，stepId={}，position={}，beforeStatus={}，afterStatus={}",
-                            canonicalRunId, step.getStepId(), step.getPosition(),
+                    log.info("任务步骤已写入，等待事务提交，planId={}，stepId={}，position={}，beforeStatus={}，afterStatus={}",
+                            canonicalPlanId, step.getStepId(), step.getPosition(),
                             original == null ? "NEW" : original.getStatus(), step.getStatus());
                 }
             }
             plan.setSteps(updated);
-            log.info("任务计划已更新，等待事务提交，runId={}，sessionId={}，version={}，stepCount={}，changedCount={}",
-                    canonicalRunId, sessionId, plan.getVersion(), updated.size(), changedCount);
+            log.info("任务计划已更新，等待事务提交，planId={}，sessionId={}，version={}，stepCount={}，changedCount={}",
+                    canonicalPlanId, sessionId, plan.getVersion(), updated.size(), changedCount);
             return plan;
         } catch (RuntimeException exception) {
             // 校验失败、重排失败和步骤写入失败都撤销版本变化，不留下半份新计划。
-            log.warn("任务计划更新失败，将回滚，runId={}，sessionId={}，stage={}，errorType={}",
-                    canonicalRunId, sessionId, stage, exception.getClass().getSimpleName());
+            log.warn("任务计划更新失败，将回滚，planId={}，sessionId={}，stage={}，errorType={}",
+                    canonicalPlanId, sessionId, stage, exception.getClass().getSimpleName());
             throw exception;
         }
     }
@@ -200,14 +203,14 @@ public class AgentTaskPlanService {
     }
 
     // 将已锁定的步骤按固定编号建立索引，并确认数据库中的旧顺序完整。
-    private Map<String, AgentTaskStep> indexStoredSteps(String runId, List<AgentTaskStep> steps) {
+    private Map<String, AgentTaskStep> indexStoredSteps(String planId, List<AgentTaskStep> steps) {
         if (steps.isEmpty() || steps.size() > MAX_STEPS) {
             throw new IllegalStateException("任务计划的原步骤数量不合法");
         }
         Map<String, AgentTaskStep> originals = new LinkedHashMap<>();
         for (int index = 0; index < steps.size(); index++) {
             AgentTaskStep step = steps.get(index);
-            if (step.getStepId() == null || step.getStatus() == null || !runId.equals(step.getRunId())
+            if (step.getStepId() == null || step.getStatus() == null || !planId.equals(step.getPlanId())
                     || step.getPosition() != index + 1 || originals.putIfAbsent(step.getStepId(), step) != null) {
                 throw new IllegalStateException("任务计划的原步骤编号或顺序不完整");
             }
@@ -216,7 +219,7 @@ public class AgentTaskPlanService {
     }
 
     // 生成新的完整步骤快照，旧步骤不得遗漏，新步骤只能从待执行开始。
-    private List<AgentTaskStep> prepareUpdatedSteps(String runId, Map<String, AgentTaskStep> originals,
+    private List<AgentTaskStep> prepareUpdatedSteps(String planId, Map<String, AgentTaskStep> originals,
                                                    List<UpdateTaskStepRequest> requested, LocalDateTime now) {
         List<UpdateTaskStepRequest> inputs = new ArrayList<>(requested);
         List<AgentTaskStep> updated = new ArrayList<>();
@@ -237,7 +240,7 @@ public class AgentTaskPlanService {
             }
             AgentTaskStep step = new AgentTaskStep();
             step.setStepId(original == null ? UUID.randomUUID().toString() : original.getStepId());
-            step.setRunId(runId);
+            step.setPlanId(planId);
             step.setPosition(index + 1);
             step.setDescription(requireText(input.getDescription(), MAX_STEP_TEXT_LENGTH, "步骤内容"));
             step.setCompletionCriteria(requireText(input.getCompletionCriteria(), MAX_STEP_TEXT_LENGTH, "完成条件"));
@@ -305,7 +308,7 @@ public class AgentTaskPlanService {
     }
 
     // 生成后端拥有的计划对象，不允许请求指定归属、版本或步骤完成状态。
-    private AgentTaskPlan preparePlan(String runId, Long userId, Long sessionId, CreateTaskPlanRequest request) {
+    private AgentTaskPlan preparePlan(String planId, Long userId, Long sessionId, CreateTaskPlanRequest request) {
         if (request == null) {
             throw new ClientDataErrorException("任务计划不能为空");
         }
@@ -325,7 +328,7 @@ public class AgentTaskPlanService {
             }
             AgentTaskStep step = new AgentTaskStep();
             step.setStepId(UUID.randomUUID().toString());
-            step.setRunId(runId);
+            step.setPlanId(planId);
             step.setPosition(index + 1);
             step.setDescription(requireText(input.getDescription(), MAX_STEP_TEXT_LENGTH, "步骤内容"));
             step.setCompletionCriteria(requireText(input.getCompletionCriteria(), MAX_STEP_TEXT_LENGTH, "完成条件"));
@@ -335,7 +338,7 @@ public class AgentTaskPlanService {
             steps.add(step);
         }
         AgentTaskPlan plan = new AgentTaskPlan();
-        plan.setRunId(runId);
+        plan.setPlanId(planId);
         plan.setUserId(userId);
         plan.setSessionId(sessionId);
         plan.setGoal(goal);
@@ -372,19 +375,19 @@ public class AgentTaskPlanService {
         }
     }
 
-    // 只接受完整 UUID，统一小写，避免同一任务因大小写不同变成两份计划。
-    private String requireRunId(String runId) {
-        if (runId == null) {
-            throw new ClientDataErrorException("任务编号不合法");
+    // 只接受完整 UUID，统一小写，避免同一计划因大小写不同被当成两份。
+    private String requirePlanId(String planId) {
+        if (planId == null) {
+            throw new ClientDataErrorException("计划编号不合法");
         }
         try {
-            String canonical = UUID.fromString(runId).toString();
-            if (!canonical.equalsIgnoreCase(runId)) {
-                throw new IllegalArgumentException("任务编号不是完整 UUID");
+            String canonical = UUID.fromString(planId).toString();
+            if (!canonical.equalsIgnoreCase(planId)) {
+                throw new IllegalArgumentException("计划编号不是完整 UUID");
             }
             return canonical;
         } catch (IllegalArgumentException exception) {
-            throw new ClientDataErrorException("任务编号不合法");
+            throw new ClientDataErrorException("计划编号不合法");
         }
     }
 

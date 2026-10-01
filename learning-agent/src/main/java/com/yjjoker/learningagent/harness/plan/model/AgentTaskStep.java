@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 public class AgentTaskStep {
     // 后端生成的固定编号；以后调换顺序时不更换这个编号。
     private String stepId;
-    private String runId;
+    private String planId;
     // 从 1 开始的执行顺序，和步骤身份分开保存。
     private int position;
     private String description;

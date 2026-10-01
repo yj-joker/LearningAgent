@@ -9,6 +9,8 @@ import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStep;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStepStatus;
 import com.yjjoker.learningagent.harness.plan.service.AgentTaskPlanService;
+import com.yjjoker.learningagent.harness.plan.service.SessionGoalService;
+import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.repository.AgentTaskPlanRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.utils.BaseContext;
@@ -62,7 +64,7 @@ class AgentTaskPlanConcurrencyMysqlTest {
     private LearningSessionRepository sessions;
     private AgentTaskPlanService service;
 
-    // 独立数据库只建当前测试需要的三张空表，不拷贝真实用户资料。
+    // 独立数据库只建当前测试需要的四张空表，不拷贝真实用户资料。
     @BeforeEach
     void setUp() throws Exception {
         schema = "harness_plan_it_" + UUID.randomUUID().toString().replace("-", "");
@@ -72,7 +74,7 @@ class AgentTaskPlanConcurrencyMysqlTest {
         }
         dataSource = new DriverManagerDataSource(url(schema), env("MYSQL_USER", "root"), System.getenv("MYSQL_PASSWORD"));
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
-            for (String table : List.of("learning_sessions", "agent_task_plans", "agent_task_steps")) {
+            for (String table : List.of("learning_sessions", "agent_task_plans", "agent_task_steps", "agent_session_focus")) {
                 statement.execute(tableDdl(table));
             }
             statement.executeUpdate("INSERT INTO learning_sessions (id, course_id, user_id, session_title, status) "
@@ -133,9 +135,9 @@ class AgentTaskPlanConcurrencyMysqlTest {
         AgentTaskPlanService secondWriter = transactionalService(secondRepository);
         try (var workers = Executors.newFixedThreadPool(2)) {
             try {
-                Future<AgentTaskPlan> first = workers.submit(() -> asUser(() -> firstWriter.update(original.getRunId(), SESSION_ID, firstRequest)));
+                Future<AgentTaskPlan> first = workers.submit(() -> asUser(() -> firstWriter.update(original.getPlanId(), SESSION_ID, firstRequest)));
                 await(locked);
-                Future<AgentTaskPlan> second = workers.submit(() -> asUser(() -> secondWriter.update(original.getRunId(), SESSION_ID, secondRequest)));
+                Future<AgentTaskPlan> second = workers.submit(() -> asUser(() -> secondWriter.update(original.getPlanId(), SESSION_ID, secondRequest)));
                 await(secondAttempt);
                 assertThrows(TimeoutException.class, () -> second.get(200, TimeUnit.MILLISECONDS));
                 release.countDown();
@@ -147,7 +149,7 @@ class AgentTaskPlanConcurrencyMysqlTest {
                 release.countDown();
             }
         }
-        AgentTaskPlan finalPlan = service.load(original.getRunId(), SESSION_ID);
+        AgentTaskPlan finalPlan = service.load(original.getPlanId(), SESSION_ID);
         assertEquals(2, finalPlan.getVersion());
         assertEquals("先取得修改权的结果", finalPlan.getSteps().getFirst().getDescription());
         log.info("计划双连接竞争通过：一次更新成功，另一次收到版本冲突");
@@ -165,16 +167,16 @@ class AgentTaskPlanConcurrencyMysqlTest {
         try (var workers = Executors.newSingleThreadExecutor()) {
             try {
                 Future<AgentTaskPlan> finisher = workers.submit(() -> asUser(() -> transaction.execute(status -> {
-                    assertEquals(1, repository.findPlan(USER_ID, SESSION_ID, initial.getRunId()).orElseThrow().getVersion());
-                    assertEquals(AgentTaskStepStatus.PENDING, repository.findSteps(USER_ID, SESSION_ID, initial.getRunId()).getFirst().getStatus());
+                    assertEquals(1, repository.findPlan(USER_ID, SESSION_ID, initial.getPlanId()).orElseThrow().getVersion());
+                    assertEquals(AgentTaskStepStatus.PENDING, repository.findSteps(USER_ID, SESSION_ID, initial.getPlanId()).getFirst().getStatus());
                     snapshotReady.countDown();
                     await(resume);
-                    return service.update(initial.getRunId(), SESSION_ID, finishRequest.get());
+                    return service.update(initial.getPlanId(), SESSION_ID, finishRequest.get());
                 })));
                 await(snapshotReady);
                 UpdateTaskPlanRequest start = updateRequest(initial);
                 start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
-                AgentTaskPlan running = service.update(initial.getRunId(), SESSION_ID, start);
+                AgentTaskPlan running = service.update(initial.getPlanId(), SESSION_ID, start);
                 UpdateTaskPlanRequest finish = updateRequest(running);
                 finish.getSteps().getFirst().setStatus(AgentTaskStepStatus.COMPLETED);
                 finish.getSteps().getFirst().setResultSummary("当前步骤确实已经开始并完成");
@@ -185,7 +187,7 @@ class AgentTaskPlanConcurrencyMysqlTest {
                 resume.countDown();
             }
         }
-        assertEquals(AgentTaskStepStatus.COMPLETED, service.load(initial.getRunId(), SESSION_ID).getSteps().getFirst().getStatus());
+        assertEquals(AgentTaskStepStatus.COMPLETED, service.load(initial.getPlanId(), SESSION_ID).getSteps().getFirst().getStatus());
         log.info("计划当前读验证通过：旧事务快照不会干扰新版本的状态校验");
     }
 
@@ -205,20 +207,83 @@ class AgentTaskPlanConcurrencyMysqlTest {
         AgentTaskPlanService reader = transactionalService(reading);
         try (var workers = Executors.newSingleThreadExecutor()) {
             try {
-                Future<AgentTaskPlan> loading = workers.submit(() -> asUser(() -> reader.load(initial.getRunId(), SESSION_ID)));
+                Future<AgentTaskPlan> loading = workers.submit(() -> asUser(() -> reader.load(initial.getPlanId(), SESSION_ID)));
                 await(planRead);
                 UpdateTaskPlanRequest update = updateRequest(initial);
                 update.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
-                service.update(initial.getRunId(), SESSION_ID, update);
+                service.update(initial.getPlanId(), SESSION_ID, update);
                 resumeRead.countDown();
                 AgentTaskPlan snapshot = loading.get(10, TimeUnit.SECONDS);
                 assertEquals(1, snapshot.getVersion());
                 assertEquals(AgentTaskStepStatus.PENDING, snapshot.getSteps().getFirst().getStatus());
-                assertEquals(2, service.load(initial.getRunId(), SESSION_ID).getVersion());
+                assertEquals(2, service.load(initial.getPlanId(), SESSION_ID).getVersion());
             } finally {
                 resumeRead.countDown();
             }
         }
+    }
+
+    // 两个已批准请求争抢同一会话目标：先完成切换后，另一份旧快照不能再创建目标。
+    @Test
+    void shouldSerializeGoalSwitchAndRejectConcurrentStaleCreation() throws Exception {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot a = goals.initialize(SESSION_ID, goalRequest("目标 A"));
+        SessionGoalSnapshot b = goals.create(a, goalRequest("目标 B"));
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch attempted = new CountDownLatch(1);
+        AgentTaskPlanRepository firstRepository = mock(AgentTaskPlanRepository.class, delegatesTo(repository));
+        doAnswer(inv -> {
+            var state = repository.lockFocus(inv.getArgument(0), inv.getArgument(1));
+            locked.countDown();
+            await(release);
+            return state;
+        }).when(firstRepository).lockFocus(any(), any());
+        AgentTaskPlanRepository secondRepository = mock(AgentTaskPlanRepository.class, delegatesTo(repository));
+        doAnswer(inv -> {
+            attempted.countDown();
+            return repository.lockFocus(inv.getArgument(0), inv.getArgument(1));
+        }).when(secondRepository).lockFocus(any(), any());
+        SessionGoalService first = goalService(firstRepository);
+        SessionGoalService second = goalService(secondRepository);
+        try (var workers = Executors.newFixedThreadPool(2)) {
+            try {
+                Future<SessionGoalSnapshot> switched = workers.submit(() -> asUser(() -> first.switchTo(b, "goal-1")));
+                await(locked);
+                Future<SessionGoalSnapshot> created = workers.submit(() -> asUser(() -> second.create(b, goalRequest("不得残留的目标 C"))));
+                await(attempted);
+                assertThrows(TimeoutException.class, () -> created.get(200, TimeUnit.MILLISECONDS));
+                release.countDown();
+                assertEquals(a.getCurrentPlan().getPlanId(), switched.get(10, TimeUnit.SECONDS).getCurrentPlan().getPlanId());
+                ExecutionException failure = assertThrows(ExecutionException.class, () -> created.get(10, TimeUnit.SECONDS));
+                assertInstanceOf(ClientDataErrorException.class, failure.getCause());
+            } finally {
+                release.countDown();
+            }
+        }
+        SessionGoalSnapshot stored = goals.load(SESSION_ID);
+        assertEquals(2, stored.getGoals().size());
+        assertEquals(a.getCurrentPlan().getPlanId(), stored.getState().getActivePlanId());
+        assertEquals(b.getState().getVersion() + 1, stored.getState().getVersion());
+    }
+
+    // 会话目标服务也使用真实事务代理，多线程会实际竞争 MySQL 行锁。
+    private SessionGoalService goalService(AgentTaskPlanRepository goalRepository) {
+        ProxyFactory proxy = new ProxyFactory(new SessionGoalService(goalRepository, service, sessions));
+        proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource), new AnnotationTransactionAttributeSource()));
+        return (SessionGoalService) proxy.getProxy();
+    }
+
+    // 只构造短计划，不访问真实模型；本用例专门验证并发事务。
+    private CreateTaskPlanRequest goalRequest(String goal) {
+        CreateTaskPlanRequest request = new CreateTaskPlanRequest();
+        request.setGoal(goal);
+        CreateTaskStepRequest step = new CreateTaskStepRequest();
+        step.setDescription("解释目标知识");
+        step.setCompletionCriteria("给出示例");
+        request.setSteps(List.of(step));
+        return request;
     }
 
     // 每个工作线程显式绑定测试用户，结束时清理，不依赖 ThreadLocal 自动跨线程传播。
@@ -271,7 +336,7 @@ class AgentTaskPlanConcurrencyMysqlTest {
 
     // 测试复用正式建表定义，不另建一份容易过期的测试 SQL。
     private String tableDdl(String table) throws Exception {
-        if (!List.of("learning_sessions", "agent_task_plans", "agent_task_steps").contains(table)) throw new IllegalArgumentException("不支持的测试表");
+        if (!List.of("learning_sessions", "agent_task_plans", "agent_task_steps", "agent_session_focus").contains(table)) throw new IllegalArgumentException("不支持的测试表");
         String schemaSql = new ClassPathResource("db/migration/learningAgentSql.sql").getContentAsString(StandardCharsets.UTF_8);
         var match = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS " + Pattern.quote(table) + "\\s*\\(.*?;").matcher(schemaSql);
         if (!match.find()) throw new IllegalStateException("缺少计划测试建表定义");

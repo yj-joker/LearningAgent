@@ -15,9 +15,19 @@ public interface Tool {
     // 名称负责精确定位工具，说明负责表达工具的用途，两者承担的职责不同。
     String description();
 
+    // 改变执行方向的工具需要独占本批，避免其他工具带着旧目标的参数继续执行。
+    default boolean requiresExclusiveBatch() {
+        return false;
+    }
+
     // 声明是否需要用户确认；与记忆分类无关，文件、权限等工具也能使用。
     default boolean requiresUserApproval() {
         return false;
+    }
+
+    // 参数校验通过后生成用户可读的审批说明，不依赖模型编写授权理由。
+    default String approvalReason(String input) {
+        return "此工具需要用户确认后执行";
     }
 
     // 审批前只检查输入，不能产生写入等副作用；字段规则由具体工具补充。

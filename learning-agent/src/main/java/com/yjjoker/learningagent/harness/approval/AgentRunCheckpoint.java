@@ -4,6 +4,7 @@ import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.model.AgentMode;
+import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import lombok.Data;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,6 +21,10 @@ public class AgentRunCheckpoint {
     private Long sessionId;
     // 保存暂停时的模式，恢复后不能被前端的新选择覆盖。
     private AgentMode mode = AgentMode.CHAT;
+    // 专注目标与版本随审批保存；旧专注检查点缺失此字段时拒绝继续，不猜测目标。
+    private SessionGoalSnapshot goalSnapshot;
+    // 不含动态目标块，恢复后可以整体重建系统消息，避免旧目标与新目标同时生效。
+    private String systemPromptBase;
     private String userMessage;
     private int batchNumber;
     // 包含尚未得到结果的 assistant(tool_calls)，恢复时先补 tool 消息再请求模型。

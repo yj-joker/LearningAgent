@@ -33,7 +33,7 @@ class AgentHarnessModeTest {
             {"goal":"理解事务","steps":[{"description":"解释原子性","completionCriteria":"给出转账例子"}]}
             """;
     private final LlmClient client = mock(LlmClient.class);
-    private final AgentTaskPlanService plans = mock(AgentTaskPlanService.class);
+    private final SessionGoalService plans = mock(SessionGoalService.class);
     private final AgentApprovalService approvals = mock(AgentApprovalService.class);
     private final ConversationMemoryService history = mock(ConversationMemoryService.class);
     private final StructuredMemoryService memory = mock(StructuredMemoryService.class);
@@ -56,14 +56,13 @@ class AgentHarnessModeTest {
         when(memory.loadSessionMemoryIndex(9L)).thenReturn(List.of());
         when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(PLAN));
         when(client.generate(any())).thenReturn(new TextLlmResponse("事务确保转账同时成功或失败。"));
-        when(plans.create(anyString(), eq(9L), any())).thenAnswer(inv ->
-                storedPlan(inv.getArgument(0), inv.getArgument(2)));
+        when(plans.initialize(eq(9L), any())).thenAnswer(inv -> storedSnapshot(inv.getArgument(1)));
         LlmRetryExecutor retry = new LlmRetryExecutor();
         harness = new AgentHarnessServiceImpl(client, new ToolRegistry(List.of()),
                 List.of(new ToolExecutionRecordingHook()), history, sessions,
                 new ContextManager(5000, 500), new InMemoryOriginalToolResultStoreImpl(), summarizer, retry,
                 memory, new MemoryReferenceRegistry(), extraction, mock(MemoryApprovalService.class), approvals,
-                plans, new FocusPlanPlanner(client, retry, new ToolRegistry(List.of())));
+                plans, new FocusPlanPlanner(client, retry, new ToolRegistry(List.of())), new SessionGoalContext());
     }
 
     // 不让登录身份残留到其他测试。
@@ -89,9 +88,9 @@ class AgentHarnessModeTest {
         assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
         var order = inOrder(approvals, plans, client);
         order.verify(approvals).requireSessionAvailable(9L);
-        order.verify(plans).loadIfPresent(result.getRunId(), 9L);
+        order.verify(plans).load(9L);
         order.verify(client).generateWithoutTools(any());
-        order.verify(plans).create(eq(result.getRunId()), eq(9L), any());
+        order.verify(plans).initialize(eq(9L), any());
         order.verify(client).generate(any());
         ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
         verify(client).generate(sent.capture());
@@ -100,16 +99,16 @@ class AgentHarnessModeTest {
         assertTrue(system.contains("给出转账例子"));
         assertFalse(system.contains("你是 LearningAgent 的专注模式规划器"));
         // 本阶段只建立与执行计划，不伪造任何完成进度。
-        verify(plans, never()).update(anyString(), anyLong(), any());
+        verify(plans, never()).switchTo(any(), anyString());
     }
 
     // 已有计划直接复用，不调用模型创建第二份。
     @Test
     void reusesExistingPlan() {
-        when(plans.loadIfPresent(anyString(), eq(9L))).thenAnswer(inv -> storedPlan(inv.getArgument(0), null));
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
         harness.run(9L, "解释事务", AgentMode.FOCUS);
         verify(client, never()).generateWithoutTools(any());
-        verify(plans, never()).create(anyString(), anyLong(), any());
+        verify(plans, never()).initialize(anyLong(), any());
     }
 
     // 规划格式两次失败时，不执行主模型和数据库写入。
@@ -119,14 +118,14 @@ class AgentHarnessModeTest {
         assertThrows(HarnessException.class, () -> harness.run(9L, "解释事务", AgentMode.FOCUS));
         verify(client, times(2)).generateWithoutTools(any());
         verify(client, never()).generate(any());
-        verify(plans, never()).create(anyString(), anyLong(), any());
+        verify(plans, never()).initialize(anyLong(), any());
         verifyNoInteractions(extraction);
     }
 
     // 保存失败不能交给规划器重试，更不能在未保存时执行任务。
     @Test
     void persistenceFailureDoesNotReplanOrExecute() {
-        when(plans.create(anyString(), eq(9L), any())).thenThrow(new IllegalStateException("模拟数据库故障"));
+        when(plans.initialize(eq(9L), any())).thenThrow(new IllegalStateException("模拟数据库故障"));
         assertThrows(IllegalStateException.class, () -> harness.run(9L, "解释事务", AgentMode.FOCUS));
         verify(client).generateWithoutTools(any());
         verify(client, never()).generate(any());
@@ -153,22 +152,34 @@ class AgentHarnessModeTest {
         verify(client).generateWithoutTools(any());
     }
 
-    // 生成最小数据库返回对象，编号由当前运行提供。
-    private AgentTaskPlan storedPlan(String runId, CreateTaskPlanRequest request) {
+    // 生成与 runId 独立的持久目标，后续多次请求可以复用它。
+    private SessionGoalSnapshot storedSnapshot(CreateTaskPlanRequest request) {
+        String planId = UUID.randomUUID().toString();
         AgentTaskStep step = new AgentTaskStep();
         step.setStepId(UUID.randomUUID().toString());
-        step.setRunId(runId);
+        step.setPlanId(planId);
         step.setPosition(1);
         step.setStatus(AgentTaskStepStatus.PENDING);
         step.setDescription(request == null ? "解释原子性" : request.getSteps().getFirst().getDescription());
         step.setCompletionCriteria("给出转账例子");
         AgentTaskPlan plan = new AgentTaskPlan();
-        plan.setRunId(runId);
+        plan.setPlanId(planId);
+        plan.setGoalNumber(1);
         plan.setUserId(7L);
         plan.setSessionId(9L);
         plan.setGoal("理解事务");
         plan.setVersion(1);
         plan.setSteps(List.of(step));
-        return plan;
+        SessionFocusState state = new SessionFocusState();
+        state.setUserId(7L);
+        state.setSessionId(9L);
+        state.setActivePlanId(planId);
+        state.setVersion(2);
+        state.setNextGoalNumber(2);
+        SessionGoalSnapshot snapshot = new SessionGoalSnapshot();
+        snapshot.setState(state);
+        snapshot.setCurrentPlan(plan);
+        snapshot.setGoals(List.of(plan));
+        return snapshot;
     }
 }
