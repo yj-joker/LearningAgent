@@ -34,7 +34,7 @@ import static org.mockito.Mockito.*;
 class AgentTaskPlanServiceTest {
     private static final Long USER_ID = 101L;
     private static final Long SESSION_ID = 201L;
-    private static final String RUN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    private static final String PLAN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
     private final AgentTaskPlanRepository repository = mock(AgentTaskPlanRepository.class);
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
     private final AgentTaskPlanService service = new AgentTaskPlanService(repository, sessions);
@@ -64,8 +64,8 @@ class AgentTaskPlanServiceTest {
     void shouldCreateNormalizedPlanWithStableStepIds() {
         CreateTaskPlanRequest request = request();
         request.setGoal("  生成 Java 练习题  " );
-        AgentTaskPlan plan = service.create(RUN_ID.toUpperCase(), SESSION_ID, request);
-        assertEquals(RUN_ID, plan.getRunId());
+        AgentTaskPlan plan = service.create(PLAN_ID.toUpperCase(), SESSION_ID, request);
+        assertEquals(PLAN_ID, plan.getPlanId());
         assertEquals(USER_ID, plan.getUserId());
         assertEquals(SESSION_ID, plan.getSessionId());
         assertEquals("生成 Java 练习题", plan.getGoal());
@@ -75,7 +75,7 @@ class AgentTaskPlanServiceTest {
         assertEquals(2, plan.getSteps().stream().map(AgentTaskStep::getStepId).distinct().count());
         for (AgentTaskStep step : plan.getSteps()) {
             assertDoesNotThrow(() -> UUID.fromString(step.getStepId()));
-            assertEquals(RUN_ID, step.getRunId());
+            assertEquals(PLAN_ID, step.getPlanId());
             assertEquals(AgentTaskStepStatus.PENDING, step.getStatus());
             assertNull(step.getResultSummary());
             assertEquals(plan.getCreatedAt(), step.getCreatedAt());
@@ -92,15 +92,15 @@ class AgentTaskPlanServiceTest {
     void shouldNormalizeEmptyConstraintsToNull() {
         CreateTaskPlanRequest request = request();
         request.setConstraints("  \n " );
-        assertNull(service.create(RUN_ID, SESSION_ID, request).getConstraints());
+        assertNull(service.create(PLAN_ID, SESSION_ID, request).getConstraints());
     }
 
     // 未登录不能查询会话或接触计划数据。
     @Test
     void shouldRejectUnauthenticatedAccess() {
         BaseContext.removeCurrentId();
-        assertThrows(LearningSessionStatusException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
-        assertThrows(LearningSessionStatusException.class, () -> service.load(RUN_ID, SESSION_ID));
+        assertThrows(LearningSessionStatusException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.load(PLAN_ID, SESSION_ID));
         verifyNoInteractions(sessions, repository);
     }
 
@@ -108,8 +108,8 @@ class AgentTaskPlanServiceTest {
     @Test
     void shouldRejectAnotherUsersSession() {
         session.setUserId(USER_ID + 1);
-        assertThrows(LearningSessionStatusException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
-        assertThrows(LearningSessionStatusException.class, () -> service.load(RUN_ID, SESSION_ID));
+        assertThrows(LearningSessionStatusException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.load(PLAN_ID, SESSION_ID));
         verifyNoInteractions(repository);
     }
 
@@ -117,7 +117,7 @@ class AgentTaskPlanServiceTest {
     @Test
     void shouldRejectMissingSession() {
         when(sessions.findSessionById(SESSION_ID)).thenReturn(Optional.empty());
-        assertThrows(LearningSessionStatusException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
         verifyNoInteractions(repository);
     }
 
@@ -125,20 +125,20 @@ class AgentTaskPlanServiceTest {
     @Test
     void shouldRejectCanceledSessionForCreateAndRead() {
         session.setStatus(LearningSessionStatusEnum.CANCELED);
-        assertThrows(LearningSessionStatusException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
-        assertThrows(LearningSessionStatusException.class, () -> service.load(RUN_ID, SESSION_ID));
+        assertThrows(LearningSessionStatusException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.load(PLAN_ID, SESSION_ID));
         verifyNoInteractions(repository);
     }
 
     // 已完成会话可以查看旧计划，但不能新增计划。
     @Test
     void shouldAllowReadButNotCreateInCompletedSession() {
-        AgentTaskPlan saved = service.create(RUN_ID, SESSION_ID, request());
+        AgentTaskPlan saved = service.create(PLAN_ID, SESSION_ID, request());
         clearInvocations(repository);
         session.setStatus(LearningSessionStatusEnum.COMPLETED);
         stubLoad(saved);
-        assertSame(saved, service.load(RUN_ID, SESSION_ID));
-        assertThrows(LearningSessionStatusException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
+        assertSame(saved, service.load(PLAN_ID, SESSION_ID));
+        assertThrows(LearningSessionStatusException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
         verify(repository, never()).insertPlan(any());
     }
 
@@ -146,9 +146,9 @@ class AgentTaskPlanServiceTest {
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = {"not-a-run", "1-1-1-1-1", " aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
-    void shouldRejectMalformedRunId(String runId) {
-        assertThrows(ClientDataErrorException.class, () -> service.create(runId, SESSION_ID, request()));
-        assertThrows(ClientDataErrorException.class, () -> service.load(runId, SESSION_ID));
+    void shouldRejectMalformedPlanId(String planId) {
+        assertThrows(ClientDataErrorException.class, () -> service.create(planId, SESSION_ID, request()));
+        assertThrows(ClientDataErrorException.class, () -> service.load(planId, SESSION_ID));
         verifyNoInteractions(repository);
     }
 
@@ -156,7 +156,7 @@ class AgentTaskPlanServiceTest {
     @Test
     void shouldRejectInvalidSessionId() {
         for (Long id : java.util.Arrays.asList(null, 0L, -1L)) {
-            assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, id, request()));
+            assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, id, request()));
         }
         verifyNoInteractions(repository);
     }
@@ -168,21 +168,21 @@ class AgentTaskPlanServiceTest {
     void shouldRejectMissingGoal(String goal) {
         CreateTaskPlanRequest request = request();
         request.setGoal(goal);
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         verifyNoInteractions(repository);
     }
 
     // 空计划、空步骤列表和超过上限的步骤数都不能保存。
     @Test
     void shouldRejectMissingOrExcessiveSteps() {
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, null));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, null));
         CreateTaskPlanRequest request = request();
         request.setSteps(null);
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.setSteps(List.of());
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.setSteps(Collections.nCopies(AgentTaskPlanService.MAX_STEPS + 1, step("检索", "找到来源")));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         verifyNoInteractions(repository);
     }
 
@@ -191,9 +191,9 @@ class AgentTaskPlanServiceTest {
     void shouldValidateEveryStepBeforeWritingAnything() {
         CreateTaskPlanRequest request = request();
         request.getSteps().getLast().setCompletionCriteria(" " );
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.setSteps(java.util.Arrays.asList(step("检索", "有来源"), null));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         verifyNoInteractions(repository);
     }
 
@@ -202,16 +202,16 @@ class AgentTaskPlanServiceTest {
     void shouldRejectOversizedText() {
         CreateTaskPlanRequest request = request();
         request.setGoal("字".repeat(AgentTaskPlanService.MAX_GOAL_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.setGoal("生成练习");
         request.setConstraints("字".repeat(AgentTaskPlanService.MAX_CONSTRAINTS_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.setConstraints(null);
         request.getSteps().getFirst().setDescription("字".repeat(AgentTaskPlanService.MAX_STEP_TEXT_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         request.getSteps().getFirst().setDescription("检索资料");
         request.getSteps().getFirst().setCompletionCriteria("字".repeat(AgentTaskPlanService.MAX_STEP_TEXT_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.create(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.create(PLAN_ID, SESSION_ID, request));
         verifyNoInteractions(repository);
     }
 
@@ -223,7 +223,7 @@ class AgentTaskPlanServiceTest {
         request.setConstraints("字".repeat(AgentTaskPlanService.MAX_CONSTRAINTS_LENGTH));
         request.setSteps(Collections.nCopies(AgentTaskPlanService.MAX_STEPS,
                 step("📚".repeat(AgentTaskPlanService.MAX_STEP_TEXT_LENGTH), "完成")));
-        AgentTaskPlan plan = service.create(RUN_ID, SESSION_ID, request);
+        AgentTaskPlan plan = service.create(PLAN_ID, SESSION_ID, request);
         assertEquals(AgentTaskPlanService.MAX_STEPS, plan.getSteps().size());
         assertEquals(AgentTaskPlanService.MAX_STEPS, plan.getSteps().stream().map(AgentTaskStep::getStepId).distinct().count());
     }
@@ -233,7 +233,7 @@ class AgentTaskPlanServiceTest {
     void shouldRejectDuplicatePlanWithoutWritingSteps() {
         when(repository.insertPlan(any())).thenThrow(new DuplicateKeyException("duplicate"));
         ClientDataErrorException error = assertThrows(ClientDataErrorException.class,
-                () -> service.create(RUN_ID, SESSION_ID, request()));
+                () -> service.create(PLAN_ID, SESSION_ID, request()));
         assertTrue(error.getMessage().contains("不能重复创建"));
         verify(repository, never()).insertStep(any());
     }
@@ -242,40 +242,40 @@ class AgentTaskPlanServiceTest {
     @Test
     void shouldRejectMissingAffectedRow() {
         when(repository.insertStep(any())).thenReturn(0);
-        assertThrows(IllegalStateException.class, () -> service.create(RUN_ID, SESSION_ID, request()));
+        assertThrows(IllegalStateException.class, () -> service.create(PLAN_ID, SESSION_ID, request()));
     }
 
     // 查询目标和查询步骤使用同一组用户、会话、任务范围。
     @Test
     void shouldLoadPlanWithinCurrentOwnerScope() {
-        AgentTaskPlan saved = service.create(RUN_ID, SESSION_ID, request());
+        AgentTaskPlan saved = service.create(PLAN_ID, SESSION_ID, request());
         stubLoad(saved);
-        assertSame(saved, service.load(RUN_ID, SESSION_ID));
-        verify(repository).findPlan(USER_ID, SESSION_ID, RUN_ID);
-        verify(repository).findSteps(USER_ID, SESSION_ID, RUN_ID);
+        assertSame(saved, service.load(PLAN_ID, SESSION_ID));
+        verify(repository).findPlan(USER_ID, SESSION_ID, PLAN_ID);
+        verify(repository).findSteps(USER_ID, SESSION_ID, PLAN_ID);
     }
 
     // 计划不存在时不再读取步骤，错误信息也不暴露其他用户的任务。
     @Test
     void shouldRejectMissingPlanBeforeReadingSteps() {
-        when(repository.findPlan(USER_ID, SESSION_ID, RUN_ID)).thenReturn(Optional.empty());
-        assertThrows(ClientDataErrorException.class, () -> service.load(RUN_ID, SESSION_ID));
+        when(repository.findPlan(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(Optional.empty());
+        assertThrows(ClientDataErrorException.class, () -> service.load(PLAN_ID, SESSION_ID));
         verify(repository, never()).findSteps(any(), any(), any());
     }
 
     // 数据库中出现半份计划时明确报错，不向上游返回一个看似正常的空计划。
     @Test
     void shouldRejectPlanWithoutSteps() {
-        AgentTaskPlan saved = service.create(RUN_ID, SESSION_ID, request());
-        when(repository.findPlan(USER_ID, SESSION_ID, RUN_ID)).thenReturn(Optional.of(saved));
-        when(repository.findSteps(USER_ID, SESSION_ID, RUN_ID)).thenReturn(List.of());
-        assertThrows(IllegalStateException.class, () -> service.load(RUN_ID, SESSION_ID));
+        AgentTaskPlan saved = service.create(PLAN_ID, SESSION_ID, request());
+        when(repository.findPlan(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(Optional.of(saved));
+        when(repository.findSteps(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(List.of());
+        assertThrows(IllegalStateException.class, () -> service.load(PLAN_ID, SESSION_ID));
     }
 
     // 为读取用例准备完整记录，不影响真实数据库。
     private void stubLoad(AgentTaskPlan plan) {
-        when(repository.findPlan(USER_ID, SESSION_ID, RUN_ID)).thenReturn(Optional.of(plan));
-        when(repository.findSteps(USER_ID, SESSION_ID, RUN_ID)).thenReturn(plan.getSteps());
+        when(repository.findPlan(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(Optional.of(plan));
+        when(repository.findSteps(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(plan.getSteps());
     }
 
     // 构造两个可执行步骤，供各个边界用例做少量修改。

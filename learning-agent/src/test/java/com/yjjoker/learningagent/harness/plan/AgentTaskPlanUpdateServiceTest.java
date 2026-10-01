@@ -37,7 +37,7 @@ import static org.mockito.Mockito.*;
 class AgentTaskPlanUpdateServiceTest {
     private static final Long USER_ID = 101L;
     private static final Long SESSION_ID = 201L;
-    private static final String RUN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    private static final String PLAN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
     private final AgentTaskPlanRepository repository = mock(AgentTaskPlanRepository.class);
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
     private final AgentTaskPlanService service = new AgentTaskPlanService(repository, sessions);
@@ -53,7 +53,7 @@ class AgentTaskPlanUpdateServiceTest {
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(sessions.findSessionById(SESSION_ID)).thenReturn(Optional.of(session));
         AgentTaskPlan plan = new AgentTaskPlan();
-        plan.setRunId(RUN_ID);
+        plan.setPlanId(PLAN_ID);
         plan.setUserId(USER_ID);
         plan.setSessionId(SESSION_ID);
         plan.setGoal("生成五道练习");
@@ -61,10 +61,10 @@ class AgentTaskPlanUpdateServiceTest {
         plan.setVersion(2);
         originals.add(storedStep(1));
         originals.add(storedStep(2));
-        when(repository.advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(RUN_ID), eq(1L), any())).thenReturn(1);
-        when(repository.findPlanForUpdate(USER_ID, SESSION_ID, RUN_ID)).thenReturn(Optional.of(plan));
-        when(repository.findStepsForUpdate(USER_ID, SESSION_ID, RUN_ID)).thenReturn(originals);
-        when(repository.parkStepPositions(USER_ID, SESSION_ID, RUN_ID, AgentTaskPlanService.MAX_STEPS)).thenReturn(2);
+        when(repository.advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(PLAN_ID), eq(1L), any())).thenReturn(1);
+        when(repository.findPlanForUpdate(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(Optional.of(plan));
+        when(repository.findStepsForUpdate(USER_ID, SESSION_ID, PLAN_ID)).thenReturn(originals);
+        when(repository.parkStepPositions(USER_ID, SESSION_ID, PLAN_ID, AgentTaskPlanService.MAX_STEPS)).thenReturn(2);
         when(repository.updateStep(eq(USER_ID), eq(SESSION_ID), any())).thenReturn(1);
         when(repository.insertStep(any())).thenReturn(1);
     }
@@ -86,7 +86,7 @@ class AgentTaskPlanUpdateServiceTest {
         added.setCompletionCriteria("有解题过程");
         added.setStatus(AgentTaskStepStatus.PENDING);
         request.getSteps().add(added);
-        AgentTaskPlan result = service.update(RUN_ID, SESSION_ID, request);
+        AgentTaskPlan result = service.update(PLAN_ID, SESSION_ID, request);
         assertEquals(2, result.getVersion());
         assertEquals("生成五道练习", result.getGoal());
         assertEquals("必须附答案", result.getConstraints());
@@ -105,7 +105,7 @@ class AgentTaskPlanUpdateServiceTest {
     void shouldPreserveUnchangedStepTimestampAndInputSnapshot() {
         UpdateTaskPlanRequest request = request();
         request.getSteps().getFirst().setDescription("更准确的检索内容");
-        AgentTaskPlan result = service.update(RUN_ID, SESSION_ID, request);
+        AgentTaskPlan result = service.update(PLAN_ID, SESSION_ID, request);
         assertEquals(originals.get(1).getUpdatedAt(), result.getSteps().get(1).getUpdatedAt());
         assertEquals("步骤1", originals.getFirst().getDescription());
         request.getSteps().getFirst().setDescription("后来又修改了输入");
@@ -115,21 +115,21 @@ class AgentTaskPlanUpdateServiceTest {
     // 旧版本或不属于当前范围的任务不能继续读写步骤，更不能自动改版本重试。
     @Test
     void shouldStopWhenVersionCheckFails() {
-        when(repository.advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(RUN_ID), eq(1L), any())).thenReturn(0);
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        when(repository.advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(PLAN_ID), eq(1L), any())).thenReturn(0);
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         verify(repository, never()).findStepsForUpdate(any(), any(), any());
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
-        verify(repository, times(1)).advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(RUN_ID), eq(1L), any());
+        verify(repository, times(1)).advanceVersion(eq(USER_ID), eq(SESSION_ID), eq(PLAN_ID), eq(1L), any());
     }
 
     // 权限检查发生在版本更新之前，不能借请求编号修改别人的任务。
     @Test
     void shouldRejectUnauthenticatedAndForeignSessionUpdates() {
         BaseContext.removeCurrentId();
-        assertThrows(LearningSessionStatusException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         BaseContext.setCurrentId(USER_ID);
         session.setUserId(USER_ID + 1);
-        assertThrows(LearningSessionStatusException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         verifyNoInteractions(repository);
     }
 
@@ -138,26 +138,26 @@ class AgentTaskPlanUpdateServiceTest {
     @EnumSource(value = LearningSessionStatusEnum.class, names = {"COMPLETED", "CANCELED"})
     void shouldRejectInactiveSessionUpdates(LearningSessionStatusEnum status) {
         session.setStatus(status);
-        assertThrows(LearningSessionStatusException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        assertThrows(LearningSessionStatusException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         verifyNoInteractions(repository);
     }
 
     // 缺少版本、版本越界或列表大小不合要求时，不尝试占用数据库修改权。
     @Test
     void shouldRejectMalformedRequestsBeforeAdvancingVersion() {
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, null));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, null));
         for (Long version : Arrays.asList(null, 0L, -1L, Long.MAX_VALUE)) {
             UpdateTaskPlanRequest request = request();
             request.setExpectedVersion(version);
-            assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+            assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         }
         UpdateTaskPlanRequest request = request();
         request.setSteps(null);
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         request.setSteps(List.of());
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         request.setSteps(Collections.nCopies(AgentTaskPlanService.MAX_STEPS + 1, new UpdateTaskStepRequest()));
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         verifyNoInteractions(repository);
     }
 
@@ -167,11 +167,11 @@ class AgentTaskPlanUpdateServiceTest {
         for (String invalidId : List.of(UUID.randomUUID().toString(), "", originals.get(1).getStepId())) {
             UpdateTaskPlanRequest request = request();
             request.getSteps().getFirst().setStepId(invalidId);
-            assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+            assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         }
         UpdateTaskPlanRequest missing = request();
         missing.getSteps().removeLast();
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, missing));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, missing));
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
     }
 
@@ -180,7 +180,7 @@ class AgentTaskPlanUpdateServiceTest {
     void shouldRejectMultipleRunningSteps() {
         UpdateTaskPlanRequest request = request();
         request.getSteps().forEach(step -> step.setStatus(AgentTaskStepStatus.IN_PROGRESS));
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
     }
 
@@ -194,7 +194,7 @@ class AgentTaskPlanUpdateServiceTest {
         added.setStatus(status);
         added.setResultSummary("说明");
         request.getSteps().add(added);
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         verify(repository, never()).insertStep(any());
     }
 
@@ -211,9 +211,9 @@ class AgentTaskPlanUpdateServiceTest {
         // 其他步骤有合法变化，同状态用例不会被“没有变化”的检查干扰。
         request.getSteps().getLast().setDescription("更新未执行步骤");
         if (allowed) {
-            assertEquals(after, service.update(RUN_ID, SESSION_ID, request).getSteps().getFirst().getStatus());
+            assertEquals(after, service.update(PLAN_ID, SESSION_ID, request).getSteps().getFirst().getStatus());
         } else {
-            assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+            assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         }
     }
 
@@ -229,7 +229,7 @@ class AgentTaskPlanUpdateServiceTest {
             if (field == 0) first.setDescription("改写历史内容");
             if (field == 1) first.setCompletionCriteria("降低完成条件");
             if (field == 2) first.setResultSummary("改写历史结果");
-            assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+            assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         }
         verify(repository, never()).updateStep(any(), any(), any());
     }
@@ -242,7 +242,7 @@ class AgentTaskPlanUpdateServiceTest {
         UpdateTaskPlanRequest request = request();
         request.getSteps().getFirst().setStatus(status);
         request.getSteps().getFirst().setResultSummary("  ");
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
     }
 
     // 步骤完整内容与结果都限长，待执行步骤不能提前声明执行结果。
@@ -251,29 +251,29 @@ class AgentTaskPlanUpdateServiceTest {
         UpdateTaskPlanRequest request = request();
         UpdateTaskStepRequest first = request.getSteps().getFirst();
         first.setDescription(" ");
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         first.setDescription("字".repeat(AgentTaskPlanService.MAX_STEP_TEXT_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         first.setDescription("有效步骤");
         first.setCompletionCriteria(" ");
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         first.setCompletionCriteria("完成条件");
         first.setResultSummary("已经做好了");
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         first.setStatus(AgentTaskStepStatus.BLOCKED);
         first.setResultSummary("字".repeat(AgentTaskPlanService.MAX_RESULT_LENGTH + 1));
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         first.setStatus(null);
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         request.getSteps().set(0, null);
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
     }
 
     // 完全相同的计划不写步骤；版本在事务中的撤销由集成测试验证。
     @Test
     void shouldRejectNoopBeforeReordering() {
-        assertThrows(ClientDataErrorException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        assertThrows(ClientDataErrorException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
     }
 
@@ -281,7 +281,7 @@ class AgentTaskPlanUpdateServiceTest {
     @Test
     void shouldRejectCorruptStoredOrder() {
         originals.getFirst().setPosition(10);
-        assertThrows(IllegalStateException.class, () -> service.update(RUN_ID, SESSION_ID, request()));
+        assertThrows(IllegalStateException.class, () -> service.update(PLAN_ID, SESSION_ID, request()));
         verify(repository, never()).parkStepPositions(any(), any(), any(), anyInt());
     }
 
@@ -290,8 +290,8 @@ class AgentTaskPlanUpdateServiceTest {
     void shouldRejectUnexpectedAffectedRows() {
         UpdateTaskPlanRequest request = request();
         request.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
-        when(repository.parkStepPositions(USER_ID, SESSION_ID, RUN_ID, AgentTaskPlanService.MAX_STEPS)).thenReturn(1);
-        assertThrows(IllegalStateException.class, () -> service.update(RUN_ID, SESSION_ID, request));
+        when(repository.parkStepPositions(USER_ID, SESSION_ID, PLAN_ID, AgentTaskPlanService.MAX_STEPS)).thenReturn(1);
+        assertThrows(IllegalStateException.class, () -> service.update(PLAN_ID, SESSION_ID, request));
         verify(repository, never()).updateStep(any(), any(), any());
     }
 
@@ -313,7 +313,7 @@ class AgentTaskPlanUpdateServiceTest {
     private AgentTaskStep storedStep(int position) {
         AgentTaskStep step = new AgentTaskStep();
         step.setStepId(UUID.randomUUID().toString());
-        step.setRunId(RUN_ID);
+        step.setPlanId(PLAN_ID);
         step.setPosition(position);
         step.setDescription("步骤" + position);
         step.setCompletionCriteria("完成条件" + position);

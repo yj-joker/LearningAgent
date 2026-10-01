@@ -22,6 +22,7 @@ public class ToolApprovalHook implements AgentHook {
         if (!validation.isSuccess()) {
             return ToolCallHookResult.reject(validation.error());
         }
-        return ToolCallHookResult.requireApproval("此工具需要用户确认后执行");
+        // 业务工具可展示目标名称；是否暂停与恢复仍由 Harness 统一决定。
+        return ToolCallHookResult.requireApproval(tool.approvalReason(call.arguments()));
     }
 }

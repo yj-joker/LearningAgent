@@ -6,16 +6,20 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
-// 一次任务的目标和限制；审批恢复沿用 runId，不复制聊天记录或审批检查点。
+// 会话内持久保存的目标与步骤；多次执行可继续同一计划，不复制聊天记录。
+// TODO 学习计划：另行管理可跨会话使用的学习安排；它不是这里一次执行的短计划，也不等同于记忆。
+// TODO 学习计划允许用户创建，也允许 Agent 通过工具提出创建或修改；具体数据模型后续讨论。
 @Data
 public class AgentTaskPlan {
-    // 使用 Harness 已有的任务编号；没有审批的任务也可以独立保存计划。
-    private String runId;
+    // 计划编号独立于 runId；切换回来仍使用原编号和原步骤。
+    private String planId;
+    // 会话内单调递增的编号，模型使用 goal-1 等引用；已分配编号不复用。
+    private Integer goalNumber;
     private Long userId;
     private Long sessionId;
     private String goal;
     private String constraints;
-    // 新计划从 1 开始；下一阶段修改时，用它拒绝基于旧计划的覆盖。
+    // 新计划从 1 开始；更新步骤和恢复审批时，用它拒绝旧快照。
     private long version;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

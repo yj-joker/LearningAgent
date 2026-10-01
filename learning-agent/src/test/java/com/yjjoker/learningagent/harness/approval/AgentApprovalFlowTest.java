@@ -39,7 +39,8 @@ class AgentApprovalFlowTest {
     private final MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
     private final LlmClient llm = mock(LlmClient.class);
     // 模式测试只控制计划读写结果，审批检查点仍走真实序列化。
-    private final AgentTaskPlanService plans = mock(AgentTaskPlanService.class);
+    private final SessionGoalService plans = mock(SessionGoalService.class);
+    private final SessionGoalContext goalContext = new SessionGoalContext();
     private final FocusPlanPlanner planner = mock(FocusPlanPlanner.class);
     private final MemoryReferenceRegistry references = new MemoryReferenceRegistry();
     private final com.yjjoker.learningagent.notification.ApprovalNotifier notifier =
@@ -473,7 +474,7 @@ class AgentApprovalFlowTest {
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null,
                 new LlmRetryExecutor(), memory, references, extraction,
                 mock(MemoryApprovalService.class), approvals,
-                plans, planner);
+                plans, planner, goalContext);
     }
 
     // 专注暂停后模式随检查点恢复，先执行原工具，再继续模型；不会重复规划。
@@ -481,14 +482,10 @@ class AgentApprovalFlowTest {
     void focusResumePreservesModePlanAndToolProtocol() {
         AtomicInteger calls = new AtomicInteger();
         build(List.of(tool("change_setting", true, calls)), List.of());
-        AgentTaskPlan plan = focusPlan();
+        SessionGoalSnapshot snapshot = focusSnapshot();
         CreateTaskPlanRequest draft = new CreateTaskPlanRequest();
         when(planner.createPlan(anyString(), anyString())).thenReturn(draft);
-        when(plans.create(anyString(), eq(9L), same(draft))).thenAnswer(inv -> {
-            plan.setRunId(inv.getArgument(0));
-            return plan;
-        });
-        when(plans.load(anyString(), eq(9L))).thenReturn(plan);
+        when(plans.initialize(eq(9L), same(draft))).thenReturn(snapshot);
         when(llm.generate(any())).thenReturn(response("focus-call", "change_setting"), new TextLlmResponse("设置已调整"));
         AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
         assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
@@ -502,7 +499,8 @@ class AgentApprovalFlowTest {
         assertEquals(AgentRunStatus.COMPLETED, done.getStatus());
         assertEquals(1, calls.get());
         verify(planner).createPlan(anyString(), anyString());
-        verify(plans).load(paused.getRunId(), 9L);
+        verify(plans).load(9L);
+        assertNotEquals(paused.getRunId(), saved.getGoalSnapshot().getCurrentPlan().getPlanId());
         ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
         verify(llm, times(2)).generate(sent.capture());
         List<LlmMessage> resumed = sent.getAllValues().getLast();
@@ -517,29 +515,142 @@ class AgentApprovalFlowTest {
         AtomicInteger calls = new AtomicInteger();
         build(List.of(tool("change_setting", true, calls)), List.of());
         when(planner.createPlan(anyString(), anyString())).thenReturn(new CreateTaskPlanRequest());
-        when(plans.create(anyString(), eq(9L), any())).thenReturn(focusPlan());
+        when(plans.initialize(eq(9L), any())).thenReturn(focusSnapshot());
         when(llm.generate(any())).thenReturn(response("focus-call", "change_setting"));
         AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
         approveAll(paused);
-        when(plans.load(paused.getRunId(), 9L)).thenThrow(new IllegalStateException("计划不可用"));
+        doThrow(new IllegalStateException("计划不可用")).when(plans).requireUnchanged(any());
         assertThrows(IllegalStateException.class, () -> harness.resume(paused.getRunId()));
         assertEquals(0, calls.get());
         verify(llm).generate(any());
         assertEquals(AgentRunStatus.FAILED, runs.get(paused.getRunId()).getStatus());
     }
 
+    // 真实工具、Hook、序列化检查点和 Harness 一起运行，验证切换后立即替换系统目标。
+    @Test
+    void createsApprovedGoalThenReturnsToOriginalWithoutReplanning() {
+        SessionGoalSnapshot original = focusSnapshot();
+        SessionGoalSnapshot other = focusSnapshot();
+        other.getCurrentPlan().setGoal("学习数据库锁");
+        other.getCurrentPlan().setGoalNumber(2);
+        other.getCurrentPlan().getSteps().getFirst().setDescription("分析行锁");
+        other.getState().setVersion(3);
+        other.getState().setNextGoalNumber(3);
+        other.setGoals(List.of(original.getCurrentPlan(), other.getCurrentPlan()));
+        var service = new SessionGoalToolService(goalContext, plans);
+        build(List.of(new com.yjjoker.learningagent.harness.tool.impl.CreateSessionGoalTool(service),
+                new com.yjjoker.learningagent.harness.tool.impl.SwitchSessionGoalTool(service)), List.of());
+        when(plans.load(9L)).thenReturn(original);
+        when(plans.create(any(), any())).thenReturn(other);
+        String input = "{\"goal\":\"学习数据库锁\",\"steps\":[{\"description\":\"分析行锁\",\"completionCriteria\":\"给出例子\"}]}";
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(
+                new ToolCall("new-goal", "create_session_goal", input))), new TextLlmResponse("开始解释行锁"));
+        AgentRunResult paused = harness.run(9L, "换个目标，学习数据库锁", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
+        verify(plans, never()).create(any(), any());
+        verify(llm).generate(any());
+        approveAll(paused);
+        assertEquals(AgentRunStatus.COMPLETED, harness.resume(paused.getRunId()).getStatus());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        String updated = sent.getAllValues().getLast().getFirst().getContent();
+        assertTrue(updated.contains("当前目标引用：goal-2"));
+        assertTrue(updated.contains("goal-1 [搁置]"));
+        assertTrue(updated.contains("分析行锁"));
+        assertFalse(updated.contains("按需调整设置"));
+        assertThrows(SecurityException.class, goalContext::require);
+        // 重复恢复只返回已保存答案，不再次创建目标。
+        harness.resume(paused.getRunId());
+        verify(plans).create(any(), any());
+
+        // 下一次用户消息加载同一会话目标；批准后回到原编号、原步骤，不再次规划。
+        SessionGoalSnapshot resumed = focusSnapshot();
+        resumed.setCurrentPlan(original.getCurrentPlan());
+        resumed.getState().setActivePlanId(original.getCurrentPlan().getPlanId());
+        resumed.getState().setVersion(4);
+        resumed.setGoals(other.getGoals());
+        when(plans.load(9L)).thenReturn(other);
+        when(plans.switchTo(any(), eq("goal-1"))).thenReturn(resumed);
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(
+                new ToolCall("old-goal", "switch_session_goal", "{\"goalRef\":\"goal-1\"}"))),
+                new TextLlmResponse("继续原目标"));
+        AgentRunResult back = harness.run(9L, "回到原来的目标", AgentMode.FOCUS);
+        assertTrue(back.getApprovals().getFirst().getReason().contains("学习数据库锁"));
+        assertTrue(back.getApprovals().getFirst().getReason().contains("调整设置"));
+        approveAll(back);
+        harness.resume(back.getRunId());
+        verify(llm, times(4)).generate(sent.capture());
+        String backPrompt = sent.getAllValues().getLast().getFirst().getContent();
+        assertTrue(backPrompt.contains("当前目标引用：goal-1"));
+        assertTrue(backPrompt.contains("按需调整设置"));
+        verifyNoInteractions(planner);
+    }
+
+    // 用户拒绝目标变更后，旧目标仍在上下文中，不执行写入。
+    @Test
+    void rejectedGoalChangeKeepsCurrentPlan() {
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        var service = new SessionGoalToolService(goalContext, plans);
+        build(List.of(new com.yjjoker.learningagent.harness.tool.impl.CreateSessionGoalTool(service)), List.of());
+        String input = "{\"goal\":\"新目标\",\"steps\":[{\"description\":\"解释\",\"completionCriteria\":\"给出例子\"}]}";
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(new ToolCall("new-goal", "create_session_goal", input))),
+                new TextLlmResponse("保留原目标"));
+        AgentRunResult paused = harness.run(9L, "换个目标", AgentMode.FOCUS);
+        approvals.decide(paused.getRunId(), 1, "new-goal", false, "先不切换");
+        harness.resume(paused.getRunId());
+        verify(plans, never()).create(any(), any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        assertTrue(sent.getAllValues().getLast().getFirst().getContent().contains("当前目标引用：goal-1"));
+    }
+
+    // 改变方向的调用与其他工具混用时，整批不执行，也不创建审批申请。
+    @Test
+    void rejectsMixedBatchBeforeApprovalOrBusinessSideEffects() {
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        AtomicInteger businessCalls = new AtomicInteger();
+        var service = new SessionGoalToolService(goalContext, plans);
+        build(List.of(new com.yjjoker.learningagent.harness.tool.impl.SwitchSessionGoalTool(service),
+                tool("business", false, businessCalls)), List.of());
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(
+                new ToolCall("switch", "switch_session_goal", "{\"goalRef\":\"goal-2\"}"),
+                new ToolCall("business-call", "business", "{}"))), new TextLlmResponse("请确认目标"));
+        assertEquals(AgentRunStatus.COMPLETED, harness.run(9L, "切换目标", AgentMode.FOCUS).getStatus());
+        assertEquals(0, businessCalls.get());
+        assertTrue(requests.isEmpty());
+        verify(plans, never()).switchTo(any(), any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        assertEquals(2, sent.getAllValues().getLast().stream().filter(m -> "tool".equals(m.getRole())
+                && m.getContent().contains("EXCLUSIVE_TOOL_BATCH")).count());
+    }
+
     // 构造一个短计划，不假设步骤已经完成。
-    private AgentTaskPlan focusPlan() {
+    private SessionGoalSnapshot focusSnapshot() {
         AgentTaskStep step = new AgentTaskStep();
         step.setPosition(1);
         step.setDescription("按需调整设置");
         step.setCompletionCriteria("得到真实工具结果");
         step.setStatus(AgentTaskStepStatus.PENDING);
         AgentTaskPlan plan = new AgentTaskPlan();
+        plan.setPlanId(UUID.randomUUID().toString());
+        plan.setGoalNumber(1);
+        plan.setUserId(7L);
+        plan.setSessionId(9L);
         plan.setGoal("调整设置");
         plan.setVersion(1);
         plan.setSteps(List.of(step));
-        return plan;
+        SessionFocusState state = new SessionFocusState();
+        state.setUserId(7L);
+        state.setSessionId(9L);
+        state.setActivePlanId(plan.getPlanId());
+        state.setVersion(2);
+        state.setNextGoalNumber(2);
+        SessionGoalSnapshot snapshot = new SessionGoalSnapshot();
+        snapshot.setState(state);
+        snapshot.setCurrentPlan(plan);
+        snapshot.setGoals(List.of(plan));
+        return snapshot;
     }
 
     // 测试工具与记忆无关，证明通用审批不依赖 isMemoryWriteTool。

@@ -10,6 +10,8 @@ import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStep;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStepStatus;
 import com.yjjoker.learningagent.harness.plan.service.AgentTaskPlanService;
+import com.yjjoker.learningagent.harness.plan.service.SessionGoalService;
+import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.repository.AgentTaskPlanRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.utils.BaseContext;
@@ -67,7 +69,7 @@ class AgentTaskPlanMysqlIntegrationTest {
         dataSource = new SingleConnectionDataSource(connection, true);
         try (Statement statement = connection.createStatement()) {
             // 临时表遮蔽同名业务表；关闭此连接后自动消失，不执行 DROP 业务表。
-            for (String table : List.of("learning_sessions", "agent_task_plans", "agent_task_steps")) {
+            for (String table : List.of("learning_sessions", "agent_task_plans", "agent_task_steps", "agent_session_focus")) {
                 statement.execute(tableDdl(table).replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE"));
             }
             statement.executeUpdate("INSERT INTO learning_sessions (id, course_id, user_id, session_title, status) VALUES "
@@ -99,10 +101,10 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 不建立任何审批记录，也能创建并读回一份完整计划。
     @Test
     void optionalLookupReturnsMissingThenSavedPlan() {
-        String runId = UUID.randomUUID().toString();
-        assertNull(service.loadIfPresent(runId, SESSION_ID));
-        AgentTaskPlan saved = service.create(runId, SESSION_ID, request("专注查询测试"));
-        AgentTaskPlan loaded = service.loadIfPresent(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        assertNull(service.loadIfPresent(planId, SESSION_ID));
+        AgentTaskPlan saved = service.create(planId, SESSION_ID, request("专注查询测试"));
+        AgentTaskPlan loaded = service.loadIfPresent(planId, SESSION_ID);
         assertNotNull(loaded);
         assertEquals(saved.getVersion(), loaded.getVersion());
         assertEquals(saved.getSteps().getFirst().getStepId(), loaded.getSteps().getFirst().getStepId());
@@ -118,9 +120,9 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 不建立任何审批记录，也能创建并读回一份完整计划。
     @Test
     void shouldRoundTripCompletePlanWithoutApproval() {
-        String runId = UUID.randomUUID().toString();
-        AgentTaskPlan created = service.create(runId, SESSION_ID, request("生成 Java 练习题"));
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        AgentTaskPlan created = service.create(planId, SESSION_ID, request("生成 Java 练习题"));
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals(1L, loaded.getVersion());
         assertEquals("生成 Java 练习题", loaded.getGoal());
         assertEquals("五道题，附答案", loaded.getConstraints());
@@ -153,25 +155,25 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 服务和真实 SQL 都按用户、会话隔离，不能只靠上层的一次检查。
     @Test
     void shouldEnforceUserAndSessionScopeInSql() {
-        String runId = UUID.randomUUID().toString();
-        service.create(runId, SESSION_ID, request("学习 Java"));
-        assertTrue(repository.findPlan(102L, SESSION_ID, runId).isEmpty());
-        assertTrue(repository.findSteps(102L, SESSION_ID, runId).isEmpty());
-        assertTrue(repository.findPlan(USER_ID, 202L, runId).isEmpty());
-        assertTrue(repository.findSteps(USER_ID, 202L, runId).isEmpty());
-        assertThrows(ClientDataErrorException.class, () -> service.load(runId, 202L));
+        String planId = UUID.randomUUID().toString();
+        service.create(planId, SESSION_ID, request("学习 Java"));
+        assertTrue(repository.findPlan(102L, SESSION_ID, planId).isEmpty());
+        assertTrue(repository.findSteps(102L, SESSION_ID, planId).isEmpty());
+        assertTrue(repository.findPlan(USER_ID, 202L, planId).isEmpty());
+        assertTrue(repository.findSteps(USER_ID, 202L, planId).isEmpty());
+        assertThrows(ClientDataErrorException.class, () -> service.load(planId, 202L));
         BaseContext.setCurrentId(102L);
-        assertThrows(LearningSessionStatusException.class, () -> service.load(runId, SESSION_ID));
-        assertThrows(ClientDataErrorException.class, () -> service.load(runId, 203L));
+        assertThrows(LearningSessionStatusException.class, () -> service.load(planId, SESSION_ID));
+        assertThrows(ClientDataErrorException.class, () -> service.load(planId, 203L));
     }
 
     // 重复任务由数据库主键拒绝；原目标、原步骤编号和版本都必须保留。
     @Test
     void shouldRejectDuplicateWithoutOverwritingExistingPlan() {
-        String runId = UUID.randomUUID().toString();
-        AgentTaskPlan original = service.create(runId, SESSION_ID, request("原始目标"));
-        assertThrows(ClientDataErrorException.class, () -> service.create(runId, SESSION_ID, request("不应覆盖")));
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        AgentTaskPlan original = service.create(planId, SESSION_ID, request("原始目标"));
+        assertThrows(ClientDataErrorException.class, () -> service.create(planId, SESSION_ID, request("不应覆盖")));
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals("原始目标", loaded.getGoal());
         assertEquals(1L, loaded.getVersion());
         assertEquals(original.getSteps().stream().map(AgentTaskStep::getStepId).toList(),
@@ -202,14 +204,14 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 通过真实更新服务交换顺序并取消一步，不直接修改 SQL 绕过服务校验。
     @Test
     void shouldKeepStepIdentityWhenOrderChangesAndRetainCanceledStep() throws Exception {
-        String runId = UUID.randomUUID().toString();
-        AgentTaskPlan created = service.create(runId, SESSION_ID, request("验证步骤身份"));
+        String planId = UUID.randomUUID().toString();
+        AgentTaskPlan created = service.create(planId, SESSION_ID, request("验证步骤身份"));
         UpdateTaskPlanRequest update = updateRequest(created);
         Collections.swap(update.getSteps(), 0, 1);
         update.getSteps().getLast().setStatus(AgentTaskStepStatus.CANCELED);
         update.getSteps().getLast().setResultSummary("不再需要此步");
-        service.update(runId, SESSION_ID, update);
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        service.update(planId, SESSION_ID, update);
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals(2, loaded.getVersion());
         assertEquals(created.getSteps().getLast().getStepId(), loaded.getSteps().getFirst().getStepId());
         assertEquals(created.getSteps().getFirst().getStepId(), loaded.getSteps().getLast().getStepId());
@@ -221,17 +223,17 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 版本改变后，旧请求不能覆盖新内容；没有实际变化的请求也不增加版本。
     @Test
     void shouldRejectStaleAndUnchangedRequestsWithoutPersistingVersionIncrement() {
-        String runId = UUID.randomUUID().toString();
-        AgentTaskPlan created = service.create(runId, SESSION_ID, request("保持原目标"));
+        String planId = UUID.randomUUID().toString();
+        AgentTaskPlan created = service.create(planId, SESSION_ID, request("保持原目标"));
         UpdateTaskPlanRequest start = updateRequest(created);
         start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
-        service.update(runId, SESSION_ID, start);
-        AgentTaskPlan running = service.load(runId, SESSION_ID);
+        service.update(planId, SESSION_ID, start);
+        AgentTaskPlan running = service.load(planId, SESSION_ID);
         UpdateTaskPlanRequest stale = updateRequest(created);
         stale.getSteps().getLast().setDescription("这份旧修改不应生效");
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, stale));
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, updateRequest(running)));
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, stale));
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, updateRequest(running)));
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals(2, loaded.getVersion());
         assertEquals(running.getUpdatedAt(), loaded.getUpdatedAt());
         assertEquals(running.getSteps(), loaded.getSteps());
@@ -240,25 +242,25 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 非法状态组合和遗漏旧步骤都要撤销已经取得的版本，不能残留空版本变化。
     @Test
     void shouldRollbackVersionWhenStepValidationFails() {
-        String runId = UUID.randomUUID().toString();
-        service.create(runId, SESSION_ID, request("验证校验失败回滚"));
-        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        service.create(planId, SESSION_ID, request("验证校验失败回滚"));
+        AgentTaskPlan before = service.load(planId, SESSION_ID);
         UpdateTaskPlanRequest twoRunning = updateRequest(before);
         twoRunning.getSteps().forEach(step -> step.setStatus(AgentTaskStepStatus.IN_PROGRESS));
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, twoRunning));
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, twoRunning));
         UpdateTaskPlanRequest missing = updateRequest(before);
         missing.getSteps().removeLast();
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, missing));
-        AgentTaskPlan after = service.load(runId, SESSION_ID);
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, missing));
+        AgentTaskPlan after = service.load(planId, SESSION_ID);
         assertEquals(before, after);
     }
 
     // 新增步骤和第一条更新已写入后，让后面的真实 SQL 失败，整批变化必须撤销。
     @Test
     void shouldRollbackVersionOrderInsertedStepAndEarlierUpdateOnSqlFailure() {
-        String runId = UUID.randomUUID().toString();
-        service.create(runId, SESSION_ID, request("验证更新整批回滚"));
-        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        service.create(planId, SESSION_ID, request("验证更新整批回滚"));
+        AgentTaskPlan before = service.load(planId, SESSION_ID);
         UpdateTaskPlanRequest update = updateRequest(before);
         update.getSteps().getFirst().setDescription("这次修改也应回滚");
         UpdateTaskStepRequest added = new UpdateTaskStepRequest();
@@ -276,8 +278,8 @@ class AgentTaskPlanMysqlIntegrationTest {
             return repository.updateStep(invocation.getArgument(0), invocation.getArgument(1), step);
         }).when(failing).updateStep(any(), any(), any());
         assertThrows(DataIntegrityViolationException.class,
-                () -> transactionalService(failing).update(runId, SESSION_ID, update));
-        assertEquals(before, service.load(runId, SESSION_ID));
+                () -> transactionalService(failing).update(planId, SESSION_ID, update));
+        assertEquals(before, service.load(planId, SESSION_ID));
         assertEquals(2, countRows("agent_task_steps"));
         log.info("任务计划更新真实回滚通过：版本、顺序、新增步骤和前序修改全部还原");
     }
@@ -285,27 +287,27 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 已完成记录保持原样；需要重新执行时新增待执行步骤，而不是重置旧状态。
     @Test
     void shouldPreserveCompletedResultWhenAddingRedoStep() {
-        String runId = UUID.randomUUID().toString();
-        AgentTaskPlan plan = service.create(runId, SESSION_ID, request("保留执行历史"));
+        String planId = UUID.randomUUID().toString();
+        AgentTaskPlan plan = service.create(planId, SESSION_ID, request("保留执行历史"));
         UpdateTaskPlanRequest start = updateRequest(plan);
         start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
-        plan = service.update(runId, SESSION_ID, start);
+        plan = service.update(planId, SESSION_ID, start);
         UpdateTaskPlanRequest finish = updateRequest(plan);
         finish.getSteps().getFirst().setStatus(AgentTaskStepStatus.COMPLETED);
         finish.getSteps().getFirst().setResultSummary("找到资料 A 和 B");
-        service.update(runId, SESSION_ID, finish);
-        AgentTaskPlan completed = service.load(runId, SESSION_ID);
+        service.update(planId, SESSION_ID, finish);
+        AgentTaskPlan completed = service.load(planId, SESSION_ID);
         UpdateTaskPlanRequest rewrite = updateRequest(completed);
         rewrite.getSteps().getFirst().setResultSummary("偷偷改写过去结果");
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, rewrite));
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, rewrite));
         UpdateTaskPlanRequest redo = updateRequest(completed);
         UpdateTaskStepRequest newStep = new UpdateTaskStepRequest();
         newStep.setDescription("检索更新后的资料");
         newStep.setCompletionCriteria("找到新的来源");
         newStep.setStatus(AgentTaskStepStatus.PENDING);
         redo.getSteps().add(newStep);
-        service.update(runId, SESSION_ID, redo);
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        service.update(planId, SESSION_ID, redo);
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals(4, loaded.getVersion());
         assertEquals(completed.getSteps().getFirst(), loaded.getSteps().getFirst());
         assertEquals(AgentTaskStepStatus.PENDING, loaded.getSteps().getLast().getStatus());
@@ -317,19 +319,117 @@ class AgentTaskPlanMysqlIntegrationTest {
     // 直接调用更新 SQL 也要匹配归属；另一任务的步骤编号不能混入当前计划。
     @Test
     void shouldScopeUpdateSqlAndRejectForeignStepIds() {
-        String runId = UUID.randomUUID().toString();
-        service.create(runId, SESSION_ID, request("当前任务"));
-        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        service.create(planId, SESSION_ID, request("当前任务"));
+        AgentTaskPlan before = service.load(planId, SESSION_ID);
         AgentTaskPlan other = service.create(UUID.randomUUID().toString(), 202L, request("另一会话任务"));
         AgentTaskStep target = before.getSteps().getFirst();
-        assertEquals(0, repository.advanceVersion(102L, SESSION_ID, runId, 1L, before.getUpdatedAt()));
-        assertEquals(0, repository.advanceVersion(USER_ID, 202L, runId, 1L, before.getUpdatedAt()));
-        assertEquals(0, repository.parkStepPositions(102L, SESSION_ID, runId, 20));
+        assertEquals(0, repository.advanceVersion(102L, SESSION_ID, planId, 1L, before.getUpdatedAt()));
+        assertEquals(0, repository.advanceVersion(USER_ID, 202L, planId, 1L, before.getUpdatedAt()));
+        assertEquals(0, repository.parkStepPositions(102L, SESSION_ID, planId, 20));
         assertEquals(0, repository.updateStep(USER_ID, 202L, target));
         UpdateTaskPlanRequest foreign = updateRequest(before);
         foreign.getSteps().getFirst().setStepId(other.getSteps().getFirst().getStepId());
-        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, foreign));
-        assertEquals(before, service.load(runId, SESSION_ID));
+        assertThrows(ClientDataErrorException.class, () -> service.update(planId, SESSION_ID, foreign));
+        assertEquals(before, service.load(planId, SESSION_ID));
+    }
+
+    // 真实写库验证 A -> B -> A：引用、步骤编号和已开始的进度全部保留。
+    @Test
+    void shouldResumeOriginalGoalWithoutResettingSteps() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot a = goals.initialize(SESSION_ID, request("完善 Harness"));
+        UpdateTaskPlanRequest start = updateRequest(a.getCurrentPlan());
+        start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        service.update(a.getCurrentPlan().getPlanId(), SESSION_ID, start);
+        a = goals.load(SESSION_ID);
+        SessionGoalSnapshot b = goals.create(a, request("学习数据库锁"));
+        assertEquals(2, b.getCurrentPlan().getGoalNumber());
+        SessionGoalSnapshot resumed = goals.switchTo(b, "goal-1");
+        assertEquals(a.getCurrentPlan(), resumed.getCurrentPlan());
+        assertEquals(2, resumed.getGoals().size());
+        assertEquals(4, countRows("agent_task_steps"));
+        assertEquals(1, resumed.getCurrentPlan().getGoalNumber());
+        assertEquals(AgentTaskStepStatus.IN_PROGRESS, resumed.getCurrentPlan().getSteps().getFirst().getStatus());
+        // 重新初始化只读回当前目标，不新增计划，也不替换用户之前的目标。
+        assertEquals(resumed, goals.initialize(SESSION_ID, request("不能覆盖")));
+    }
+
+    // 切出去再切回来后，即使目标 ID 相同，旧版本审批也必须失效。
+    @Test
+    void shouldRejectOldSnapshotAfterSwitchingBack() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot a = goals.initialize(SESSION_ID, request("目标 A"));
+        SessionGoalSnapshot b = goals.create(a, request("目标 B"));
+        goals.switchTo(b, "goal-1");
+        assertThrows(ClientDataErrorException.class, () -> goals.requireUnchanged(a));
+        assertThrows(ClientDataErrorException.class, () -> goals.create(a, request("旧批准不得创建")));
+        assertEquals(2, countRows("agent_task_plans"));
+    }
+
+    // 等待切换审批时，搁置目标的步骤已经改变，旧目标版本不能继续使用。
+    @Test
+    void shouldRejectChangedTargetPlanBeforeSwitching() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot a = goals.initialize(SESSION_ID, request("目标 A"));
+        SessionGoalSnapshot b = goals.create(a, request("目标 B"));
+        UpdateTaskPlanRequest changed = updateRequest(a.getCurrentPlan());
+        changed.getSteps().getFirst().setDescription("已改变的执行步骤");
+        service.update(a.getCurrentPlan().getPlanId(), SESSION_ID, changed);
+        assertThrows(ClientDataErrorException.class, () -> goals.validateTarget(b, "goal-1"));
+        assertThrows(ClientDataErrorException.class, () -> goals.switchTo(b, "goal-1"));
+        assertEquals(b.getState(), goals.load(SESSION_ID).getState());
+    }
+
+    // 指针写入失败时，已插入的新计划、步骤和序号分配都要真实回滚。
+    @Test
+    void shouldRollbackNewGoalWhenPointerWriteFails() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot before = goals.initialize(SESSION_ID, request("原目标"));
+        AgentTaskPlanRepository failing = mock(AgentTaskPlanRepository.class, delegatesTo(repository));
+        doReturn(0).when(failing).changeFocus(any(), any(), any(), anyLong(), anyInt());
+        assertThrows(ClientDataErrorException.class,
+                () -> goalService(failing).create(before, request("应整体回滚")));
+        assertEquals(before, goals.load(SESSION_ID));
+        assertEquals(1, countRows("agent_task_plans"));
+        assertEquals(2, countRows("agent_task_steps"));
+    }
+
+    // 无效引用、重复目标、切到自己和跨用户请求都不能改动当前目标。
+    @Test
+    void shouldRejectInvalidGoalOperations() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot before = goals.initialize(SESSION_ID, request("原目标"));
+        assertThrows(IllegalArgumentException.class, () -> goals.switchTo(before, "goal-99"));
+        assertThrows(ClientDataErrorException.class, () -> goals.switchTo(before, "goal-1"));
+        assertThrows(ClientDataErrorException.class, () -> goals.create(before, request("原目标")));
+        assertNull(goals.load(202L));
+        BaseContext.setCurrentId(102L);
+        assertThrows(SecurityException.class, () -> goals.load(SESSION_ID));
+        assertThrows(SecurityException.class, () -> goals.create(before, request("越权")));
+        BaseContext.setCurrentId(USER_ID);
+        assertEquals(before, goals.load(SESSION_ID));
+    }
+
+    // 首次保存中途失败时，连空的当前目标指针行也一起回滚。
+    @Test
+    void shouldRollbackFirstGoalAndFocusRow() {
+        AgentTaskPlanRepository failing = mock(AgentTaskPlanRepository.class, delegatesTo(repository));
+        doReturn(0).when(failing).assignGoalNumber(any(), any(), any(), anyInt());
+        assertThrows(IllegalStateException.class,
+                () -> goalService(failing).initialize(SESSION_ID, request("失败初始化")));
+        assertTrue(repository.findFocus(USER_ID, SESSION_ID).isEmpty());
+        assertEquals(0, countRows("agent_task_plans"));
+        assertEquals(0, countRows("agent_task_steps"));
+    }
+
+    // 使用与计划服务相同的数据源，验证嵌套服务调用确实加入同一个数据库事务。
+    private SessionGoalService goalService(AgentTaskPlanRepository goalRepository) {
+        ProxyFactory proxy = new ProxyFactory(new SessionGoalService(goalRepository, service, sessions));
+        proxy.setProxyTargetClass(true);
+        proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(dataSource),
+                new AnnotationTransactionAttributeSource()));
+        return (SessionGoalService) proxy.getProxy();
     }
 
     // 把刚读取的计划转成独立更新快照，不把数据库实体直接交给更新服务。
@@ -367,9 +467,9 @@ class AgentTaskPlanMysqlIntegrationTest {
         CreateTaskPlanRequest request = request("字".repeat(AgentTaskPlanService.MAX_GOAL_LENGTH));
         request.setConstraints("字".repeat(AgentTaskPlanService.MAX_CONSTRAINTS_LENGTH));
         request.getSteps().getFirst().setDescription("📚".repeat(AgentTaskPlanService.MAX_STEP_TEXT_LENGTH));
-        String runId = UUID.randomUUID().toString();
-        service.create(runId, SESSION_ID, request);
-        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        String planId = UUID.randomUUID().toString();
+        service.create(planId, SESSION_ID, request);
+        AgentTaskPlan loaded = service.load(planId, SESSION_ID);
         assertEquals(request.getGoal(), loaded.getGoal());
         assertEquals(request.getSteps().getFirst().getDescription(), loaded.getSteps().getFirst().getDescription());
     }
@@ -383,9 +483,9 @@ class AgentTaskPlanMysqlIntegrationTest {
         return (AgentTaskPlanService) proxy.getProxy();
     }
 
-    // 只允许抽取这三个测试表，复用完整建表定义，不维护第二份 SQL。
+    // 只允许抽取这四个测试表，复用完整建表定义，不维护第二份 SQL。
     private String tableDdl(String table) throws Exception {
-        if (!List.of("learning_sessions", "agent_task_plans", "agent_task_steps").contains(table)) {
+        if (!List.of("learning_sessions", "agent_task_plans", "agent_task_steps", "agent_session_focus").contains(table)) {
             throw new IllegalArgumentException("不支持的计划测试表");
         }
         String schema = new ClassPathResource("db/migration/learningAgentSql.sql").getContentAsString(StandardCharsets.UTF_8);

@@ -65,7 +65,7 @@ public class FocusPlanPlanner {
                 if (!(response instanceof TextLlmResponse text)) {
                     throw invalidPlan("必须返回计划 JSON，不能调用工具");
                 }
-                CreateTaskPlanRequest request = parse(text.content());
+                CreateTaskPlanRequest request = parsePlan(text.content());
                 log.info("专注规划校验通过，runId={}，attempt={}，stepCount={}，responseCharacters={}",
                         runId, attempt, request.getSteps().size(), text.content().length());
                 return request;
@@ -98,8 +98,8 @@ public class FocusPlanPlanner {
                 + "\n后续主 AgentLoop 可执行的工具定义如下；你只据此拆解步骤，不在规划阶段执行：\n" + catalog;
     }
 
-    // 校验完整 JSON 和短计划限制，不截取正文中的某一段冒充合法响应。
-    private CreateTaskPlanRequest parse(String content) {
+    // 规划器和新增目标工具共用短计划校验；调用此方法不会请求模型或写数据库。
+    public static CreateTaskPlanRequest parsePlan(String content) {
         if (content == null || content.isBlank() || content.length() > MAX_RESPONSE_CHARACTERS) {
             throw invalidPlan("计划正文不能为空且不能超过 6000 个字符");
         }
@@ -137,14 +137,14 @@ public class FocusPlanPlanner {
     }
 
     // 拒绝模型自定 ID、状态和额外字段，归属与初始进度由后端生成。
-    private void requireFields(JsonNode node, Set<String> allowedFields) {
+    private static void requireFields(JsonNode node, Set<String> allowedFields) {
         if (node == null || !node.isObject() || !allowedFields.containsAll(node.propertyNames())) {
             throw invalidPlan("计划和步骤必须是对象，并且只能包含约定字段");
         }
     }
 
     // 文本必须非空且简短；数字不会被自动转成文字。
-    private String readText(JsonNode node, String field, int maximum) {
+    private static String readText(JsonNode node, String field, int maximum) {
         JsonNode value = node.path(field);
         if (!value.isTextual() || value.asString().isBlank()) {
             throw invalidPlan(field + " 必须是非空字符串");
@@ -157,7 +157,7 @@ public class FocusPlanPlanner {
     }
 
     // 规划结果属于模型边界格式错误，不应继续进入业务工具执行。
-    private HarnessException invalidPlan(String message) {
+    private static HarnessException invalidPlan(String message) {
         return new HarnessException(HarnessError.of(
                 HarnessErrorCode.LLM_INVALID_RESPONSE,
                 message,
