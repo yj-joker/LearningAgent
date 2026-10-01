@@ -4,6 +4,8 @@ import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.exception.LearningSessionStatusException;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskStepRequest;
+import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskPlanRequest;
+import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskStepRequest;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStep;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStepStatus;
@@ -21,6 +23,7 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
@@ -33,6 +36,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -89,6 +94,25 @@ class AgentTaskPlanMysqlIntegrationTest {
         if (connection != null) {
             connection.close();
         }
+    }
+
+    // 不建立任何审批记录，也能创建并读回一份完整计划。
+    @Test
+    void optionalLookupReturnsMissingThenSavedPlan() {
+        String runId = UUID.randomUUID().toString();
+        assertNull(service.loadIfPresent(runId, SESSION_ID));
+        AgentTaskPlan saved = service.create(runId, SESSION_ID, request("专注查询测试"));
+        AgentTaskPlan loaded = service.loadIfPresent(runId, SESSION_ID);
+        assertNotNull(loaded);
+        assertEquals(saved.getVersion(), loaded.getVersion());
+        assertEquals(saved.getSteps().getFirst().getStepId(), loaded.getSteps().getFirst().getStepId());
+    }
+
+    // 可选读取仍要验证会话归属，不能用“不存在”掩盖越权请求。
+    @Test
+    void optionalLookupStillChecksOwnership() {
+        assertThrows(LearningSessionStatusException.class,
+                () -> service.loadIfPresent(UUID.randomUUID().toString(), 203L));
     }
 
     // 不建立任何审批记录，也能创建并读回一份完整计划。
@@ -175,23 +199,155 @@ class AgentTaskPlanMysqlIntegrationTest {
         log.info("任务计划真实事务回滚通过：第二步 SQL 失败后，两表均无残留");
     }
 
-    // 只检验表结构能支持未来的重排和取消；第一阶段没有开放这些更新入口。
+    // 通过真实更新服务交换顺序并取消一步，不直接修改 SQL 绕过服务校验。
     @Test
     void shouldKeepStepIdentityWhenOrderChangesAndRetainCanceledStep() throws Exception {
         String runId = UUID.randomUUID().toString();
         AgentTaskPlan created = service.create(runId, SESSION_ID, request("验证步骤身份"));
-        try (Statement statement = connection.createStatement()) {
-            // 先移出原位置再交换，避免交换过程中撞到顺序唯一约束。
-            statement.executeUpdate("UPDATE agent_task_steps SET position = position + 10");
-            statement.executeUpdate("UPDATE agent_task_steps SET position = 13 - position");
-            statement.executeUpdate("UPDATE agent_task_steps SET status = 'CANCELED', result_summary = '不再需要此步' WHERE position = 2");
-        }
+        UpdateTaskPlanRequest update = updateRequest(created);
+        Collections.swap(update.getSteps(), 0, 1);
+        update.getSteps().getLast().setStatus(AgentTaskStepStatus.CANCELED);
+        update.getSteps().getLast().setResultSummary("不再需要此步");
+        service.update(runId, SESSION_ID, update);
         AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        assertEquals(2, loaded.getVersion());
         assertEquals(created.getSteps().getLast().getStepId(), loaded.getSteps().getFirst().getStepId());
         assertEquals(created.getSteps().getFirst().getStepId(), loaded.getSteps().getLast().getStepId());
         assertEquals(AgentTaskStepStatus.CANCELED, loaded.getSteps().getLast().getStatus());
         assertEquals("不再需要此步", loaded.getSteps().getLast().getResultSummary());
         assertEquals(2, countRows("agent_task_steps"));
+    }
+
+    // 版本改变后，旧请求不能覆盖新内容；没有实际变化的请求也不增加版本。
+    @Test
+    void shouldRejectStaleAndUnchangedRequestsWithoutPersistingVersionIncrement() {
+        String runId = UUID.randomUUID().toString();
+        AgentTaskPlan created = service.create(runId, SESSION_ID, request("保持原目标"));
+        UpdateTaskPlanRequest start = updateRequest(created);
+        start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        service.update(runId, SESSION_ID, start);
+        AgentTaskPlan running = service.load(runId, SESSION_ID);
+        UpdateTaskPlanRequest stale = updateRequest(created);
+        stale.getSteps().getLast().setDescription("这份旧修改不应生效");
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, stale));
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, updateRequest(running)));
+        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        assertEquals(2, loaded.getVersion());
+        assertEquals(running.getUpdatedAt(), loaded.getUpdatedAt());
+        assertEquals(running.getSteps(), loaded.getSteps());
+    }
+
+    // 非法状态组合和遗漏旧步骤都要撤销已经取得的版本，不能残留空版本变化。
+    @Test
+    void shouldRollbackVersionWhenStepValidationFails() {
+        String runId = UUID.randomUUID().toString();
+        service.create(runId, SESSION_ID, request("验证校验失败回滚"));
+        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        UpdateTaskPlanRequest twoRunning = updateRequest(before);
+        twoRunning.getSteps().forEach(step -> step.setStatus(AgentTaskStepStatus.IN_PROGRESS));
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, twoRunning));
+        UpdateTaskPlanRequest missing = updateRequest(before);
+        missing.getSteps().removeLast();
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, missing));
+        AgentTaskPlan after = service.load(runId, SESSION_ID);
+        assertEquals(before, after);
+    }
+
+    // 新增步骤和第一条更新已写入后，让后面的真实 SQL 失败，整批变化必须撤销。
+    @Test
+    void shouldRollbackVersionOrderInsertedStepAndEarlierUpdateOnSqlFailure() {
+        String runId = UUID.randomUUID().toString();
+        service.create(runId, SESSION_ID, request("验证更新整批回滚"));
+        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        UpdateTaskPlanRequest update = updateRequest(before);
+        update.getSteps().getFirst().setDescription("这次修改也应回滚");
+        UpdateTaskStepRequest added = new UpdateTaskStepRequest();
+        added.setDescription("新步骤也应回滚");
+        added.setCompletionCriteria("有结果");
+        added.setStatus(AgentTaskStepStatus.PENDING);
+        update.getSteps().addFirst(added);
+        AgentTaskPlanRepository failing = mock(AgentTaskPlanRepository.class, delegatesTo(repository));
+        doAnswer(invocation -> {
+            AgentTaskStep step = invocation.getArgument(2);
+            if (step.getPosition() == 3) {
+                // 制造数据库 NOT NULL 错误，不用模拟异常代替真实 SQL 失败。
+                step.setDescription(null);
+            }
+            return repository.updateStep(invocation.getArgument(0), invocation.getArgument(1), step);
+        }).when(failing).updateStep(any(), any(), any());
+        assertThrows(DataIntegrityViolationException.class,
+                () -> transactionalService(failing).update(runId, SESSION_ID, update));
+        assertEquals(before, service.load(runId, SESSION_ID));
+        assertEquals(2, countRows("agent_task_steps"));
+        log.info("任务计划更新真实回滚通过：版本、顺序、新增步骤和前序修改全部还原");
+    }
+
+    // 已完成记录保持原样；需要重新执行时新增待执行步骤，而不是重置旧状态。
+    @Test
+    void shouldPreserveCompletedResultWhenAddingRedoStep() {
+        String runId = UUID.randomUUID().toString();
+        AgentTaskPlan plan = service.create(runId, SESSION_ID, request("保留执行历史"));
+        UpdateTaskPlanRequest start = updateRequest(plan);
+        start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        plan = service.update(runId, SESSION_ID, start);
+        UpdateTaskPlanRequest finish = updateRequest(plan);
+        finish.getSteps().getFirst().setStatus(AgentTaskStepStatus.COMPLETED);
+        finish.getSteps().getFirst().setResultSummary("找到资料 A 和 B");
+        service.update(runId, SESSION_ID, finish);
+        AgentTaskPlan completed = service.load(runId, SESSION_ID);
+        UpdateTaskPlanRequest rewrite = updateRequest(completed);
+        rewrite.getSteps().getFirst().setResultSummary("偷偷改写过去结果");
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, rewrite));
+        UpdateTaskPlanRequest redo = updateRequest(completed);
+        UpdateTaskStepRequest newStep = new UpdateTaskStepRequest();
+        newStep.setDescription("检索更新后的资料");
+        newStep.setCompletionCriteria("找到新的来源");
+        newStep.setStatus(AgentTaskStepStatus.PENDING);
+        redo.getSteps().add(newStep);
+        service.update(runId, SESSION_ID, redo);
+        AgentTaskPlan loaded = service.load(runId, SESSION_ID);
+        assertEquals(4, loaded.getVersion());
+        assertEquals(completed.getSteps().getFirst(), loaded.getSteps().getFirst());
+        assertEquals(AgentTaskStepStatus.PENDING, loaded.getSteps().getLast().getStatus());
+        assertNotEquals(loaded.getSteps().getFirst().getStepId(), loaded.getSteps().getLast().getStepId());
+        assertEquals(completed.getGoal(), loaded.getGoal());
+        assertEquals(completed.getConstraints(), loaded.getConstraints());
+    }
+
+    // 直接调用更新 SQL 也要匹配归属；另一任务的步骤编号不能混入当前计划。
+    @Test
+    void shouldScopeUpdateSqlAndRejectForeignStepIds() {
+        String runId = UUID.randomUUID().toString();
+        service.create(runId, SESSION_ID, request("当前任务"));
+        AgentTaskPlan before = service.load(runId, SESSION_ID);
+        AgentTaskPlan other = service.create(UUID.randomUUID().toString(), 202L, request("另一会话任务"));
+        AgentTaskStep target = before.getSteps().getFirst();
+        assertEquals(0, repository.advanceVersion(102L, SESSION_ID, runId, 1L, before.getUpdatedAt()));
+        assertEquals(0, repository.advanceVersion(USER_ID, 202L, runId, 1L, before.getUpdatedAt()));
+        assertEquals(0, repository.parkStepPositions(102L, SESSION_ID, runId, 20));
+        assertEquals(0, repository.updateStep(USER_ID, 202L, target));
+        UpdateTaskPlanRequest foreign = updateRequest(before);
+        foreign.getSteps().getFirst().setStepId(other.getSteps().getFirst().getStepId());
+        assertThrows(ClientDataErrorException.class, () -> service.update(runId, SESSION_ID, foreign));
+        assertEquals(before, service.load(runId, SESSION_ID));
+    }
+
+    // 把刚读取的计划转成独立更新快照，不把数据库实体直接交给更新服务。
+    private UpdateTaskPlanRequest updateRequest(AgentTaskPlan plan) {
+        UpdateTaskPlanRequest update = new UpdateTaskPlanRequest();
+        update.setExpectedVersion(plan.getVersion());
+        List<UpdateTaskStepRequest> steps = new ArrayList<>();
+        for (AgentTaskStep step : plan.getSteps()) {
+            UpdateTaskStepRequest input = new UpdateTaskStepRequest();
+            input.setStepId(step.getStepId());
+            input.setDescription(step.getDescription());
+            input.setCompletionCriteria(step.getCompletionCriteria());
+            input.setStatus(step.getStatus());
+            input.setResultSummary(step.getResultSummary());
+            steps.add(input);
+        }
+        update.setSteps(steps);
+        return update;
     }
 
     // 数据库也拒绝非法版本、步骤状态与顺序，防止跳过 Java 校验后写入脏数据。

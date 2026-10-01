@@ -9,6 +9,10 @@ import com.yjjoker.learningagent.harness.llm.model.*;
 import com.yjjoker.learningagent.harness.memory.model.*;
 import com.yjjoker.learningagent.harness.memory.service.*;
 import com.yjjoker.learningagent.harness.model.AgentRunStatus;
+import com.yjjoker.learningagent.harness.model.AgentMode;
+import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
+import com.yjjoker.learningagent.harness.plan.model.*;
+import com.yjjoker.learningagent.harness.plan.service.*;
 import com.yjjoker.learningagent.harness.service.AgentHarnessService;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.tool.*;
@@ -34,6 +38,9 @@ class AgentApprovalFlowTest {
     private final MemoryExtractionService extraction = mock(MemoryExtractionService.class);
     private final MemoryConsolidationService consolidation = mock(MemoryConsolidationService.class);
     private final LlmClient llm = mock(LlmClient.class);
+    // 模式测试只控制计划读写结果，审批检查点仍走真实序列化。
+    private final AgentTaskPlanService plans = mock(AgentTaskPlanService.class);
+    private final FocusPlanPlanner planner = mock(FocusPlanPlanner.class);
     private final MemoryReferenceRegistry references = new MemoryReferenceRegistry();
     private final com.yjjoker.learningagent.notification.ApprovalNotifier notifier =
             mock(com.yjjoker.learningagent.notification.ApprovalNotifier.class);
@@ -465,7 +472,74 @@ class AgentApprovalFlowTest {
         harness = new AgentHarnessServiceImpl(llm, registry, hooks, history, sessions,
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null,
                 new LlmRetryExecutor(), memory, references, extraction,
-                mock(MemoryApprovalService.class), approvals);
+                mock(MemoryApprovalService.class), approvals,
+                plans, planner);
+    }
+
+    // 专注暂停后模式随检查点恢复，先执行原工具，再继续模型；不会重复规划。
+    @Test
+    void focusResumePreservesModePlanAndToolProtocol() {
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        AgentTaskPlan plan = focusPlan();
+        CreateTaskPlanRequest draft = new CreateTaskPlanRequest();
+        when(planner.createPlan(anyString(), anyString())).thenReturn(draft);
+        when(plans.create(anyString(), eq(9L), same(draft))).thenAnswer(inv -> {
+            plan.setRunId(inv.getArgument(0));
+            return plan;
+        });
+        when(plans.load(anyString(), eq(9L))).thenReturn(plan);
+        when(llm.generate(any())).thenReturn(response("focus-call", "change_setting"), new TextLlmResponse("设置已调整"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
+        assertEquals(0, calls.get());
+        AgentRunCheckpoint saved = approvals.restore(runs.get(paused.getRunId()));
+        assertEquals(AgentMode.FOCUS, saved.getMode());
+        assertTrue(saved.getMessages().getFirst().getContent().contains("按需调整设置"));
+        approveAll(paused);
+        AgentRunResult done = harness.resume(paused.getRunId());
+        assertEquals(paused.getRunId(), done.getRunId());
+        assertEquals(AgentRunStatus.COMPLETED, done.getStatus());
+        assertEquals(1, calls.get());
+        verify(planner).createPlan(anyString(), anyString());
+        verify(plans).load(paused.getRunId(), 9L);
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        List<LlmMessage> resumed = sent.getAllValues().getLast();
+        assertTrue(resumed.getFirst().getContent().contains("当前专注计划"));
+        assertEquals(1, resumed.stream().filter(m -> "focus-call".equals(m.getToolCallId())).count());
+        assertEquals("{}", runs.get(paused.getRunId()).getCheckpointJson());
+    }
+
+    // 恢复时计划丢失必须停止，不能先执行审批工具再发现前置条件不满足。
+    @Test
+    void missingFocusPlanStopsApprovedTool() {
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        when(planner.createPlan(anyString(), anyString())).thenReturn(new CreateTaskPlanRequest());
+        when(plans.create(anyString(), eq(9L), any())).thenReturn(focusPlan());
+        when(llm.generate(any())).thenReturn(response("focus-call", "change_setting"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        approveAll(paused);
+        when(plans.load(paused.getRunId(), 9L)).thenThrow(new IllegalStateException("计划不可用"));
+        assertThrows(IllegalStateException.class, () -> harness.resume(paused.getRunId()));
+        assertEquals(0, calls.get());
+        verify(llm).generate(any());
+        assertEquals(AgentRunStatus.FAILED, runs.get(paused.getRunId()).getStatus());
+    }
+
+    // 构造一个短计划，不假设步骤已经完成。
+    private AgentTaskPlan focusPlan() {
+        AgentTaskStep step = new AgentTaskStep();
+        step.setPosition(1);
+        step.setDescription("按需调整设置");
+        step.setCompletionCriteria("得到真实工具结果");
+        step.setStatus(AgentTaskStepStatus.PENDING);
+        AgentTaskPlan plan = new AgentTaskPlan();
+        plan.setGoal("调整设置");
+        plan.setVersion(1);
+        plan.setSteps(List.of(step));
+        return plan;
     }
 
     // 测试工具与记忆无关，证明通用审批不依赖 isMemoryWriteTool。

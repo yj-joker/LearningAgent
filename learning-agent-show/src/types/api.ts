@@ -170,6 +170,8 @@ export interface LearningSessionVO {
 export interface AgentChatPayload {
   sessionId: ApiId
   userMessage: string
+  // 省略时后端仍按问答处理，旧调用方无需同时升级。
+  mode?: 'CHAT' | 'FOCUS'
 }
 
 // 同一 runId 的申请来自一次模型响应；内容只是提案，尚未写入记忆。

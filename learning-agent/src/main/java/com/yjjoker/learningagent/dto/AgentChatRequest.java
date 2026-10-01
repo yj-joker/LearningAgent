@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -19,4 +20,7 @@ public class AgentChatRequest {
     @NotBlank(message = "用户消息不能为空")
     @Size(max = 10_000, message = "用户消息不能超过 10000 个字符")
     private String userMessage;
+
+    // 不传时保持问答模式，兼容已有客户端请求。
+    private AgentMode mode = AgentMode.CHAT;
 }

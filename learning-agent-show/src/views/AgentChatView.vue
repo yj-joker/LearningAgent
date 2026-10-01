@@ -42,6 +42,8 @@ const selectedSessionId = ref('')
 const draft = ref('')
 const messages = ref<ChatMessage[]>([])
 const sending = ref(false)
+// 当前发送模式只影响新请求，审批恢复仍由后端检查点决定。
+const agentMode = ref<'CHAT' | 'FOCUS'>('CHAT')
 // 审批状态来自后端，等待期间没有挂起中的聊天请求。
 const activeRun = ref<AgentRunResult | null>(null)
 const approvalBusy = ref(false)
@@ -136,7 +138,7 @@ async function sendMessage() {
   await scrollToLatest()
 
   try {
-    const result = await chatWithAgent({ sessionId: session.id, userMessage })
+    const result = await chatWithAgent({ sessionId: session.id, userMessage, mode: agentMode.value })
     if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     // 后端直接返回暂停状态；展示原工具参数，不把它误报为执行成功。
     acceptRunResult(result)
@@ -356,6 +358,14 @@ onMounted(() => composer.value?.focus())
             <strong>{{ selectedSession?.title }}</strong>
             <small><i /> AI 助教已就绪</small>
           </div>
+          <label class="agent-mode-select" for="agent-mode-select">
+            新请求模式
+            <select id="agent-mode-select" v-model="agentMode" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun)">
+              <option value="CHAT">问答模式</option>
+              <option value="FOCUS">专注模式</option>
+            </select>
+            <small>{{ activeRun ? '审批恢复保持原任务模式' : agentMode === 'FOCUS' ? '先规划，再分步完成一个目标' : '即时答疑，按需使用工具' }}</small>
+          </label>
         </header>
 
         <div ref="messageList" class="agent-message-list" aria-live="polite">
@@ -433,6 +443,9 @@ onMounted(() => composer.value?.focus())
 </template>
 
 <style scoped>
+.agent-mode-select { margin-left: auto; display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; }
+.agent-mode-select select { padding: .35rem .6rem; border: 1px solid #cbd5e1; border-radius: 6px; background: white; }
+.agent-mode-select small { color: #64748b; }
 .agent-approval-panel { margin: 1rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 12px; }
 .agent-approval-panel article { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid #e2e8f0; }
 .agent-approval-panel pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

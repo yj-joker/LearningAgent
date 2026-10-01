@@ -5,6 +5,8 @@ import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
+import com.yjjoker.learningagent.harness.plan.service.AgentTaskPlanService;
+import com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
@@ -142,7 +144,9 @@ public final class AgentHarnessTestFactory {
                 referenceRegistry,
                 new NoopMemoryExtractionService(),
                 mock(com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService.class),
-                mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class)
+                mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class),
+                mock(AgentTaskPlanService.class),
+                mock(FocusPlanPlanner.class)
         );
     }
 

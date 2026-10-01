@@ -26,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -42,6 +43,8 @@ import java.util.Locale;
 @Component
 @AllArgsConstructor
 @Slf4j
+// 默认保持初始化；本地未启动 Milvus 时可通过 MILVUS_ENABLED=false 跳过可选检查。
+@ConditionalOnProperty(prefix = "milvus", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class MilvusCollectionInitializer implements ApplicationRunner {
 
     public static final String COLLECTION_NAME = "document_chunks";

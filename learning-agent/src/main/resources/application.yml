@@ -115,6 +115,8 @@ harness:
       # 整理输出格式或引用有误时最多请求两次，网络重试复用上面的配置。
       max-attempts: ${HARNESS_MEMORY_CONSOLIDATION_MAX_ATTEMPTS:2}
 milvus:
+  # 默认开启；本地只验证 Harness HTTP 链路时可以用 MILVUS_ENABLED=false 跳过初始化。
+  enabled: ${MILVUS_ENABLED:true}
   host: ${MILVUS_HOST:127.0.0.1}
   port: ${MILVUS_PORT:19530}
   timeout: ${MILVUS_TIMEOUT:10000}

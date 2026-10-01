@@ -6,11 +6,13 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-// 计划和步骤统一从这里读写；第一阶段没有更新或删除入口。
+// 计划和步骤统一从这里读写；更新先取得计划版本，不提供删除历史步骤的入口。
 @Mapper
 public interface AgentTaskPlanRepository {
 
@@ -60,4 +62,63 @@ public interface AgentTaskPlanRepository {
     List<AgentTaskStep> findSteps(@Param("userId") Long userId,
                                   @Param("sessionId") Long sessionId,
                                   @Param("runId") String runId);
+
+    // 版本匹配才递增，同时锁住该计划行；锁一直保留到整个更新事务结束。
+    @Update("""
+            UPDATE agent_task_plans SET version = version + 1, updated_at = #{updatedAt}
+            WHERE user_id = #{userId} AND session_id = #{sessionId}
+              AND run_id = #{runId} AND version = #{expectedVersion}
+            """)
+    int advanceVersion(@Param("userId") Long userId, @Param("sessionId") Long sessionId,
+                       @Param("runId") String runId, @Param("expectedVersion") long expectedVersion,
+                       @Param("updatedAt") LocalDateTime updatedAt);
+
+    // 写事务使用当前读，不能在取得版本后又读取事务早期的旧快照。
+    @Select("""
+            SELECT run_id AS runId, user_id AS userId, session_id AS sessionId,
+                   goal, constraints_text AS `constraints`, version,
+                   created_at AS createdAt, updated_at AS updatedAt
+            FROM agent_task_plans
+            WHERE user_id = #{userId} AND session_id = #{sessionId} AND run_id = #{runId}
+            FOR UPDATE
+            """)
+    Optional<AgentTaskPlan> findPlanForUpdate(@Param("userId") Long userId,
+                                             @Param("sessionId") Long sessionId,
+                                             @Param("runId") String runId);
+
+    // 按固定顺序锁定本任务的步骤，校验与保存期间不让其他写入改变它们。
+    @Select("""
+            SELECT s.step_id AS stepId, s.run_id AS runId, s.position, s.description,
+                   s.completion_criteria AS completionCriteria, s.status,
+                   s.result_summary AS resultSummary,
+                   s.created_at AS createdAt, s.updated_at AS updatedAt
+            FROM agent_task_steps s
+            JOIN agent_task_plans p ON p.run_id = s.run_id
+            WHERE p.user_id = #{userId} AND p.session_id = #{sessionId} AND p.run_id = #{runId}
+            ORDER BY s.position, s.step_id FOR UPDATE
+            """)
+    List<AgentTaskStep> findStepsForUpdate(@Param("userId") Long userId,
+                                          @Param("sessionId") Long sessionId,
+                                          @Param("runId") String runId);
+
+    // 先把旧顺序移出 1～20，再写新顺序，避免交换两步时撞到唯一索引。
+    @Update("""
+            UPDATE agent_task_steps s JOIN agent_task_plans p ON p.run_id = s.run_id
+            SET s.position = s.position + #{offset}
+            WHERE p.user_id = #{userId} AND p.session_id = #{sessionId} AND p.run_id = #{runId}
+            """)
+    int parkStepPositions(@Param("userId") Long userId, @Param("sessionId") Long sessionId,
+                          @Param("runId") String runId, @Param("offset") int offset);
+
+    // 只更新本任务中的原步骤，不替换固定编号、所属任务或创建时间。
+    @Update("""
+            UPDATE agent_task_steps s JOIN agent_task_plans p ON p.run_id = s.run_id
+            SET s.position = #{step.position}, s.description = #{step.description},
+                s.completion_criteria = #{step.completionCriteria}, s.status = #{step.status},
+                s.result_summary = #{step.resultSummary}, s.updated_at = #{step.updatedAt}
+            WHERE p.user_id = #{userId} AND p.session_id = #{sessionId}
+              AND p.run_id = #{step.runId} AND s.step_id = #{step.stepId}
+            """)
+    int updateStep(@Param("userId") Long userId, @Param("sessionId") Long sessionId,
+                   @Param("step") AgentTaskStep step);
 }
