@@ -30,7 +30,7 @@ public class SessionGoalToolService {
     // 新增目标直接携带待审批的短计划，批准后不再生成另一份用户没看过的计划。
     public Map<String, Object> createSchema() {
         Map<String, Object> step = Map.of("type", "object", "properties", Map.of(
-                "description", text("执行步骤", 200), "completionCriteria", text("完成条件", 200)),
+                "description", text("执行步骤", 200), "completionCriteria", text("可观察的完成条件；学习类说明用户至少能解释或做到什么，不把助手讲完视为掌握", 200)),
                 "required", List.of("description", "completionCriteria"), "additionalProperties", false);
         return Map.of("type", "object", "properties", Map.of(
                 "goal", text("本轮用户希望新增的目标；已有目标应切换而不是重复创建", 500),

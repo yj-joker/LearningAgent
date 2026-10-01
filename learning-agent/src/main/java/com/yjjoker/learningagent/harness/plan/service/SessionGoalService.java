@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.plan.service;
 
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
+import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.SessionFocusState;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
@@ -72,6 +73,25 @@ public class SessionGoalService {
         log.info("会话目标切换已写入，等待事务提交，sessionId={}，goalNumber={}，focusVersion={}",
                 state.getSessionId(), target.getGoalNumber(), state.getVersion());
         return snapshot(state);
+    }
+
+    // 审批前确认目标版本和状态流转合法；这个入口绝不写库。
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public void validateProgress(SessionGoalSnapshot expected, UpdateTaskPlanRequest request) {
+        requireUnchanged(expected);
+        plans.validateUpdate(expected.getCurrentPlan(), request);
+    }
+
+    // 批准后锁住当前目标，再一次提交全部步骤变化；等待审批期间不持有锁。
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public SessionGoalSnapshot updateProgress(SessionGoalSnapshot expected, UpdateTaskPlanRequest request) {
+        SessionFocusState state = lockExpected(expected, null);
+        plans.update(state.getActivePlanId(), state.getSessionId(), request);
+        // 计划版本已递增，返回新快照，供本轮继续执行和下一次暂停使用。
+        SessionGoalSnapshot updated = snapshot(state);
+        log.info("步骤进度已写入，等待事务提交，sessionId={}，planId={}，planVersion={}",
+                state.getSessionId(), state.getActivePlanId(), updated.getCurrentPlan().getVersion());
+        return updated;
     }
 
     // 审批前和恢复时检查同一份快照；过期批准不能被解释为对新目标的授权。

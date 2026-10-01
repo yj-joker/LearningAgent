@@ -13,9 +13,10 @@ public class AgentTaskStep {
     // 从 1 开始的执行顺序，和步骤身份分开保存。
     private int position;
     private String description;
+    // 学习类步骤描述用户至少能解释或做到什么；允许用户主动继续，但不伪装成已验证掌握。
     private String completionCriteria;
     private AgentTaskStepStatus status;
-    // 记录简短结果、依据或受阻原因；不保存完整工具正文。
+    // 保存确认方式、简短理由和相关用户原话；完整对话仍留在消息表，不在此重复保存。
     private String resultSummary;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

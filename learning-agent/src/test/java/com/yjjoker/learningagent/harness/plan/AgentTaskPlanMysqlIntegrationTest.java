@@ -423,6 +423,66 @@ class AgentTaskPlanMysqlIntegrationTest {
         assertEquals(0, countRows("agent_task_steps"));
     }
 
+    // 真 MySQL 验证预检只读、开始和批量推进写入，以及完成依据读回。
+    @Test
+    void shouldPersistApprovedProgressAndKeepCriteria() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot before = goals.initialize(SESSION_ID, request("步骤进度确认"));
+        UpdateTaskPlanRequest start = updateRequest(before.getCurrentPlan());
+        start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        start.getSteps().getFirst().setResultSummary("用户批准开始当前步骤");
+        goals.validateProgress(before, start);
+        assertEquals(before, goals.load(SESSION_ID));
+        SessionGoalSnapshot running = goals.updateProgress(before, start);
+        assertEquals(2, running.getCurrentPlan().getVersion());
+        UpdateTaskPlanRequest advance = updateRequest(running.getCurrentPlan());
+        advance.getSteps().getFirst().setStatus(AgentTaskStepStatus.COMPLETED);
+        advance.getSteps().getFirst().setResultSummary("用户确认继续，未验证掌握。用户原话：先通过这一阶段。");
+        advance.getSteps().get(1).setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        advance.getSteps().get(1).setResultSummary("开始下一阶段");
+        SessionGoalSnapshot completed = goals.updateProgress(running, advance);
+        assertEquals(3, completed.getCurrentPlan().getVersion());
+        assertEquals(AgentTaskStepStatus.COMPLETED, completed.getCurrentPlan().getSteps().getFirst().getStatus());
+        assertEquals(AgentTaskStepStatus.IN_PROGRESS, completed.getCurrentPlan().getSteps().get(1).getStatus());
+        assertEquals(before.getCurrentPlan().getSteps().getFirst().getCompletionCriteria(),
+                completed.getCurrentPlan().getSteps().getFirst().getCompletionCriteria());
+        assertTrue(completed.getCurrentPlan().getSteps().getFirst().getResultSummary().contains("未验证掌握"));
+        assertEquals(completed, goals.load(SESSION_ID));
+        // 同一旧申请不能再次执行，也不产生第四个版本。
+        assertThrows(ClientDataErrorException.class, () -> goals.updateProgress(running, advance));
+        assertEquals(completed, goals.load(SESSION_ID));
+        log.info("步骤进度真实 MySQL 验证通过，planVersion={}，stepCount={}",
+                completed.getCurrentPlan().getVersion(), completed.getCurrentPlan().getSteps().size());
+    }
+
+    // 即使传入合法的步骤申请，切换目标后旧审批也不能继续改原目标。
+    @Test
+    void shouldRejectProgressForOldActiveGoal() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot before = goals.initialize(SESSION_ID, request("旧学习目标"));
+        UpdateTaskPlanRequest start = updateRequest(before.getCurrentPlan());
+        start.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        goals.validateProgress(before, start);
+        SessionGoalSnapshot other = goals.create(before, request("新学习目标"));
+        assertThrows(ClientDataErrorException.class, () -> goals.updateProgress(before, start));
+        assertEquals(other, goals.load(SESSION_ID));
+        assertEquals(AgentTaskStepStatus.PENDING, service.load(before.getCurrentPlan().getPlanId(), SESSION_ID)
+                .getSteps().getFirst().getStatus());
+    }
+
+    // 批次后面的状态不合法时，前面的变化和版本一起回滚，不能只完成一半。
+    @Test
+    void shouldRollbackInvalidProgressBatch() {
+        SessionGoalService goals = goalService(repository);
+        SessionGoalSnapshot before = goals.initialize(SESSION_ID, request("原子进度更新"));
+        UpdateTaskPlanRequest invalid = updateRequest(before.getCurrentPlan());
+        invalid.getSteps().getFirst().setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        invalid.getSteps().get(1).setStatus(AgentTaskStepStatus.COMPLETED);
+        invalid.getSteps().get(1).setResultSummary("不能从未开始直接完成");
+        assertThrows(ClientDataErrorException.class, () -> goals.updateProgress(before, invalid));
+        assertEquals(before, goals.load(SESSION_ID));
+    }
+
     // 使用与计划服务相同的数据源，验证嵌套服务调用确实加入同一个数据库事务。
     private SessionGoalService goalService(AgentTaskPlanRepository goalRepository) {
         ProxyFactory proxy = new ProxyFactory(new SessionGoalService(goalRepository, service, sessions));

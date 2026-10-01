@@ -191,6 +191,21 @@ public class AgentTaskPlanService {
         }
     }
 
+    // 审批预检复用正式更新的规则，但只生成内存副本，不递增版本或写数据库。
+    public void validateUpdate(AgentTaskPlan plan, UpdateTaskPlanRequest request) {
+        requireUpdateRequest(request);
+        if (plan == null || plan.getVersion() != request.getExpectedVersion()) {
+            throw new ClientDataErrorException("计划版本已变化，请重新读取步骤");
+        }
+        Map<String, AgentTaskStep> originals = indexStoredSteps(plan.getPlanId(), plan.getSteps());
+        List<AgentTaskStep> updated = prepareUpdatedSteps(plan.getPlanId(), originals,
+                request.getSteps(), LocalDateTime.now());
+        // 相同申请不再次审批，也不制造一条没有实际变化的版本。
+        if (updated.stream().allMatch(step -> sameStep(originals.get(step.getStepId()), step))) {
+            throw new ClientDataErrorException("步骤没有变化，无需申请更新");
+        }
+    }
+
     // 写库前检查请求大小和版本范围，不让空请求或版本溢出进入更新事务。
     private void requireUpdateRequest(UpdateTaskPlanRequest request) {
         if (request == null || request.getExpectedVersion() == null

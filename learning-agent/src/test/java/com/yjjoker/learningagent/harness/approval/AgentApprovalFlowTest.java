@@ -625,6 +625,98 @@ class AgentApprovalFlowTest {
                 && m.getContent().contains("EXCLUSIVE_TOOL_BATCH")).count());
     }
 
+    // 进度工具复用真实审批暂停和检查点；批准、恢复成功后才刷新模型状态。
+    @Test
+    void confirmsProgressThenRefreshesPromptAndDoesNotRepeatExecution() {
+        SessionGoalSnapshot before = progressSnapshot();
+        SessionGoalSnapshot after = new JsonMapper().readValue(new JsonMapper().writeValueAsString(before), SessionGoalSnapshot.class);
+        after.getCurrentPlan().setVersion(2);
+        after.getCurrentPlan().getSteps().getFirst().setStatus(AgentTaskStepStatus.COMPLETED);
+        after.getCurrentPlan().getSteps().getFirst().setResultSummary("用户确认继续，未验证掌握");
+        when(plans.load(9L)).thenReturn(before);
+        when(plans.updateProgress(any(), any())).thenReturn(after);
+        var tool = new com.yjjoker.learningagent.harness.tool.impl.UpdateTaskProgressTool(new TaskProgressToolService(goalContext, plans));
+        build(List.of(tool), List.of());
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(new ToolCall("progress", tool.name(), progressInput()))),
+                new TextLlmResponse("已按你的确认更新步骤；尚未验证掌握程度。"));
+        AgentRunResult paused = harness.run(9L, "本步骤通过，继续下一步", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
+        verify(plans, never()).updateProgress(any(), any());
+        verify(llm, times(1)).generate(any());
+        approveAll(paused);
+        verify(plans, never()).updateProgress(any(), any());
+        AgentRunResult finished = harness.resume(paused.getRunId());
+        assertEquals(AgentRunStatus.COMPLETED, finished.getStatus());
+        verify(plans).updateProgress(any(), any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        String prompt = sent.getAllValues().getLast().getFirst().getContent();
+        assertTrue(prompt.contains("[COMPLETED]"));
+        assertTrue(prompt.contains("goal-1-v2-step-1"));
+        assertTrue(prompt.contains("未验证掌握"));
+        assertFalse(prompt.contains("goal-1-v1-step-1"));
+        assertTrue(sent.getAllValues().getLast().stream()
+                .filter(m -> "progress".equals(m.getToolCallId())).allMatch(m -> !m.isContextReplayable()));
+        assertEquals(finished.getAnswer(), harness.resume(paused.getRunId()).getAnswer());
+        verify(plans, times(1)).updateProgress(any(), any());
+        verify(llm, times(2)).generate(any());
+        assertEquals("{}", runs.get(paused.getRunId()).getCheckpointJson());
+        assertThrows(SecurityException.class, goalContext::require);
+    }
+
+    // 用户拒绝后保留原进度，并把拒绝结果交回模型，而不是伪造成功。
+    @Test
+    void rejectedProgressKeepsOriginalStepState() {
+        when(plans.load(9L)).thenReturn(progressSnapshot());
+        var tool = new com.yjjoker.learningagent.harness.tool.impl.UpdateTaskProgressTool(new TaskProgressToolService(goalContext, plans));
+        build(List.of(tool), List.of());
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(new ToolCall("progress", tool.name(), progressInput()))),
+                new TextLlmResponse("没有更新进度，继续当前步骤。"));
+        AgentRunResult paused = harness.run(9L, "本步骤通过，继续下一步", AgentMode.FOCUS);
+        approvals.decide(paused.getRunId(), 1, "progress", false, "还没有完成");
+        harness.resume(paused.getRunId());
+        verify(plans, never()).updateProgress(any(), any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(2)).generate(sent.capture());
+        assertTrue(sent.getAllValues().getLast().getFirst().getContent().contains("[IN_PROGRESS]"));
+        assertTrue(sent.getAllValues().getLast().stream().filter(m -> "tool".equals(m.getRole()))
+                .anyMatch(m -> m.getContent().contains("APPROVAL_REJECTED")));
+    }
+
+    // 审批等待期间版本已变化，恢复必须在执行进度工具之前停止。
+    @Test
+    void changedPlanStopsApprovedProgressBeforeExecution() {
+        when(plans.load(9L)).thenReturn(progressSnapshot());
+        var tool = new com.yjjoker.learningagent.harness.tool.impl.UpdateTaskProgressTool(new TaskProgressToolService(goalContext, plans));
+        build(List.of(tool), List.of());
+        when(llm.generate(any())).thenReturn(new ToolCallLlmResponse(List.of(new ToolCall("progress", tool.name(), progressInput()))));
+        AgentRunResult paused = harness.run(9L, "本步骤通过，继续下一步", AgentMode.FOCUS);
+        approveAll(paused);
+        doThrow(new com.yjjoker.learningagent.exception.ClientDataErrorException("计划版本已变化"))
+                .when(plans).requireUnchanged(any());
+        assertThrows(com.yjjoker.learningagent.exception.ClientDataErrorException.class, () -> harness.resume(paused.getRunId()));
+        verify(plans, never()).updateProgress(any(), any());
+        verify(llm, times(1)).generate(any());
+    }
+
+    // 用户原话随检查点恢复；对话依据不能被助手的结论代替。
+    private String progressInput() {
+        return """
+                {"updates":[{"stepRef":"goal-1-v1-step-1","status":"COMPLETED","reason":"用户要求继续学习",\
+                "completionBasis":"USER_CONFIRMED","userEvidence":"本步骤通过，继续下一步"}]}
+                """;
+    }
+
+    // 补齐工具解析需要的固定身份，保持既有其他审批测试的样例不变。
+    private SessionGoalSnapshot progressSnapshot() {
+        SessionGoalSnapshot snapshot = focusSnapshot();
+        AgentTaskStep step = snapshot.getCurrentPlan().getSteps().getFirst();
+        step.setStepId(UUID.randomUUID().toString());
+        step.setPlanId(snapshot.getCurrentPlan().getPlanId());
+        step.setStatus(AgentTaskStepStatus.IN_PROGRESS);
+        return snapshot;
+    }
+
     // 构造一个短计划，不假设步骤已经完成。
     private SessionGoalSnapshot focusSnapshot() {
         AgentTaskStep step = new AgentTaskStep();
