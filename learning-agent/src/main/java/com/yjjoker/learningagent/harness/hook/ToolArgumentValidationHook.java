@@ -26,7 +26,7 @@ public class ToolArgumentValidationHook implements AgentHook {
 
         // 即使工具没有参数，模型也应该返回空 JSON 对象 {}，而不是 null 或空字符串。
         if (arguments == null || arguments.isBlank()) {
-            return ToolCallHookResult.reject(
+            return ToolCallHookResult.validationFailed(
                     "INVALID_TOOL_ARGUMENTS",
                     "工具调用参数不能为空，请按照工具参数要求重新生成",
                     true
@@ -34,7 +34,7 @@ public class ToolArgumentValidationHook implements AgentHook {
         }
 
         if (arguments.length() > MAX_ARGUMENT_LENGTH) {
-            return ToolCallHookResult.reject(
+            return ToolCallHookResult.validationFailed(
                     "TOOL_ARGUMENTS_TOO_LARGE",
                     "工具调用参数过大，无法继续执行",
                     false
@@ -46,7 +46,7 @@ public class ToolArgumentValidationHook implements AgentHook {
 
             // 当前所有工具的参数 Schema 顶层都是 object，因此数组、字符串和数字都不能直接作为参数。
             if (argumentsNode == null || !argumentsNode.isObject()) {
-                return ToolCallHookResult.reject(
+                return ToolCallHookResult.validationFailed(
                         "INVALID_TOOL_ARGUMENTS",
                         "工具调用参数必须是 JSON 对象，请按照工具参数要求重新生成",
                         true
@@ -54,7 +54,7 @@ public class ToolArgumentValidationHook implements AgentHook {
             }
         } catch (JacksonException exception) {
             // 不把 Jackson 的详细解析错误交给模型，避免泄露内部实现并保持错误信息稳定。
-            return ToolCallHookResult.reject(
+            return ToolCallHookResult.validationFailed(
                     "INVALID_TOOL_ARGUMENTS",
                     "工具调用参数不是合法的 JSON，请按照工具参数要求重新生成",
                     true

@@ -24,6 +24,7 @@ import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.AgentRunResult;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.*;
 
@@ -120,6 +121,30 @@ class AgentHarnessModeTest {
         verify(plans, never()).initialize(anyLong(), any());
     }
 
+    // 精简的是重复规则，不能删掉模型定位目标、理解完成条件所需的真实数据。
+    @Test
+    void compactPromptPreservesCurrentProgressAndLearningBoundary() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        AgentRunResult result = harness.run(9L, "给我讲解第一步", AgentMode.FOCUS);
+
+        // 核对真实请求与 HTTP 结果使用同一份进度，不从回答文字推断完成状态。
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(client).generate(sent.capture());
+        String system = sent.getValue().getFirst().getContent();
+        assertTrue(system.contains("当前目标引用：" + result.getProgress().getGoalRef()));
+        assertTrue(system.contains("计划版本：" + result.getProgress().getPlanVersion()));
+        assertTrue(system.contains(result.getProgress().getSteps().getFirst().getStepRef()));
+        assertTrue(system.contains("[PENDING] 解释原子性"));
+        assertTrue(system.contains("完成条件：给出转账例子"));
+        assertTrue(system.contains("不是已经满足的证明"));
+        assertTrue(system.contains("历史助手的说法不是执行凭据"));
+        // 动态目标块不重复逐项指挥工具；正式变更仍只能通过原工具和审批完成。
+        assertFalse(system.contains("update_task_progress"));
+        assertFalse(system.contains("create_memory"));
+        verify(plans, never()).updateProgress(any(), any());
+        verify(review).review(any(), any());
+    }
+
     // 规划格式两次失败时，不执行主模型和数据库写入。
     @Test
     void invalidPlanStopsBeforeMainLoop() {
@@ -175,7 +200,15 @@ class AgentHarnessModeTest {
 
         assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
         assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, result.getAnswer());
-        verify(client, times(2)).generate(any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(client, times(2)).generate(sent.capture());
+        // 允许补行动时也必须收到完整反馈，但不会因此直接修改进度。
+        var feedback = new JsonMapper().readTree(sent.getAllValues().getLast().getLast().getContent());
+        assertEquals("RETRY_MODEL", feedback.path("correctionAction").asText());
+        assertEquals("用户要求的操作未执行", feedback.path("reviewReason").asText());
+        assertEquals("按用户请求提交必要行动，不能只说完成", feedback.path("reviewSuggestion").asText());
+        assertEquals("好的，第一步已经完成。", feedback.path("draftToCorrect").asText());
+        verify(client, never()).generateWithoutTools(any());
         verify(plans, never()).updateProgress(any(), any());
     }
 
@@ -191,12 +224,75 @@ class AgentHarnessModeTest {
         AgentRunResult result = harness.run(9L, "讲解集合", AgentMode.FOCUS);
         assertEquals("这是第一步讲解。你想练习一下吗？", result.getAnswer());
         verify(client).generate(any());
-        verify(client).generateWithoutTools(any());
-        verify(review, times(2)).review(any(), any());
+        ArgumentCaptor<List<LlmMessage>> corrected = ArgumentCaptor.forClass(List.class);
+        verify(client).generateWithoutTools(corrected.capture());
+        // 原用户消息和数据库进度保留，原因、建议与错误草稿单独放在临时 JSON 中。
+        List<LlmMessage> correctionMessages = corrected.getValue();
+        var feedback = new JsonMapper().readTree(correctionMessages.getLast().getContent());
+        assertEquals("REWRITE_WITHOUT_TOOLS", feedback.path("correctionAction").asText());
+        assertEquals("没有用户反馈", feedback.path("reviewReason").asText());
+        assertEquals("只讲解，不断言掌握", feedback.path("reviewSuggestion").asText());
+        assertEquals("你已掌握，第一步完成。", feedback.path("draftToCorrect").asText());
+        assertFalse(feedback.path("draftTruncated").asBoolean());
+        assertEquals("讲解集合", correctionMessages.get(1).getContent());
+        assertTrue(correctionMessages.getFirst().getContent().contains("[PENDING] 解释原子性"));
+        assertTrue(correctionMessages.getFirst().getContent().contains("若与实际审批、工具结果或最新进度冲突，以后者为准"));
+        // 复审仍读取原对话，不能把临时反馈误当成用户的另一条要求。
+        ArgumentCaptor<AnswerReviewRequest> reviewed = ArgumentCaptor.forClass(AnswerReviewRequest.class);
+        verify(review, times(2)).review(any(), reviewed.capture());
+        assertEquals("讲解集合", reviewed.getValue().getUserMessage());
+        assertEquals(List.of("system", "user"), reviewed.getValue().getDialogue().stream().map(LlmMessage::getRole).toList());
+        assertFalse(reviewed.getValue().getDialogue().getFirst().getContent().contains("【回答审查反馈】"));
         ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
         verify(history).appendMessages(eq(9L), saved.capture());
         assertEquals(List.of("讲解集合", result.getAnswer()), saved.getValue().stream().map(LlmMessage::getContent).toList());
         assertEquals(AgentTaskStepStatus.PENDING, result.getProgress().getSteps().getFirst().getStatus());
+    }
+
+    // 指代不明确时把原因交给主模型提问，不增加工具能力或推断用户已经授权。
+    @Test
+    void clarifiesAmbiguousRequestWithCompleteFeedback() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(client.generate(any())).thenReturn(new TextLlmResponse("第一步已完成。"));
+        when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse("你是想继续讲解，还是确认通过第一步？"));
+        String reason = "用户只说\"继续\"，没有明确确认通过。\n需要澄清意图。";
+        when(review.review(any(), any())).thenReturn(
+                new AnswerReviewResult(AnswerReviewResult.Action.CLARIFY, reason, "询问继续的含义，不改变进度"),
+                new AnswerReviewResult(AnswerReviewResult.Action.PASS, "已澄清", ""));
+
+        AgentRunResult result = harness.run(9L, "继续", AgentMode.FOCUS);
+
+        // 引号和换行由 JSON 序列化，主模型仍能收到完整原因，而不是拼接出的错误格式。
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(client).generateWithoutTools(sent.capture());
+        var feedback = new JsonMapper().readTree(sent.getValue().getLast().getContent());
+        assertEquals(reason, feedback.path("reviewReason").asText());
+        assertEquals("询问继续的含义，不改变进度", feedback.path("reviewSuggestion").asText());
+        assertEquals("REWRITE_WITHOUT_TOOLS", feedback.path("correctionAction").asText());
+        assertEquals("你是想继续讲解，还是确认通过第一步？", result.getAnswer());
+        assertEquals(AgentTaskStepStatus.PENDING, result.getProgress().getSteps().getFirst().getStatus());
+        verify(plans, never()).updateProgress(any(), any());
+    }
+
+    // 草稿和反馈也占上下文；放不下时返回保护回答，不超预算继续调用模型。
+    @Test
+    void oversizedCorrectionStopsBeforeSendingToModel() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(client.generate(any())).thenReturn(new TextLlmResponse("错误草稿".repeat(2_000)));
+        when(review.review(any(), any())).thenReturn(new AnswerReviewResult(
+                AnswerReviewResult.Action.REWRITE, "草稿声称步骤已完成", "仅解释现状"));
+
+        AgentRunResult result = harness.run(9L, "讲解第一步", AgentMode.FOCUS);
+
+        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, result.getAnswer());
+        verify(client).generate(any());
+        verify(client, never()).generateWithoutTools(any());
+        verify(review).review(any(), any());
+        verifyNoInteractions(extraction);
+        // 错误草稿和反馈都不保存，只保留用户问题和保护回答。
+        ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
+        verify(history).appendMessages(eq(9L), saved.capture());
+        assertEquals(List.of("讲解第一步", result.getAnswer()), saved.getValue().stream().map(LlmMessage::getContent).toList());
     }
 
     // 即使无工具接口意外返回工具调用，也不能执行它或把草稿保存成最终答案。

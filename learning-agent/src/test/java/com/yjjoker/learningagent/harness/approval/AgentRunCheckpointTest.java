@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.approval;
 import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.harness.context.RecoveryReferenceRegistry;
+import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.memory.model.*;
@@ -138,14 +139,41 @@ class AgentRunCheckpointTest {
                 7L, List.of(42L), List.of("sport"));
         ToolExecutionResult result = ToolExecutionResult.memoryWriteSuccess("已修改", receipt);
         ToolExecutionRecord record = ToolExecutionRecord.requested(1, new ToolCall("a", "update_memory", "{}"))
-                .withMemoryWriteTool(true).withOutcome(ToolExecutionRecord.Status.SUCCEEDED, result, null);
+                .withMemoryWriteTool(true).withApprovalDecision("APPROVED")
+                .withOutcome(ToolExecutionRecord.Status.SUCCEEDED, result, null);
         AgentRunCheckpoint source = new AgentRunCheckpoint();
         source.setToolExecutions(List.of(ToolExecutionSnapshot.from(record)));
         ToolExecutionRecord restored = roundTrip(source).getToolExecutions().getFirst().restore();
         assertTrue(restored.isMemoryWriteTool());
+        assertEquals("APPROVED", restored.getApprovalDecision());
         assertEquals(List.of(42L), restored.getResult().memoryWriteReceipt().getMemoryIds());
         assertEquals(MemoryOperation.UPDATE, restored.getResult().memoryWriteReceipt().getOperation());
         assertFalse(json.writeValueAsString(restored.getResult()).contains("memoryIds"));
+    }
+
+    // 检查点恢复原样保留校验失败和真正拒绝，旧拒绝不会凭 retryable 被放开。
+    @Test
+    void retainsFailureMeaningAcrossJsonRoundTrip() {
+        AgentRunContext run = new AgentRunContext();
+        ToolCall invalid = new ToolCall("invalid", "write", "{}");
+        run.requestToolExecution(invalid);
+        run.failToolValidation(invalid, ToolExecutionResult.failure("INVALID_INPUT", "修正参数", true));
+        ToolCall denied = new ToolCall("denied", "write", "{}");
+        run.requestToolExecution(denied);
+        run.recordToolApproval(denied, "REJECTED");
+        run.rejectToolExecution(denied, ToolExecutionResult.failure("DENIED", "不能执行", true));
+        AgentRunCheckpoint source = new AgentRunCheckpoint();
+        source.setToolExecutions(run.getToolExecutions().stream().map(ToolExecutionSnapshot::from).toList());
+
+        List<ToolExecutionRecord> restored = roundTrip(source).getToolExecutions().stream()
+                .map(ToolExecutionSnapshot::restore).toList();
+        assertEquals(ToolExecutionRecord.Status.VALIDATION_FAILED, restored.get(0).getStatus());
+        assertFalse(restored.get(0).blocksContinuation());
+        assertEquals(ToolExecutionRecord.Status.REJECTED, restored.get(1).getStatus());
+        assertTrue(restored.get(1).blocksContinuation());
+        assertTrue(restored.get(1).getResult().isRetryable());
+        assertEquals("REJECTED", restored.get(1).getApprovalDecision());
+        assertNull(restored.get(0).getApprovalDecision());
     }
 
     // 使用生产同款 JSON 转换，不借助对象引用保留数据。

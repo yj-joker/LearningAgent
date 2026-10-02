@@ -6,16 +6,18 @@ import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
-// 前置 Hook 分别表达允许、拒绝、需要审批；需要审批不代表权限校验已经通过。
+// 前置 Hook 分别表达允许、参数失败、真正拒绝和需要审批；需要审批不代表权限已经通过。
 // 预期内的校验失败不再依赖抛异常，Harness 可以据此选择重试或直接结束。
 @Getter
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 public class ToolCallHookResult {
 
-    // 允许、需要审批、拒绝三者互斥；false 不再直接等同于拒绝。
+    // 工厂方法保证四种结果互斥；allowed=false 不能直接等同于真正拒绝。
     private final boolean allowed;
     private final boolean approvalRequired;
     private final String approvalReason;
+    // 参数预检失败与用户拒绝分开；只有后端校验代码可以设置这个标记。
+    private final boolean validationFailure;
 
     // 拒绝信息与工具失败共用同一个错误模型。
     @Getter(AccessLevel.NONE)
@@ -23,7 +25,7 @@ public class ToolCallHookResult {
 
     // 本 Hook 不阻止调用，仍需通过其他前置检查。
     public static ToolCallHookResult allow() {
-        return new ToolCallHookResult(true, false, null, null);
+        return new ToolCallHookResult(true, false, null, false, null);
     }
 
     // 只提出审批要求，Harness 仍会继续执行后面的权限检查。
@@ -31,10 +33,21 @@ public class ToolCallHookResult {
         if (reason == null || reason.isBlank()) {
             throw new IllegalArgumentException("审批必须说明原因");
         }
-        return new ToolCallHookResult(false, true, reason, null);
+        return new ToolCallHookResult(false, true, reason, false, null);
     }
 
-    // 参数错误可交回模型修正；权限错误可以直接结束任务。
+    // 记录没有执行过的参数校验错误；是否可修正仍由 retryable 决定。
+    public static ToolCallHookResult validationFailed(String errorCode, String message, boolean retryable) {
+        return validationFailed(HarnessError.of(errorCode, message, retryable, HarnessErrorSource.HOOK));
+    }
+
+    // 仅供无副作用的预检使用，不能把执行中的未知结果当成参数错误。
+    public static ToolCallHookResult validationFailed(HarnessError error) {
+        if (error == null) throw new IllegalArgumentException("参数校验失败必须包含错误信息");
+        return new ToolCallHookResult(false, false, null, true, error);
+    }
+
+    // 拒绝代表用户、权限或策略不允许；不能仅凭 retryable=true 自动变成参数纠错。
     public static ToolCallHookResult reject(String errorCode, String message, boolean retryable) {
         return reject(HarnessError.of(
                 errorCode,
@@ -49,7 +62,7 @@ public class ToolCallHookResult {
         if (error == null) {
             throw new IllegalArgumentException("Hook 拒绝结果必须包含 HarnessError");
         }
-        return new ToolCallHookResult(false, false, null, error);
+        return new ToolCallHookResult(false, false, null, false, error);
     }
 
     // 保留旧的调用和序列化字段，调用方暂时不需要感知内部字段迁移。
@@ -57,12 +70,12 @@ public class ToolCallHookResult {
         return error == null ? null : error.getErrorCode();
     }
 
-    // 返回拒绝说明；审批原因单独保存在 approvalReason 中。
+    // 返回失败说明；审批原因单独保存在 approvalReason 中。
     public String getMessage() {
         return error == null ? null : error.getMessage();
     }
 
-    // 只判断失败能否修正，等待审批不属于重试错误。
+    // 保留错误的重试标记；Harness 还须检查失败类型，不能据此放开权限拒绝。
     public boolean isRetryable() {
         return error != null && error.isRetryable();
     }

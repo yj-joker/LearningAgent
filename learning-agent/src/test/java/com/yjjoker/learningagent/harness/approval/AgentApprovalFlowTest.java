@@ -159,6 +159,7 @@ class AgentApprovalFlowTest {
         LlmMessage tool = restored.stream().filter(m -> "tool".equals(m.getRole())).findFirst().orElseThrow();
         assertEquals("original-id", tool.getToolCallId());
         assertTrue(tool.getContent().contains("success"));
+        assertEquals("APPROVED", new JsonMapper().readTree(tool.getContent()).path("approvalDecision").asString());
         assertEquals("已完成", harness.resume(paused.getRunId()).getAnswer());
         assertEquals(1, calls.get());
         verify(llm, times(2)).generate(any());
@@ -182,6 +183,8 @@ class AgentApprovalFlowTest {
         verify(llm, times(2)).generate(messages.capture());
         assertTrue(messages.getValue().stream().anyMatch(m -> "a".equals(m.getToolCallId())
                 && m.getContent().contains("APPROVAL_REJECTED")));
+        LlmMessage denied = messages.getValue().stream().filter(m -> "a".equals(m.getToolCallId())).findFirst().orElseThrow();
+        assertEquals("REJECTED", new JsonMapper().readTree(denied.getContent()).path("approvalDecision").asString());
     }
 
     // 普通工具排在待审批工具前后都先暂停；部分批准时不能恢复或创建新聊天。
@@ -244,6 +247,10 @@ class AgentApprovalFlowTest {
         assertEquals(first.getRunId(), second.getRunId());
         assertEquals(2, second.getBatchNumber());
         assertEquals(1, calls.get());
+        // 第一批的批准事实随轨迹保存，但不是第二批工具的授权。
+        AgentRunCheckpoint secondCheckpoint = approvals.restore(runs.get(second.getRunId()));
+        assertEquals("APPROVED", secondCheckpoint.getToolExecutions().getFirst().restore().getApprovalDecision());
+        assertEquals("b", secondCheckpoint.getPendingCalls().getFirst().id());
         assertThrows(RuntimeException.class, () -> approvals.decide(first.getRunId(), 1, "a", true, null));
         approveAll(second);
         assertEquals("两次完成", harness.resume(first.getRunId()).getAnswer());
@@ -529,14 +536,85 @@ class AgentApprovalFlowTest {
         assertEquals(1, approvals.restore(runs.get(paused.getRunId())).getAnswerReviewCorrections());
         // 暂停本身没有再审查；草稿和反馈也不进入检查点。
         verify(reviewer).review(any(), any());
-        assertFalse(runs.get(paused.getRunId()).getCheckpointJson().contains("draftToCorrect"));
+        String checkpointJson = runs.get(paused.getRunId()).getCheckpointJson();
+        assertFalse(checkpointJson.contains("draftToCorrect"));
+        assertFalse(checkpointJson.contains("reviewReason"));
+        assertFalse(checkpointJson.contains("reviewSuggestion"));
+        assertFalse(checkpointJson.contains("correctionAction"));
         approveAll(paused);
         AgentRunResult done = harness.resume(paused.getRunId());
         assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, done.getAnswer());
         assertEquals(1, executions.get());
-        verify(llm, times(3)).generate(any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm, times(3)).generate(sent.capture());
+        // 第二次请求使用临时反馈补行动；批准后的第三次请求只携带真实工具结果。
+        var feedback = new JsonMapper().readTree(sent.getAllValues().get(1).getLast().getContent());
+        assertEquals("RETRY_MODEL", feedback.path("correctionAction").asText());
+        assertEquals("遗漏行动", feedback.path("reviewReason").asText());
+        assertEquals("提交用户要求的设置变更", feedback.path("reviewSuggestion").asText());
+        String resumedMessages = new JsonMapper().writeValueAsString(sent.getAllValues().getLast());
+        assertFalse(resumedMessages.contains("reviewReason"));
+        assertFalse(resumedMessages.contains("【回答审查反馈】"));
         verify(llm, never()).generateWithoutTools(any());
         verifyNoInteractions(extraction);
+    }
+
+    // 参数失败先修正，审批恢复保留失败分类和预算；批准后只执行一次并正常回答。
+    @Test
+    void correctedValidationSurvivesApprovalAndPassesFinalReview() {
+        AtomicInteger executions = new AtomicInteger();
+        AnswerReviewService reviewer = mock(AnswerReviewService.class);
+        Tool validatingTool = new Tool() {
+            // 测试工具单独声明审批能力，不给生产类增加测试分支。
+            @Override public String name() { return "change_setting"; }
+            @Override public String description() { return "调整测试设置"; }
+            @Override public boolean requiresUserApproval() { return true; }
+            // 空对象模拟可修正的参数错误，预检不执行写操作。
+            @Override public ToolExecutionResult validateApprovalInput(String input) {
+                return input.equals("{}")
+                        ? ToolExecutionResult.failure("INVALID_INPUT", "请提供 value", true)
+                        : ToolExecutionResult.success("参数有效");
+            }
+            // 计数证明只在批准并恢复之后真正执行。
+            @Override public ToolExecutionResult execute(String input) {
+                executions.incrementAndGet();
+                return ToolExecutionResult.success("设置已修改");
+            }
+        };
+        build(List.of(validatingTool), List.of(new FinalAnswerConsistencyHook(reviewer)));
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        when(llm.generate(any())).thenReturn(response("bad-input", "change_setting"),
+                new TextLlmResponse("无法修改"),
+                new ToolCallLlmResponse(List.of(new ToolCall("corrected", "change_setting", "{\"value\":1}"))),
+                new TextLlmResponse("设置已修改"));
+        when(reviewer.review(any(), any())).thenReturn(
+                new AnswerReviewResult(AnswerReviewResult.Action.CONTINUE, "参数可修正", "补上 value 后申请"),
+                new AnswerReviewResult(AnswerReviewResult.Action.PASS, "批准后已经执行", ""));
+
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
+        assertEquals(0, executions.get());
+        AgentRunCheckpoint checkpoint = approvals.restore(runs.get(paused.getRunId()));
+        assertEquals(ToolExecutionRecord.Status.VALIDATION_FAILED,
+                checkpoint.getToolExecutions().getFirst().restore().getStatus());
+        assertEquals(1, checkpoint.getAnswerReviewCorrections());
+        assertEquals(1, requests.size());
+        approveAll(paused);
+        AgentRunResult completed = harness.resume(paused.getRunId());
+        assertEquals("设置已修改", completed.getAnswer());
+        assertEquals(1, executions.get());
+        assertEquals("{}", runs.get(paused.getRunId()).getCheckpointJson());
+        verify(llm, times(4)).generate(any());
+        verify(llm, never()).generateWithoutTools(any());
+        verify(reviewer, times(2)).review(any(), any());
+        ArgumentCaptor<AgentRunContext> reviewed = ArgumentCaptor.forClass(AgentRunContext.class);
+        verify(reviewer, times(2)).review(reviewed.capture(), any());
+        // 恢复后的审查看到两次独立尝试，以及后一次已经批准和成功执行的事实。
+        var outcomes = reviewed.getValue().getToolExecutions();
+        assertEquals(ToolExecutionRecord.Status.VALIDATION_FAILED, outcomes.getFirst().getStatus());
+        assertNull(outcomes.getFirst().getApprovalDecision());
+        assertEquals(ToolExecutionRecord.Status.SUCCEEDED, outcomes.getLast().getStatus());
+        assertEquals("APPROVED", outcomes.getLast().getApprovalDecision());
     }
 
     // 拒绝后模型的虚假成功声明只允许改口，审查错误建议补执行也不能产生第二次申请。
@@ -559,7 +637,21 @@ class AgentApprovalFlowTest {
         assertEquals("你拒绝了变更，设置未修改。", done.getAnswer());
         assertEquals(0, executions.get());
         assertEquals(1, requests.size());
-        verify(llm).generateWithoutTools(any());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(llm).generateWithoutTools(sent.capture());
+        // 后端同时替换错误原因和错误建议；原审批拒绝仍作为事实保留在上下文中。
+        var feedback = new JsonMapper().readTree(sent.getValue().getLast().getContent());
+        assertEquals("REWRITE_WITHOUT_TOOLS", feedback.path("correctionAction").asText());
+        assertEquals("本轮存在真实拒绝、不可重试失败或不确定结果，后端不允许继续工具调用。",
+                feedback.path("reviewReason").asText());
+        assertEquals("只如实解释现状或询问用户，不声称成功、不重复申请。", feedback.path("reviewSuggestion").asText());
+        assertTrue(sent.getValue().stream().anyMatch(message -> "tool".equals(message.getRole())
+                && "rejected-review-call".equals(message.getToolCallId())
+                && message.getContent().contains("APPROVAL_REJECTED")));
+        // 最终历史只保存真实对话及工具结果，不把审查反馈带入下一轮。
+        ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
+        verify(history).appendMessages(eq(9L), saved.capture());
+        assertFalse(new JsonMapper().writeValueAsString(saved.getValue()).contains("reviewSuggestion"));
     }
 
     // 恢复时计划丢失必须停止，不能先执行审批工具再发现前置条件不满足。

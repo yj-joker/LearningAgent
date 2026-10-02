@@ -20,7 +20,11 @@ public class CreateMemoryTool implements Tool {
 
     // 明确本轮用户授权和目标选择规则。
     @Override
-    public String description() { return "仅当本轮用户明确要求记住新事实时调用。USER 为跨会话记忆，SESSION 为当前会话记忆；已有事实请使用 update_memory。"; }
+    public String description() {
+        // 新增的适用条件放在工具旁边；具体范围和用户依据由参数说明解释。
+        return "仅当本轮用户明确要求记住新事实时申请新增记忆，批准后才写入。先检查当前索引，已有同一事实使用 update_memory，不另建同义 key。"
+                + "独立的记忆变更可以一起申请；依赖写入结果的查询留到执行成功后。";
+    }
 
     // 让后置提取识别这是记忆写操作，而不是普通查询。
     @Override

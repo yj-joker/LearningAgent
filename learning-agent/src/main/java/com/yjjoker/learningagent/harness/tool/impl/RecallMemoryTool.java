@@ -33,14 +33,16 @@ public class RecallMemoryTool implements Tool {
     // 结构化记忆服务负责执行带范围校验的正文查询。
     private final StructuredMemoryService structuredMemoryService;
 
+    // 返回工具注册名称，模型不需要知道 Java 类名。
     @Override
     public String name() {
         return "recall_memory";
     }
 
+    // 只在摘要不足时读取正文，避免每轮为已有答案重复召回。
     @Override
     public String description() {
-        return "当记忆索引摘要不足以回答问题时，根据本次请求中的 memoryRef 读取对应记忆正文。";
+        return "记忆索引摘要不足以回答问题时，按当前 memoryRef 读取正文；摘要足够时直接使用，不猜测未展示的细节。目标不明确或已变化时用 list_memories 刷新索引。";
     }
 
     @Override

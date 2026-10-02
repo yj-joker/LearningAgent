@@ -64,6 +64,9 @@ class LlmAnswerReviewServiceTest {
         var input = new JsonMapper().readTree(sent.getValue().getLast().getContent());
         assertEquals(2, input.path("recentDialogue").size());
         assertEquals("COMPLETED", input.path("databaseProgress").path("steps").get(0).path("status").asString());
+        // 不能把规划时的教学要求当作本轮必须遵守的执行事实。
+        assertFalse(input.path("databaseProgress").has("constraints"));
+        assertFalse(input.path("databaseProgress").path("steps").get(0).has("completionCriteria"));
         var record = input.path("toolExecutions").get(0);
         assertEquals("SUCCEEDED", record.path("status").asString());
         assertTrue(record.path("argumentsTruncated").asBoolean());
@@ -78,6 +81,43 @@ class LlmAnswerReviewServiceTest {
                 "{\"action\":\"PASS\",\"reason\":\"数据库已完成\",\"instruction\":\"\"}"));
         assertEquals(AnswerReviewResult.Action.PASS,
                 service.review(new AgentRunContext(), request("第一步已完成")).getAction());
+    }
+
+    // 同名工具的校验失败与后续成功分别发送，让审查看到真正发生了哪次操作。
+    @Test
+    void sendsValidationAndSuccessAsSeparateAttempts() {
+        AgentRunContext context = new AgentRunContext();
+        ToolCall invalid = new ToolCall("attempt-1", "update_task_progress", "{}");
+        context.requestToolExecution(invalid);
+        context.failToolValidation(invalid, ToolExecutionResult.failure("INVALID_INPUT", "修正参数", true));
+        ToolCall corrected = new ToolCall("attempt-2", "update_task_progress", "{\"status\":\"COMPLETED\"}");
+        context.requestToolExecution(corrected);
+        context.recordToolApproval(corrected, "APPROVED");
+        context.startToolExecution(corrected);
+        context.completeToolExecution(corrected, ToolExecutionResult.success("已完成"));
+        when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(
+                "{\"action\":\"PASS\",\"reason\":\"第二次已成功\",\"instruction\":\"\"}"));
+        service.review(context, request("第一步已完成"));
+
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(client).generateWithoutTools(sent.capture());
+        var input = new JsonMapper().readTree(sent.getValue().getLast().getContent());
+        assertTrue(input.path("continuationAllowed").asBoolean());
+        assertEquals("讲解集合", input.path("originalUserRequest").asString());
+        assertFalse(input.path("waitingForToolApproval").asBoolean());
+        assertEquals(1, input.path("userApprovalEvents").size());
+        assertEquals("USER", input.path("userApprovalEvents").get(0).path("actor").asString());
+        assertEquals("APPROVED", input.path("userApprovalEvents").get(0).path("decision").asString());
+        assertEquals("attempt-2", input.path("userApprovalEvents").get(0).path("toolCallId").asString());
+        var attempts = input.path("toolExecutions");
+        assertEquals(2, attempts.size());
+        assertEquals("attempt-1", attempts.get(0).path("toolCallId").asString());
+        assertEquals("VALIDATION_FAILED", attempts.get(0).path("status").asString());
+        assertFalse(attempts.get(0).path("blocksContinuation").asBoolean());
+        assertEquals("attempt-2", attempts.get(1).path("toolCallId").asString());
+        assertEquals("SUCCEEDED", attempts.get(1).path("status").asString());
+        assertEquals("APPROVED", attempts.get(1).path("approvalDecision").asString());
+        assertTrue(attempts.get(0).path("approvalDecision").isNull());
     }
 
     // 输入超过预算或轨迹不完整时不发送模型，更不能静默截掉关键证据后放行。
@@ -106,6 +146,7 @@ class LlmAnswerReviewServiceTest {
         step.setStatus(AgentTaskStepStatus.COMPLETED);
         step.setCompletionCriteria("用户能解释两大体系");
         SessionGoalProgress progress = new SessionGoalProgress();
+        progress.setConstraints("最初只讲第一步，不是后续问题的永久约束");
         progress.setSteps(List.of(step));
         return new AnswerReviewRequest("讲解集合", answer, List.of(LlmMessage.user("讲解集合")), progress);
     }

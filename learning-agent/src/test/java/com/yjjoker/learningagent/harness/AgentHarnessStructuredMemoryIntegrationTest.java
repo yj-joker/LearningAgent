@@ -329,9 +329,9 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 .getResult().memoryWriteReceipt().getOperation());
     }
 
-    // 参数被前置 Hook 拒绝时，提取仍能看到 REJECTED，但工具和后置 Hook 都不能执行。
+    // 参数预检失败时，提取能看到 VALIDATION_FAILED，但工具和后置 Hook 都不能执行。
     @Test
-    void shouldRecordRejectedCallWithoutAfterToolHook() {
+    void shouldRecordValidationFailureWithoutAfterToolHook() {
         BaseContext.setCurrentId(USER_ID);
         Tool tool = queryTool();
         // 模拟被拒绝的记忆写工具，声明由 Java 实现给出而不是模型输入。
@@ -342,7 +342,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
             // 模拟参数问题，允许主模型修正或正常结束。
             @Override
             public ToolCallHookResult beforeToolExecution(AgentRunContext context, ToolCall call) {
-                return ToolCallHookResult.reject("INVALID_ARGUMENT", "需要补充参数", true);
+                return ToolCallHookResult.validationFailed("INVALID_ARGUMENT", "需要补充参数", true);
             }
         };
         AgentHarnessService harness = extractionHarness(client, mock(StructuredMemoryService.class),
@@ -353,7 +353,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         verify(tool, never()).execute(any());
         verify(recorder, never()).afterToolExecution(any(), any(), any());
         verify(client).generateWithoutTools(org.mockito.ArgumentMatchers.argThat(messages ->
-                messages.get(1).getContent().contains("REJECTED")));
+                messages.get(1).getContent().contains("VALIDATION_FAILED")));
     }
 
     // 记录 Hook 故障时，Harness 使用手头的真实结果补齐，不让工具重复执行。

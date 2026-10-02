@@ -15,9 +15,18 @@ import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import com.yjjoker.learningagent.harness.error.HarnessException;
+import com.yjjoker.learningagent.harness.memory.service.MemoryCandidatePersistenceService;
+import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
+import com.yjjoker.learningagent.harness.memory.service.MemoryToolService;
+import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
+import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
+import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
+import com.yjjoker.learningagent.harness.tool.impl.*;
+import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -29,6 +38,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.Mockito.mock;
 
 @DisplayName("阿里云 LLM 客户端测试")
 class AliyunLlmClientTest {
@@ -136,6 +147,45 @@ class AliyunLlmClientTest {
         assertEquals("call_123", toolResponse.toolCalls().getFirst().id());
         assertEquals("find_all_users", toolResponse.toolCalls().getFirst().name());
         assertEquals("{}", toolResponse.toolCalls().getFirst().arguments());
+    }
+
+    // 捕获真正发出的 HTTP 请求，验证删掉主提示词中的工具名后，工具定义和调用解析仍完整。
+    @Test
+    void shouldSendToolRulesSeparatelyFromCompactSystemPrompt() throws IOException {
+        AtomicReference<String> body = new AtomicReference<>();
+        startServer("""
+                {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"memory-call","type":"function","function":{"name":"create_memory","arguments":"{}"}}
+                ]}}]}
+                """, new AtomicReference<>(), body);
+
+        // 使用生产工具和生产参数结构；只替换数据库依赖，不执行任何写入。
+        MemoryReferenceRegistry references = new MemoryReferenceRegistry();
+        StructuredMemoryService store = mock(StructuredMemoryService.class);
+        MemoryToolService service = new MemoryToolService(references, store,
+                mock(LearningSessionRepository.class), mock(MemoryCandidatePersistenceService.class));
+        List<Tool> tools = List.of(new CreateMemoryTool(service), new UpdateMemoryTool(service),
+                new DeleteMemoryTool(service), new ListMemoriesTool(service),
+                new RecallMemoryTool(references, store), new GetOriginalToolResultTool(mock(OriginalToolResultStore.class)));
+        LlmResponse response = createClient(new ToolRegistry(tools)).generate(List.of(
+                LlmMessage.system(AgentSystemPrompt.CONTENT), LlmMessage.user("请记住本次验收标记")));
+
+        // 规则不再在 system 中重复列名，但每个工具的完整说明和参数仍随请求发送。
+        var request = new JsonMapper().readTree(body.get());
+        String system = request.path("messages").get(0).path("content").asString();
+        assertEquals(AgentSystemPrompt.CONTENT, system);
+        assertTrue(system.length() < 900, "通用规则不应重新膨胀成逐个工具的使用手册");
+        assertEquals(tools.size(), request.path("tools").size());
+        for (int i = 0; i < tools.size(); i++) {
+            Tool tool = tools.get(i);
+            var function = request.path("tools").get(i).path("function");
+            assertFalse(system.contains(tool.name()));
+            assertEquals(tool.name(), function.path("name").asString());
+            assertEquals(tool.description(), function.path("description").asString());
+            assertEquals(new JsonMapper().valueToTree(tool.parametersSchema()), function.path("parameters"));
+        }
+        assertEquals("create_memory", assertInstanceOf(ToolCallLlmResponse.class, response)
+                .toolCalls().getFirst().name());
     }
 
     @Test

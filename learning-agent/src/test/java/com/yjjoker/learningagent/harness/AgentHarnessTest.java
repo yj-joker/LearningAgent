@@ -30,6 +30,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -81,7 +83,8 @@ class AgentHarnessTest {
         List<LlmMessage> firstRequest = fakeLlmClient.receivedMessages.getFirst();
         assertEquals(2, firstRequest.size());
         assertEquals("system", firstRequest.get(0).getRole());
-        assertTrue(firstRequest.get(0).getContent().contains("不能编造数据"));
+        // 验证完整的生产提示词被注入，不把测试绑定到精简前的一句旧措辞。
+        assertEquals(AgentSystemPrompt.CONTENT, firstRequest.get(0).getContent());
         assertEquals("user", firstRequest.get(1).getRole());
         assertEquals("什么是数据库事务？", firstRequest.get(1).getContent());
         assertEquals(0, tool.executeCount);
@@ -295,14 +298,16 @@ class AgentHarnessTest {
         assertFalse(rejectedResult.get("success").asBoolean());
         assertEquals("INVALID_TOOL_ARGUMENTS", rejectedResult.get("errorCode").asString());
         assertTrue(rejectedResult.get("retryable").asBoolean());
-        assertEquals(ToolExecutionRecord.Status.REJECTED,
+        assertEquals(ToolExecutionRecord.Status.VALIDATION_FAILED,
                 recordingHook.completedContext.getToolExecutions().getFirst().getStatus());
         assertTrue(recordingHook.completedContext.getExecutedToolNames().isEmpty());
     }
 
-    @Test
-    @DisplayName("不可重试的 Hook 拒绝结果会直接返回用户")
-    void shouldReturnNonRetryableHookRejectionDirectlyToUser() {
+    // 即使旧 Hook 误把拒绝标成可重试，也不能让模型靠修正参数绕过权限。
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    @DisplayName("真正的 Hook 拒绝不能靠 retryable 标记继续执行")
+    void shouldReturnRealHookRejectionDirectlyToUser(boolean retryable) {
         ToolCall toolCall = new ToolCall("call_forbidden", "test_learning_tool", "{}");
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
                 new ToolCallLlmResponse(List.of(toolCall))
@@ -315,7 +320,7 @@ class AgentHarnessTest {
                 return ToolCallHookResult.reject(
                         "TOOL_ACCESS_DENIED",
                         "当前用户没有权限执行该操作",
-                        false
+                        retryable
                 );
             }
         };

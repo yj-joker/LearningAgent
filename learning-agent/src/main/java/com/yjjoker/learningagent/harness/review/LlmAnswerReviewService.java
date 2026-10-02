@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
+import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -69,17 +70,33 @@ public class LlmAnswerReviewService implements AnswerReviewService {
     // 把可信执行状态和不可信自然语言分开标记，审查不能把历史助手说过的话当成写入凭据。
     private String buildInput(AgentRunContext context, AnswerReviewRequest request) {
         ObjectNode root = JSON.createObjectNode();
-        root.put("userMessage", request.getUserMessage());
-        root.put("draftAnswer", request.getDraftAnswer());
-        root.set("databaseProgress", JSON.valueToTree(request.getProgress()));
+        // 审批等待分支已提前返回，不会进入最终回答审查；原始问题不包含之后的页面操作。
+        root.put("reviewPhase", "BEFORE_FINAL_ANSWER");
+        root.put("waitingForToolApproval", false);
+        root.put("originalUserRequest", request.getUserMessage());
         root.put("toolHistoryComplete", context.hasCompleteToolHistory());
-        appendDialogue(root, request.getDialogue());
+        // 后端决定是否允许补调用；审查只能建议动作，不能覆盖真实拒绝。
+        root.put("continuationAllowed", !context.hasBlockingToolOutcome());
+        var approvals = root.putArray("userApprovalEvents");
         var tools = root.putArray("toolExecutions");
         for (ToolExecutionRecord record : context.getToolExecutions()) {
+            // 页面上的批准/拒绝也是用户行动，单独列出，不能被早先“稍后确认”的文字覆盖。
+            if (record.getApprovalDecision() != null) {
+                ObjectNode event = approvals.addObject();
+                event.put("sequence", record.getSequence());
+                event.put("toolCallId", record.getToolCallId());
+                event.put("actor", "USER");
+                event.put("decision", record.getApprovalDecision());
+            }
             ObjectNode item = tools.addObject();
             item.put("sequence", record.getSequence());
+            item.put("toolCallId", record.getToolCallId());
             item.put("toolName", record.getToolName());
             item.put("status", record.getStatus().name());
+            // 用户原话可能仍写着“稍后确认”；后端审批决定才表示确认是否已经发生。
+            item.put("approvalDecision", record.getApprovalDecision());
+            // 每次尝试分别展示，避免只见到同名工具的一次失败就否定后一次成功。
+            item.put("blocksContinuation", record.blocksContinuation());
             putExcerpt(item, "arguments", record.getArguments(), 1_200);
             var result = record.getResult();
             if (result != null) {
@@ -92,7 +109,30 @@ public class LlmAnswerReviewService implements AnswerReviewService {
                 item.put("memoryWriteCommitted", result.memoryWriteReceipt() != null);
             }
         }
+        // 最后给出执行后的当前状态和待核对草稿，不让输入参数的旧版本冒充最新状态。
+        root.set("databaseProgress", progressFacts(request.getProgress()));
+        appendDialogue(root, request.getDialogue());
+        root.put("draftAnswer", request.getDraftAnswer());
         return root.toString();
+    }
+
+    // 审查只需要执行事实，不把规划模型写的教学约束和完成条件变成回答格式要求。
+    private ObjectNode progressFacts(SessionGoalProgress progress) {
+        ObjectNode facts = JSON.createObjectNode();
+        facts.put("goalRef", progress.getGoalRef());
+        facts.put("goal", progress.getGoal());
+        facts.put("planVersion", progress.getPlanVersion());
+        var steps = facts.putArray("steps");
+        for (var step : progress.getSteps()) {
+            ObjectNode item = steps.addObject();
+            item.put("stepRef", step.getStepRef());
+            item.put("position", step.getPosition());
+            item.put("description", step.getDescription());
+            item.put("status", step.getStatus().name());
+            // 结果记录帮助核对过去的确认；仍不把其自然语言当作新授权。
+            item.put("resultSummary", step.getResultSummary());
+        }
+        return facts;
     }
 
     // 只保留最近的普通对话，帮助理解“继续”等指代；摘要和系统消息不是用户原话。

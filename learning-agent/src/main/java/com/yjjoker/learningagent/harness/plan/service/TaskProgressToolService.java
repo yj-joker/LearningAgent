@@ -46,9 +46,12 @@ public class TaskProgressToolService {
     public Map<String, Object> schema() {
         Map<String, Object> properties = Map.of(
                 "stepRef", text("原样复制最新计划中的步骤引用，不使用数据库 ID", 80),
-                "status", Map.of("type", "string", "enum", List.of("IN_PROGRESS", "COMPLETED", "BLOCKED", "CANCELED")),
+                "status", Map.of("type", "string", "enum", List.of("IN_PROGRESS", "COMPLETED", "BLOCKED", "CANCELED"),
+                        "description", "IN_PROGRESS 开始，COMPLETED 完成，BLOCKED 受阻，CANCELED 取消；PENDING 不能直接完成，须先申请开始"),
                 "reason", text("本次成果或变更原因，简短说明为什么申请这个状态", 500),
-                "completionBasis", Map.of("type", "string", "enum", List.of("DIALOGUE_EVIDENCE", "USER_CONFIRMED", "NOT_APPLICABLE")),
+                // 明确与 status 的对应关系，避免把用户要求开始误填成完成确认。
+                "completionBasis", Map.of("type", "string", "enum", List.of("DIALOGUE_EVIDENCE", "USER_CONFIRMED", "NOT_APPLICABLE"),
+                        "description", "仅 status=COMPLETED 时选择 DIALOGUE_EVIDENCE（有用户对话依据）或 USER_CONFIRMED（用户明确通过或继续）；其他状态必须填 NOT_APPLICABLE，包括用户要求开始"),
                 "userEvidence", Map.of("type", "string", "maxLength", 800,
                         "description", "原样引用当前上下文中的用户话语；DIALOGUE_EVIDENCE 必填，其他情况可为空字符串"));
         Map<String, Object> change = Map.of("type", "object", "properties", properties,

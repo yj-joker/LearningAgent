@@ -15,6 +15,8 @@ public class ToolExecutionSnapshot {
     private int sequence;
     private ToolCall call;
     private boolean memoryWrite;
+    // 与执行状态一起恢复；旧检查点缺少此字段时保持未知，不补造审批事实。
+    private String approvalDecision;
     private ToolExecutionRecord.Status status;
     private String failureType;
     private boolean hasResult;
@@ -36,6 +38,8 @@ public class ToolExecutionSnapshot {
         snapshot.sequence = record.getSequence();
         snapshot.call = new ToolCall(record.getToolCallId(), record.getToolName(), record.getArguments());
         snapshot.memoryWrite = record.isMemoryWriteTool();
+        snapshot.approvalDecision = record.getApprovalDecision();
+        // 原样保存校验失败与真正拒绝，暂停后恢复不能把它们重新混为一类。
         snapshot.status = record.getStatus();
         snapshot.failureType = record.getFailureType();
         ToolExecutionResult result = record.getResult();
@@ -75,8 +79,9 @@ public class ToolExecutionSnapshot {
                 result = ToolExecutionResult.success(content);
             }
         }
+        // 旧记录仍保留原来的 REJECTED；不凭 retryable 字段把历史权限拒绝升级为可重试。
         return ToolExecutionRecord.requested(sequence, call).withMemoryWriteTool(memoryWrite)
+                .withApprovalDecision(approvalDecision)
                 .withOutcome(status, result, failureType);
     }
 }
-

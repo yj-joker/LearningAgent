@@ -65,12 +65,15 @@ class MemoryCandidatePersistenceServiceTest {
     // 失败、拒绝和只有成功文字的结果都不能成为后置提取绕过限制的理由。
     @Test
     void shouldRejectAutomaticWritesAfterUnconfirmedAttempts() {
-        for (String outcome : List.of("FAILED", "REJECTED", "ERROR", "NO_RECEIPT")) {
+        for (String outcome : List.of("FAILED", "VALIDATION_FAILED", "REJECTED", "ERROR", "NO_RECEIPT")) {
             AgentRunContext run = new AgentRunContext();
             ToolCall call = new ToolCall("write_call", "write_memory", "{}");
             run.requestToolExecution(call);
             run.classifyToolExecution(call, true);
-            if (outcome.equals("REJECTED")) {
+            // 可修正也不代表写入已完成；自动提取不能代替尚未通过审批的工具。
+            if (outcome.equals("VALIDATION_FAILED")) {
+                run.failToolValidation(call, ToolExecutionResult.failure("INVALID_INPUT", "修正参数", true));
+            } else if (outcome.equals("REJECTED")) {
                 run.rejectToolExecution(call, ToolExecutionResult.failure("DENIED", "禁止修改", false));
             } else if (outcome.equals("ERROR")) {
                 run.startToolExecution(call);

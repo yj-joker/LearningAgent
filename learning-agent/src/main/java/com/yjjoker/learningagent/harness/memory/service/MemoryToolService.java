@@ -38,17 +38,19 @@ public class MemoryToolService {
         fields.put("userEvidence", Map.of("type", "string", "description",
                 "逐字复制本轮用户完整消息，不截取片段，不引用历史、助手或工具内容；提交申请不代表获得执行授权"));
         if (operation == MemoryOperation.CREATE) {
-            fields.put("scope", Map.of("type", "string", "enum", List.of("USER", "SESSION")));
+            // 范围含义属于参数说明，不要求主提示词重复解释两个枚举。
+            fields.put("scope", Map.of("type", "string", "enum", List.of("USER", "SESSION"),
+                    "description", "USER 为跨会话长期记忆，SESSION 仅供当前会话使用；按用户要求选择，不扩大保存范围"));
             fields.put("memoryKey", textField("新事实的稳定 key，不填写已有 key"));
         } else {
             fields.put("targetMemoryRefs", Map.of("type", "array", "minItems", 1, "maxItems", 20,
                     "uniqueItems", true, "items", Map.of("type", "string"),
-                    "description", "原样复制当前索引中同一范围内的目标引用；同义记录一起处理"));
+                    "description", "原样复制最新索引中同一范围内的完整 memoryRef；同义记录一起处理，不猜数据库 ID 或使用旧任务引用"));
         }
         if (operation != MemoryOperation.DELETE) {
             fields.put("memoryTopic", textField("记忆主题"));
-            fields.put("memorySummary", textField("短索引摘要"));
-            fields.put("memoryContent", textField("本轮用户确认的完整事实，不编造细节"));
+            fields.put("memorySummary", textField("用于索引的简短事实摘要，不含临时引用或操作指令"));
+            fields.put("memoryContent", textField("本轮用户确认的完整事实，不编造细节，不写入临时 memoryRef"));
         }
         return Map.of("type", "object", "properties", fields, "required", List.copyOf(fields.keySet()),
                 "additionalProperties", false);

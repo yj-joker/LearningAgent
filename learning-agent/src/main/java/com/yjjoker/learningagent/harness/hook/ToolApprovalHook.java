@@ -20,7 +20,11 @@ public class ToolApprovalHook implements AgentHook {
         }
         var validation = tool.validateApprovalInput(call.arguments());
         if (!validation.isSuccess()) {
-            return ToolCallHookResult.reject(validation.error());
+            // 这里尚未执行工具；预检明确允许修正时返回校验失败，其余情况保守拒绝。
+            // 错误来自后端工具，不读取模型参数里的 retryable 或授权声明。
+            return validation.isRetryable()
+                    ? ToolCallHookResult.validationFailed(validation.error())
+                    : ToolCallHookResult.reject(validation.error());
         }
         // 业务工具可展示目标名称；是否暂停与恢复仍由 Harness 统一决定。
         return ToolCallHookResult.requireApproval(tool.approvalReason(call.arguments()));

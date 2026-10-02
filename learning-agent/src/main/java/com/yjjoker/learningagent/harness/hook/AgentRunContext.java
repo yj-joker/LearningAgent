@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.hook;
 
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionRecord;
@@ -14,6 +15,7 @@ import java.util.UUID;
 // 每调用一次 Harness.run()，就会创建一个独立的任务上下文。
 // 保存本次任务的运行信息，避免多个并发请求共用 Hook 时互相污染数据。
 @Getter
+@Slf4j
 public class AgentRunContext {
 
     // runId 用来把同一次任务产生的多条日志关联起来。
@@ -96,6 +98,15 @@ public class AgentRunContext {
         replaceCurrent(call, current(call).withMemoryWriteTool(memoryWriteTool));
     }
 
+    // 从已核对原调用参数的审批记录中保存决定，不从模型输入或自然语言推断授权。
+    public void recordToolApproval(ToolCall call, String decision) {
+        if (current(call).getStatus() != ToolExecutionRecord.Status.REQUESTED) {
+            throw new IllegalStateException("审批决定必须在执行前记录");
+        }
+        replaceCurrent(call, current(call).withApprovalDecision(decision));
+        log.info("工具审批事实已记录，runId={}，toolCallId={}，decision={}", runId, call.id(), decision);
+    }
+
     // 所有前置检查通过后才标记 STARTED，拒绝的请求不会被当成执行过。
     public void startToolExecution(ToolCall call) {
         replaceCurrent(call, current(call).withOutcome(ToolExecutionRecord.Status.STARTED, null, null));
@@ -111,7 +122,18 @@ public class AgentRunContext {
                 ? ToolExecutionRecord.Status.SUCCEEDED : ToolExecutionRecord.Status.FAILED, result, null));
     }
 
-    // 工具没有执行时记录拒绝结果，不触发 afterToolExecution。
+    // 工具没有执行时记录参数失败；不触发 afterToolExecution，也不冒充用户拒绝。
+    public void failToolValidation(ToolCall call, ToolExecutionResult result) {
+        if (current(call).getStatus() != ToolExecutionRecord.Status.REQUESTED
+                || result == null || result.isSuccess()) {
+            throw new IllegalStateException("只有未执行的调用才能记录参数校验失败");
+        }
+        replaceCurrent(call, current(call).withOutcome(ToolExecutionRecord.Status.VALIDATION_FAILED, result, null));
+        log.info("工具参数校验失败，runId={}，toolCallId={}，toolName={}，status=VALIDATION_FAILED，errorCode={}，retryable={}",
+                runId, call.id(), call.name(), result.getErrorCode(), result.isRetryable());
+    }
+
+    // 工具没有执行且操作被禁止时记录拒绝；不能据此自动再次申请。
     public void rejectToolExecution(ToolCall call, ToolExecutionResult result) {
         replaceCurrent(call, current(call).withOutcome(ToolExecutionRecord.Status.REJECTED, result, null));
     }
@@ -146,6 +168,11 @@ public class AgentRunContext {
         return toolExecutions.stream().anyMatch(record ->
                 Objects.equals(record.getToolName(), toolName)
                 && record.getStatus() == ToolExecutionRecord.Status.REJECTED);
+    }
+
+    // 任一真实拒绝或不确定结果都保守阻止补调用，不按工具名称合并不同尝试。
+    public boolean hasBlockingToolOutcome() {
+        return !hasCompleteToolHistory() || toolExecutions.stream().anyMatch(ToolExecutionRecord::blocksContinuation);
     }
 
     // 在纠正前扣次数；第二次不通过就结束，避免审查与主模型相互重试。

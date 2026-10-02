@@ -30,14 +30,17 @@ public class GetOriginalToolResultTool implements Tool {
     // Spring 注入的是接口，实际对象由 @Primary 的 DatabaseOriginalToolResultStore 提供。
     private final OriginalToolResultStore resultStore;
 
+    // 模型用这个名称请求恢复，不直接调用存储接口。
     @Override
     public String name() {
         return "get_original_tool_result";
     }
 
+    // 截断恢复的条件和分页方式属于本工具，不放入通用学习提示词。
     @Override
     public String description() {
-        return "当工具结果显示已截断且需要更多细节时，使用截断结果中的 recoveryRef 读取原始结果片段。每次最多读取 300 个字符。";
+        return "仅在工具结果已截断且回答需要原始细节时，按当前 recoveryRef 读取片段，每次最多 300 个字符。"
+                + "根据返回的 offset、片段长度和 hasMore 决定是否继续，已有信息足够时停止；不要猜 toolCallId。";
     }
 
     @Override

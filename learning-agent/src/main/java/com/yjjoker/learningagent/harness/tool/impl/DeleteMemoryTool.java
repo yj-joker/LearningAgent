@@ -20,7 +20,11 @@ public class DeleteMemoryTool implements Tool {
 
     // 明确本轮用户授权和目标选择规则。
     @Override
-    public String description() { return "仅当本轮用户明确要求忘记或删除记忆时调用。使用当前 targetMemoryRefs，选中待忘记事实的全部同义目标，执行假删除。"; }
+    public String description() {
+        // 删除条件和同义目标选择留在本工具说明中，不重复加入主提示词。
+        return "仅当本轮用户明确要求忘记或删除记忆时申请删除，批准后才执行假删除。选中同一范围内待忘记事实的全部同义目标，不扩大删除范围。"
+                + "目标不确定或已变化时用 list_memories 刷新，仍不明确时先询问；成功删除的事实不再当成有效记忆。";
+    }
 
     // 让后置提取识别这是记忆写操作，而不是普通查询。
     @Override

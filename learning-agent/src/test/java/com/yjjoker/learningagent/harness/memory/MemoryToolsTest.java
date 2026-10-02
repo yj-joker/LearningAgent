@@ -59,6 +59,21 @@ class MemoryToolsTest {
         assertFalse(new ListMemoriesTool(service).isMemoryWriteTool());
     }
 
+    // 主提示词移除细节后，模型仍能从生产 Schema 看见授权原文、范围和引用规则。
+    @Test
+    void shouldKeepMemoryBoundariesInToolDefinitions() {
+        var create = json.valueToTree(service.schema(CREATE)).path("properties");
+        assertTrue(create.path("userEvidence").path("description").asString().contains("本轮用户完整消息"));
+        assertTrue(create.path("scope").path("description").asString().contains("不扩大保存范围"));
+        assertTrue(create.path("memoryContent").path("description").asString().contains("不写入临时 memoryRef"));
+        // 更新和删除都需要当前目标引用，不能因为说明换了位置就允许旧任务引用。
+        for (var operation : List.of(UPDATE, DELETE)) {
+            var field = json.valueToTree(service.schema(operation)).path("properties").path("targetMemoryRefs");
+            assertTrue(field.path("description").asString().contains("完整 memoryRef"));
+            assertTrue(field.path("description").asString().contains("旧任务引用"));
+        }
+    }
+
     // 准备完草稿通过不等于审批通过，更不等于记忆已经写入。
     @Test
     void shouldPrepareDraftWithoutWritingOrReportingSuccess() {

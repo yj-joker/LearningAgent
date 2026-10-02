@@ -18,7 +18,11 @@ public class ListMemoriesTool implements Tool {
 
     // 列表只返回索引，正文仍需 recall_memory 读取。
     @Override
-    public String description() { return "查询并刷新当前用户和会话的全部有效记忆索引。返回 memoryRef、范围、key、主题和摘要，不返回正文；目标不明确或已变化时先调用。"; }
+    public String description() {
+        // 新索引替代旧快照，避免模型继续使用已删除目标或旧引用。
+        return "查询并刷新当前用户和会话的全部有效记忆索引。返回 memoryRef、范围、key、主题和摘要，不返回正文。"
+                + "用户要查看全部记忆、目标不明确或已变化时使用；以最新返回为准，缺少正文细节时可用 recall_memory。";
+    }
 
     // 列表中的短引用不能在下一次请求中直接复用。
     @Override
@@ -28,4 +32,3 @@ public class ListMemoriesTool implements Tool {
     @Override
     public ToolExecutionResult execute(String input) { return service.list(input); }
 }
-

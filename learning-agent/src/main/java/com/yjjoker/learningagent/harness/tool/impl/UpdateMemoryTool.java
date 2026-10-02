@@ -20,7 +20,11 @@ public class UpdateMemoryTool implements Tool {
 
     // 明确本轮用户授权和目标选择规则。
     @Override
-    public String description() { return "仅当本轮用户明确要求修改已有记忆时调用。使用当前索引的 targetMemoryRefs，一次选中全部同义目标；先用 list_memories 刷新不确定的目标。"; }
+    public String description() {
+        // 更新只能覆盖同一事实，不能把无关的新事实写到旧记忆上。
+        return "仅当本轮用户明确要求修改已有记忆时申请更新，批准后才写入。新旧内容必须描述同一事实；选中同一范围内全部同义目标，不包含其他独立事实。"
+                + "目标不确定或已变化时用 list_memories 刷新，仍不明确时先询问。";
+    }
 
     // 让后置提取识别这是记忆写操作，而不是普通查询。
     @Override

@@ -56,6 +56,25 @@ class TaskProgressToolServiceTest {
         assertEquals(1, original.getCurrentPlan().getVersion());
     }
 
+    // 复现真实调用中的填参错误：用户要求开始，不等于用户确认完成。
+    @Test
+    void explainsAndEnforcesBasisForStartingStep() {
+        var properties = json.valueToTree(service.schema()).path("properties")
+                .path("updates").path("items").path("properties");
+        String description = properties.path("completionBasis").path("description").asString();
+        assertTrue(description.contains("status=COMPLETED"));
+        assertTrue(description.contains("其他状态必须填 NOT_APPLICABLE"));
+
+        // 只补模型可见的参数说明，后端对错误组合的拒绝必须保持不变。
+        original.getCurrentPlan().getSteps().getFirst().setStatus(AgentTaskStepStatus.PENDING);
+        var invalid = service.update(input(change(1, "IN_PROGRESS", "USER_CONFIRMED", "")), false);
+        assertFalse(invalid.isSuccess());
+        assertTrue(invalid.isRetryable());
+        assertEquals("INVALID_STEP_PROGRESS", invalid.getErrorCode());
+        assertTrue(service.update(input(change(1, "IN_PROGRESS", "NOT_APPLICABLE", "")), false).isSuccess());
+        verify(goals, never()).updateProgress(any(), any());
+    }
+
     // 用户确认不要求答题，但结果必须保留未验证掌握的说明。
     @Test
     void commitsUserConfirmedProgressAndRefreshesReferences() {

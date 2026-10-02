@@ -20,11 +20,10 @@ public class UpdateTaskProgressTool implements Tool {
     // 说明使用时机和依据；所有变更仍要用户审批，不依赖提示词保护数据库。
     @Override
     public String description() {
+        // 状态与依据的配对规则由参数说明解释，这里只保留用途和申请边界。
         return "仅专注模式：申请更新当前目标的步骤进度。复制最新 stepRef，可在同一申请中完成当前步骤并开始下一步。"
-                + "开始用 IN_PROGRESS；完成用 COMPLETED，填写理由，按对话依据 DIALOGUE_EVIDENCE 或用户主动继续 USER_CONFIRMED 区分；"
-                + "对话依据须原样引用用户原话 userEvidence，不可用助手讲完代替用户掌握。其他状态 completionBasis 用 NOT_APPLICABLE。"
-                + "用户选择继续不需要答题证明，审批通过即可按用户确认记录；不表示掌握已验证。"
-                + "PENDING 不能直接完成，先申请开始。受阻用 BLOCKED，取消用 CANCELED。必须单独调用，批准并执行成功后才算更新。";
+                + "完成申请需要用户对话依据或明确通过、继续意愿；助手讲完不是完成证据，用户选择继续不强制答题，也不代表掌握已验证。"
+                + "必须单独调用，批准并执行成功后才算更新。";
     }
 
     // 所有状态写入先经过现有审批 Hook。
