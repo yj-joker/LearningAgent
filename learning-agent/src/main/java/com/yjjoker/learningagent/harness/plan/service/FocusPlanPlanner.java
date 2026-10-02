@@ -25,6 +25,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // 只负责调用规划提示词并解析计划，不保存计划，也不执行业务工具。
 @Service
@@ -66,6 +68,7 @@ public class FocusPlanPlanner {
                     throw invalidPlan("必须返回计划 JSON，不能调用工具");
                 }
                 CreateTaskPlanRequest request = parsePlan(text.content());
+                validateExplicitStepCoverage(userMessage, request);
                 log.info("专注规划校验通过，runId={}，attempt={}，stepCount={}，responseCharacters={}",
                         runId, attempt, request.getSteps().size(), text.content().length());
                 return request;
@@ -81,6 +84,35 @@ public class FocusPlanPlanner {
             }
         }
         throw new IllegalStateException("专注规划流程未返回结果");
+    }
+
+    // 用户明确列出多个步骤时，计划不能把后续步骤静默丢掉；不明确时仍允许一到三步。
+    private static void validateExplicitStepCoverage(String userMessage, CreateTaskPlanRequest request) {
+        int expected = explicitStepCount(userMessage);
+        if (expected > 0 && request.getSteps().size() < expected) {
+            throw invalidPlan("用户明确要求至少 " + expected + " 个步骤，不能省略后续步骤");
+        }
+    }
+
+    // 从明确的“分成两步”和“第一步、第二步”中提取最低步骤数，不尝试理解普通描述。
+    private static int explicitStepCount(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) return 0;
+        int expected = 0;
+        Matcher total = Pattern.compile("(?:分成|拆成|包含|包括)\\s*(一|二|两|三|1|2|3)\\s*(?:个)?(?:步骤|部分|阶段)").matcher(userMessage);
+        if (total.find()) expected = Math.max(expected, chineseNumber(total.group(1)));
+        Matcher ordinal = Pattern.compile("第(一|二|三|1|2|3)(?:步|部分|阶段)").matcher(userMessage);
+        while (ordinal.find()) expected = Math.max(expected, chineseNumber(ordinal.group(1)));
+        return expected;
+    }
+
+    // 把短计划中支持的中文数字转换成数量。
+    private static int chineseNumber(String value) {
+        return switch (value) {
+            case "一", "1" -> 1;
+            case "二", "两", "2" -> 2;
+            case "三", "3" -> 3;
+            default -> 0;
+        };
     }
 
     // 给规划器真实能力目录，避免拆出系统无法执行的步骤或凭空增加必填参数。

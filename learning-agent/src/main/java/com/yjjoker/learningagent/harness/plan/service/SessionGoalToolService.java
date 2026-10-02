@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.plan.service;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.harness.error.HarnessException;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
+import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,26 @@ public class SessionGoalToolService {
     // 查询也校验模式和归属；刷新索引后模型才会看到新增目标。
     public ToolExecutionResult list(String input) {
         return process("LIST", input, false);
+    }
+
+    // 查询当前目标的完整步骤和真实状态，不创建审批，也不改变目标。
+    public ToolExecutionResult progress(String input) {
+        try {
+            if (!object(input).isEmpty()) throw new IllegalArgumentException("进度查询不接收参数");
+            SessionGoalSnapshot snapshot = goals.load(context.require().getState().getSessionId());
+            if (snapshot == null) throw new ClientDataErrorException("当前会话还没有专注目标");
+            context.bind(snapshot);
+            String result = JSON.writeValueAsString(SessionGoalProgress.from(snapshot));
+            log.info("专注进度查询完成，sessionId={}，goalNumber={}，planVersion={}，stepCount={}",
+                    snapshot.getState().getSessionId(), snapshot.getCurrentPlan().getGoalNumber(),
+                    snapshot.getCurrentPlan().getVersion(), snapshot.getCurrentPlan().getSteps().size());
+            return ToolExecutionResult.success(result);
+        } catch (SecurityException exception) {
+            return ToolExecutionResult.failure("GOAL_ACCESS_DENIED", "目标工具仅供当前用户的有效专注会话使用", false);
+        } catch (ClientDataErrorException | JacksonException | IllegalArgumentException exception) {
+            log.warn("专注进度查询失败，errorType={}", exception.getClass().getSimpleName());
+            return ToolExecutionResult.failure("INVALID_GOAL_PROGRESS_QUERY", "当前进度查询失败，请重新读取专注目标", true);
+        }
     }
 
     // 审批前只校验，execute=true 时才调用事务保存；不会把预检通过说成写入成功。

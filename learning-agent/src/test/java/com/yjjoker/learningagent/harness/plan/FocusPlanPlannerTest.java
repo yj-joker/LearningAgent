@@ -36,6 +36,23 @@ class FocusPlanPlannerTest {
         verify(client, never()).generate(any());
     }
 
+    // 用户明确要求两步时，模型漏掉第二步会触发一次格式修复，而不是直接保存残缺计划。
+    @Test
+    void repairsPlanThatDropsExplicitSecondStep() {
+        String oneStep = """
+                {"goal":"学习 Java 线程池","constraints":"","steps":[{"description":"理解核心线程数","completionCriteria":"能解释核心线程数"}]}
+                """;
+        String twoSteps = """
+                {"goal":"学习 Java 线程池","constraints":"","steps":[{"description":"理解核心线程数","completionCriteria":"能解释核心线程数"},{"description":"理解最大线程数","completionCriteria":"能解释最大线程数"}]}
+                """;
+        when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(oneStep), new TextLlmResponse(twoSteps));
+
+        var result = planner.createPlan("run-test", "我要学习线程池，分成两个步骤：第一步理解核心线程数，第二步理解最大线程数。现在先讲第一步。");
+
+        assertEquals(2, result.getSteps().size());
+        verify(client, times(2)).generateWithoutTools(any());
+    }
+
     // 工具目录让规划器知道未来能做什么，但模型请求仍然不开放工具调用。
     @Test
     void suppliesRealCapabilitiesWithoutExecutingThem() {

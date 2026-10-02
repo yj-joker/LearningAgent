@@ -9,9 +9,12 @@ import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
+import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
+import com.yjjoker.learningagent.harness.plan.service.SessionGoalService;
 import com.yjjoker.learningagent.notification.ApprovalNotifier;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,7 +25,6 @@ import java.util.Objects;
 
 // 通用审批只管理任务、原参数、决定和检查点，不认识 MemoryCandidate 等领域对象。
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class AgentApprovalService {
     private static final JsonMapper JSON = new JsonMapper();
@@ -30,6 +32,29 @@ public class AgentApprovalService {
     private final LearningSessionRepository sessions;
     private final ConversationMemoryService history;
     private final ApprovalNotifier notifier;
+    private final SessionGoalService sessionGoals;
+
+    // 生产构造器显式标记，避免兼容测试构造器后 Spring 无法判断注入入口。
+    @Autowired
+    public AgentApprovalService(AgentApprovalRepository repository,
+                                LearningSessionRepository sessions,
+                                ConversationMemoryService history,
+                                ApprovalNotifier notifier,
+                                SessionGoalService sessionGoals) {
+        this.repository = repository;
+        this.sessions = sessions;
+        this.history = history;
+        this.notifier = notifier;
+        this.sessionGoals = sessionGoals;
+    }
+
+    // 保留旧测试和扩展代码使用的四参数构造器；生产环境由 Spring 注入带目标服务的构造器。
+    public AgentApprovalService(AgentApprovalRepository repository,
+                                LearningSessionRepository sessions,
+                                ConversationMemoryService history,
+                                ApprovalNotifier notifier) {
+        this(repository, sessions, history, notifier, null);
+    }
 
     // 整批预检完成后一次保存；不执行工具，不调用模型，不持锁等待用户。
     @Transactional
@@ -210,7 +235,30 @@ public class AgentApprovalService {
             case FAILED -> "恢复任务已失败，未自动重跑工具，请检查执行日志。";
         };
         return AgentRunResult.state(run.getRunId(), run.getBatchNumber(), run.getStatus(), answer,
-                repository.approvals(run.getRunId(), run.getBatchNumber()));
+                repository.approvals(run.getRunId(), run.getBatchNumber()), progressOf(run));
+    }
+
+    // 等待审批时优先读取检查点；检查点清理后再读取当前数据库状态供页面展示。
+    private SessionGoalProgress progressOf(AgentApprovalRun run) {
+        if (run.getCheckpointJson() != null && !run.getCheckpointJson().isBlank()) {
+            try {
+                AgentRunCheckpoint checkpoint = JSON.readValue(run.getCheckpointJson(), AgentRunCheckpoint.class);
+                SessionGoalSnapshot snapshot = checkpoint.getGoalSnapshot();
+                if (snapshot != null) return SessionGoalProgress.from(snapshot);
+            } catch (RuntimeException exception) {
+                log.warn("审批进度检查点读取失败，runId={}，errorType={}", run.getRunId(), exception.getClass().getSimpleName());
+            }
+        }
+        if (sessionGoals == null) return null;
+        try {
+            SessionGoalSnapshot current = sessionGoals.load(run.getSessionId());
+            return current == null ? null : SessionGoalProgress.from(current);
+        } catch (RuntimeException exception) {
+            // 普通聊天没有专注目标，或者目标已不可访问时不伪造进度对象。
+            log.info("当前运行没有可展示的专注进度，runId={}，reasonType={}",
+                    run.getRunId(), exception.getClass().getSimpleName());
+            return null;
+        }
     }
 
     // 先验证登录用户和会话归属；批准不能替代真正的业务权限。

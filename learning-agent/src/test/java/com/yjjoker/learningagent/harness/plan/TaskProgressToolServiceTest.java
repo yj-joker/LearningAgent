@@ -159,6 +159,19 @@ class TaskProgressToolServiceTest {
         verify(goals, never()).updateProgress(any(), any());
     }
 
+    // 明确只查询进度时，即使模型误调用更新工具，也不能创建审批或写入步骤。
+    @Test
+    void rejectsProgressMutationForReadOnlyQuestion() {
+        context.bindUserMessage("请告诉我当前有几个步骤以及每一步的状态");
+        String input = input(change(1, "COMPLETED", "USER_CONFIRMED", ""));
+
+        var result = service.update(input, false);
+
+        assertEquals("PROGRESS_READ_ONLY", result.getErrorCode());
+        verifyNoInteractions(goals);
+        assertEquals(AgentTaskStepStatus.IN_PROGRESS, original.getCurrentPlan().getSteps().getFirst().getStatus());
+    }
+
     // 完成一次请求后，旧用户原话不能泄漏到另一次请求。
     @Test
     void clearsAndRebindsDialogueEvidence() {

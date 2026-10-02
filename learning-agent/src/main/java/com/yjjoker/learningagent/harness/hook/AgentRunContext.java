@@ -132,6 +132,13 @@ public class AgentRunContext {
         return toolHistoryComplete && toolExecutions.stream().allMatch(ToolExecutionRecord::isFinished);
     }
 
+    // 只有工具真正返回成功，才算完成了结构化动作；请求、拒绝和业务失败都不算。
+    public boolean hasSuccessfulTool(String toolName) {
+        return toolExecutions.stream().anyMatch(record ->
+                Objects.equals(record.getToolName(), toolName)
+                        && record.getStatus() == ToolExecutionRecord.Status.SUCCEEDED);
+    }
+
     // 标记记录缺失或不一致，主回答仍可返回，但本轮跳过自动提取记忆。
     public void markToolHistoryIncomplete() {
         toolHistoryComplete = false;

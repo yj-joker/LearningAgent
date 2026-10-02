@@ -63,6 +63,11 @@ public class TaskProgressToolService {
     public ToolExecutionResult update(String input, boolean execute) {
         try {
             SessionGoalSnapshot expected = context.require();
+            if (context.isExplicitProgressReadOnlyRequest()) {
+                log.info("明确的只读进度请求拒绝状态写入工具，sessionId={}", expected.getState().getSessionId());
+                return ToolExecutionResult.failure("PROGRESS_READ_ONLY",
+                        "当前用户消息只是查询进度，不能申请修改步骤；请调用 get_session_goal_progress", true);
+            }
             List<StepProgressChange> changes = parse(input);
             UpdateTaskPlanRequest request = buildRequest(expected.getCurrentPlan(), changes);
             goals.validateProgress(expected, request);

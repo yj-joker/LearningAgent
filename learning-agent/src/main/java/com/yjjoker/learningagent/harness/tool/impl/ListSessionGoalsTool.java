@@ -18,7 +18,7 @@ public class ListSessionGoalsTool implements Tool {
 
     // 描述使用时机，真正的归属和版本检查仍由后端执行。
     @Override
-    public String description() { return "仅专注模式可用。查询当前会话的目标索引和当前目标；搁置目标保留原步骤。"; }
+    public String description() { return "仅专注模式可用。查询当前会话的目标索引和当前目标引用；搁置目标保留原步骤，若要查看当前目标的具体步骤请调用 get_session_goal_progress。"; }
 
     // 索引和结果是本次请求快照，不作为未来请求的最新状态重放。
     @Override

@@ -114,6 +114,29 @@ class SessionGoalToolServiceTest {
         assertFalse(result.getContent().contains(initial.getCurrentPlan().getPlanId()));
     }
 
+    // 详细进度查询返回当前计划的全部步骤和数据库状态，不返回内部计划 UUID。
+    @Test
+    void returnsCurrentGoalProgressFromFreshSnapshot() {
+        AgentTaskStep step = new AgentTaskStep();
+        step.setStepId(UUID.randomUUID().toString());
+        step.setPlanId(initial.getCurrentPlan().getPlanId());
+        step.setPosition(1);
+        step.setDescription("理解行锁");
+        step.setCompletionCriteria("能给出并发例子");
+        step.setStatus(AgentTaskStepStatus.PENDING);
+        initial.getCurrentPlan().setSteps(List.of(step));
+        when(goals.load(9L)).thenReturn(initial);
+
+        var result = tools.progress("{}");
+
+        assertTrue(result.isSuccess());
+        assertTrue(result.getContent().contains("\"goalRef\":\"goal-1\""));
+        assertTrue(result.getContent().contains("\"status\":\"PENDING\""));
+        assertTrue(result.getContent().contains("理解行锁"));
+        assertFalse(result.getContent().contains(initial.getCurrentPlan().getPlanId()));
+        assertSame(initial, context.require());
+    }
+
     // 简短样例只保留工具测试需要的字段，不在生产类增加测试构造器。
     private SessionGoalSnapshot snapshot(int number, String title) {
         AgentTaskPlan plan = new AgentTaskPlan();

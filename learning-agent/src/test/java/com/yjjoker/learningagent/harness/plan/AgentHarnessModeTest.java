@@ -19,6 +19,7 @@ import com.yjjoker.learningagent.harness.tool.*;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.utils.BaseContext;
+import com.yjjoker.learningagent.vo.AgentRunResult;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
 
@@ -150,6 +151,23 @@ class AgentHarnessModeTest {
         assertTrue(sent.getValue().getFirst().getContent().contains("给出转账例子"));
         assertTrue(sent.getValue().stream().anyMatch(LlmMessage::isSummary));
         verify(client).generateWithoutTools(any());
+    }
+
+    // 明确要求推进但模型只说“完成”时，第一次回答不直接落库，第二次仍失败则返回后端保护结果。
+    @Test
+    void guardsExplicitProgressMutationThatHasNoSuccessfulTool() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(client.generate(any())).thenReturn(
+                new TextLlmResponse("好的，第一步已经完成。"),
+                new TextLlmResponse("我确认已经完成。"));
+
+        AgentRunResult result = harness.run(9L, "开始第一步", AgentMode.FOCUS);
+
+        assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
+        assertEquals("本次请求要求修改步骤进度，但模型没有成功提交 update_task_progress，数据库状态未改变。请重新确认后再继续。",
+                result.getAnswer());
+        verify(client, times(2)).generate(any());
+        verify(plans, never()).updateProgress(any(), any());
     }
 
     // 生成与 runId 独立的持久目标，后续多次请求可以复用它。
