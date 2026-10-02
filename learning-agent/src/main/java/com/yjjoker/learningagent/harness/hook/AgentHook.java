@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.hook;
 
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
+import com.yjjoker.learningagent.harness.review.AnswerReviewRequest;
 
 // AgentHook 表示 Agent Loop 中预留的扩展点。
 // Hook 提出校验、拒绝或审批要求；是否执行、暂停和恢复由 Harness 决定。
@@ -18,6 +19,12 @@ public interface AgentHook {
     default void afterToolExecution(AgentRunContext context,
                                     ToolCall toolCall,
                                     ToolExecutionResult result) {
+    }
+
+    // 模型已经返回普通文本、但 Harness 还没有保存最终回答时调用。
+    // Hook 可以要求重新请求模型，或返回后端保护性回答，但不直接写数据库。
+    default FinalAnswerHookResult beforeFinalAnswer(AgentRunContext context, AnswerReviewRequest request) {
+        return FinalAnswerHookResult.allow();
     }
 
     // 无论任务成功还是异常结束，Harness 都会调用一次该方法。

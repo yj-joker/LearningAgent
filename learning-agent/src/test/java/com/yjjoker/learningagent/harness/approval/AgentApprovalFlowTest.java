@@ -13,6 +13,7 @@ import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.model.*;
 import com.yjjoker.learningagent.harness.plan.service.*;
+import com.yjjoker.learningagent.harness.review.*;
 import com.yjjoker.learningagent.harness.service.AgentHarnessService;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.tool.*;
@@ -474,7 +475,8 @@ class AgentApprovalFlowTest {
                 new ContextManager(40_000, 8_000), new InMemoryOriginalToolResultStoreImpl(), null,
                 new LlmRetryExecutor(), memory, references, extraction,
                 mock(MemoryApprovalService.class), approvals,
-                plans, planner, goalContext);
+                plans, planner, goalContext,
+                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown());
     }
 
     // 专注暂停后模式随检查点恢复，先执行原工具，再继续模型；不会重复规划。
@@ -507,6 +509,57 @@ class AgentApprovalFlowTest {
         assertTrue(resumed.getFirst().getContent().contains("当前专注计划"));
         assertEquals(1, resumed.stream().filter(m -> "focus-call".equals(m.getToolCallId())).count());
         assertEquals("{}", runs.get(paused.getRunId()).getCheckpointJson());
+    }
+
+    // 审查要求补行动后暂停审批，已用次数经 JSON 保存和恢复，不能再次纠正。
+    @Test
+    void reviewBudgetSurvivesApprovalAndStillReviewsApprovedOutcome() {
+        AnswerReviewService reviewer = mock(AnswerReviewService.class);
+        AtomicInteger executions = new AtomicInteger();
+        build(List.of(tool("change_setting", true, executions)), List.of(new FinalAnswerConsistencyHook(reviewer)));
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        when(reviewer.review(any(), any())).thenReturn(
+                new AnswerReviewResult(AnswerReviewResult.Action.CONTINUE, "遗漏行动", "提交用户要求的设置变更"),
+                new AnswerReviewResult(AnswerReviewResult.Action.REWRITE, "仍有不实声明", "改正说法"));
+        when(llm.generate(any())).thenReturn(new TextLlmResponse("设置已修改"),
+                response("review-call", "change_setting"), new TextLlmResponse("设置和所有步骤都已完成"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.WAITING_APPROVAL, paused.getStatus());
+        assertEquals(0, executions.get());
+        assertEquals(1, approvals.restore(runs.get(paused.getRunId())).getAnswerReviewCorrections());
+        // 暂停本身没有再审查；草稿和反馈也不进入检查点。
+        verify(reviewer).review(any(), any());
+        assertFalse(runs.get(paused.getRunId()).getCheckpointJson().contains("draftToCorrect"));
+        approveAll(paused);
+        AgentRunResult done = harness.resume(paused.getRunId());
+        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, done.getAnswer());
+        assertEquals(1, executions.get());
+        verify(llm, times(3)).generate(any());
+        verify(llm, never()).generateWithoutTools(any());
+        verifyNoInteractions(extraction);
+    }
+
+    // 拒绝后模型的虚假成功声明只允许改口，审查错误建议补执行也不能产生第二次申请。
+    @Test
+    void rejectedApprovalCanOnlyRewriteAndNeverReapply() {
+        AnswerReviewService reviewer = mock(AnswerReviewService.class);
+        AtomicInteger executions = new AtomicInteger();
+        build(List.of(tool("change_setting", true, executions)), List.of(new FinalAnswerConsistencyHook(reviewer)));
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        when(llm.generate(any())).thenReturn(response("rejected-review-call", "change_setting"),
+                new TextLlmResponse("设置已完成"));
+        when(reviewer.review(any(), any())).thenReturn(
+                new AnswerReviewResult(AnswerReviewResult.Action.CONTINUE, "误判未执行", "再申请一次"),
+                new AnswerReviewResult(AnswerReviewResult.Action.PASS, "如实说明拒绝", ""));
+        when(llm.generateWithoutTools(any())).thenReturn(new TextLlmResponse("你拒绝了变更，设置未修改。"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        verifyNoInteractions(reviewer);
+        approvals.decide(paused.getRunId(), paused.getBatchNumber(), "rejected-review-call", false, "不修改");
+        AgentRunResult done = harness.resume(paused.getRunId());
+        assertEquals("你拒绝了变更，设置未修改。", done.getAnswer());
+        assertEquals(0, executions.get());
+        assertEquals(1, requests.size());
+        verify(llm).generateWithoutTools(any());
     }
 
     // 恢复时计划丢失必须停止，不能先执行审批工具再发现前置条件不满足。

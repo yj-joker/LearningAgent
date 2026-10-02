@@ -4,10 +4,13 @@ import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
+import com.yjjoker.learningagent.harness.hook.FinalAnswerConsistencyHook;
 import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.plan.service.SessionGoalService;
 import com.yjjoker.learningagent.harness.plan.service.SessionGoalContext;
 import com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner;
+import com.yjjoker.learningagent.harness.plan.service.GoalIntentRecognitionService;
+import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
@@ -128,8 +131,15 @@ public final class AgentHarnessTestFactory {
         // 测试仍然使用生产完整构造器，确保依赖关系和真实运行一致。
         // Spring 在生产环境自动发现记录 Hook；直接构造的测试需要显式补上它。
         List<AgentHook> installedHooks = new ArrayList<>(hooks);
+        SessionGoalContext goalContext = new SessionGoalContext();
         if (installedHooks.stream().noneMatch(ToolExecutionRecordingHook.class::isInstance)) {
             installedHooks.add(new ToolExecutionRecordingHook());
+        }
+        if (installedHooks.stream().noneMatch(FinalAnswerConsistencyHook.class::isInstance)) {
+            // 这里的普通循环测试不访问审查模型；专注审查有独立的流程测试。
+            installedHooks.add(new FinalAnswerConsistencyHook((context, request) ->
+                    new com.yjjoker.learningagent.harness.review.AnswerReviewResult(
+                            com.yjjoker.learningagent.harness.review.AnswerReviewResult.Action.PASS, "测试放行", "")));
         }
         return new AgentHarnessServiceImpl(
                 llmClient,
@@ -148,7 +158,8 @@ public final class AgentHarnessTestFactory {
                 mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class),
                 mock(SessionGoalService.class),
                 mock(FocusPlanPlanner.class),
-                new SessionGoalContext()
+                goalContext,
+                (GoalIntentRecognitionService) (runId, userMessage) -> GoalIntent.unknown()
         );
     }
 

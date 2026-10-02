@@ -6,7 +6,9 @@ import com.yjjoker.learningagent.harness.approval.AgentApprovalService;
 import com.yjjoker.learningagent.harness.context.*;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.error.HarnessException;
+import com.yjjoker.learningagent.harness.hook.FinalAnswerConsistencyHook;
 import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
+import com.yjjoker.learningagent.harness.review.*;
 import com.yjjoker.learningagent.harness.llm.*;
 import com.yjjoker.learningagent.harness.llm.model.*;
 import com.yjjoker.learningagent.harness.memory.service.*;
@@ -41,6 +43,7 @@ class AgentHarnessModeTest {
     private final MemoryExtractionService extraction = mock(MemoryExtractionService.class);
     private final LearningSessionRepository sessions = mock(LearningSessionRepository.class);
     private final ContextSummarizer summarizer = mock(ContextSummarizer.class);
+    private final AnswerReviewService review = mock(AnswerReviewService.class);
     private AgentHarnessServiceImpl harness;
 
     // 准备当前用户的空会话，默认规划和主回答均成功。
@@ -57,13 +60,18 @@ class AgentHarnessModeTest {
         when(memory.loadSessionMemoryIndex(9L)).thenReturn(List.of());
         when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(PLAN));
         when(client.generate(any())).thenReturn(new TextLlmResponse("事务确保转账同时成功或失败。"));
+        when(review.review(any(), any())).thenReturn(new AnswerReviewResult(AnswerReviewResult.Action.PASS, "符合事实", ""));
         when(plans.initialize(eq(9L), any())).thenAnswer(inv -> storedSnapshot(inv.getArgument(1)));
         LlmRetryExecutor retry = new LlmRetryExecutor();
+        SessionGoalContext goalContext = new SessionGoalContext();
         harness = new AgentHarnessServiceImpl(client, new ToolRegistry(List.of()),
-                List.of(new ToolExecutionRecordingHook()), history, sessions,
+                List.of(new ToolExecutionRecordingHook(), new FinalAnswerConsistencyHook(review)), history, sessions,
                 new ContextManager(5000, 500), new InMemoryOriginalToolResultStoreImpl(), summarizer, retry,
                 memory, new MemoryReferenceRegistry(), extraction, mock(MemoryApprovalService.class), approvals,
-                plans, new FocusPlanPlanner(client, retry, new ToolRegistry(List.of())), new SessionGoalContext());
+                plans, new FocusPlanPlanner(client, retry, new ToolRegistry(List.of())), goalContext,
+                (runId, userMessage) -> new GoalIntent(
+                        false, userMessage != null && userMessage.contains("开始第一步"), false,
+                        1.0, "测试替身识别到进度变更"));
     }
 
     // 不让登录身份残留到其他测试。
@@ -160,14 +168,73 @@ class AgentHarnessModeTest {
         when(client.generate(any())).thenReturn(
                 new TextLlmResponse("好的，第一步已经完成。"),
                 new TextLlmResponse("我确认已经完成。"));
+        when(review.review(any(), any())).thenReturn(new AnswerReviewResult(
+                AnswerReviewResult.Action.CONTINUE, "用户要求的操作未执行", "按用户请求提交必要行动，不能只说完成"));
 
         AgentRunResult result = harness.run(9L, "开始第一步", AgentMode.FOCUS);
 
         assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
-        assertEquals("本次请求要求修改步骤进度，但模型没有成功提交 update_task_progress，数据库状态未改变。请重新确认后再继续。",
-                result.getAnswer());
+        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, result.getAnswer());
         verify(client, times(2)).generate(any());
         verify(plans, never()).updateProgress(any(), any());
+    }
+
+    // 零工具调用也会审查；改口走无工具调用，错误草稿和临时反馈均不落库。
+    @Test
+    void rewritesUnsupportedCompletionWithoutTools() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(client.generate(any())).thenReturn(new TextLlmResponse("你已掌握，第一步完成。"));
+        when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse("这是第一步讲解。你想练习一下吗？"));
+        when(review.review(any(), any())).thenReturn(
+                new AnswerReviewResult(AnswerReviewResult.Action.REWRITE, "没有用户反馈", "只讲解，不断言掌握"),
+                new AnswerReviewResult(AnswerReviewResult.Action.PASS, "符合事实", ""));
+        AgentRunResult result = harness.run(9L, "讲解集合", AgentMode.FOCUS);
+        assertEquals("这是第一步讲解。你想练习一下吗？", result.getAnswer());
+        verify(client).generate(any());
+        verify(client).generateWithoutTools(any());
+        verify(review, times(2)).review(any(), any());
+        ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
+        verify(history).appendMessages(eq(9L), saved.capture());
+        assertEquals(List.of("讲解集合", result.getAnswer()), saved.getValue().stream().map(LlmMessage::getContent).toList());
+        assertEquals(AgentTaskStepStatus.PENDING, result.getProgress().getSteps().getFirst().getStatus());
+    }
+
+    // 即使无工具接口意外返回工具调用，也不能执行它或把草稿保存成最终答案。
+    @Test
+    void rejectsUnexpectedToolCallDuringRewrite() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(review.review(any(), any())).thenReturn(new AnswerReviewResult(
+                AnswerReviewResult.Action.REWRITE, "不实声明", "只修正回答"));
+        when(client.generateWithoutTools(any())).thenReturn(new ToolCallLlmResponse(List.of(
+                new ToolCall("unexpected", "update_task_progress", "{}"))));
+        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER,
+                harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer());
+        verify(plans, never()).updateProgress(any(), any());
+        verifyNoInteractions(extraction);
+        verify(review).review(any(), any());
+    }
+
+    // 审查不可用时不显示原草稿，不进行后置记忆提取。
+    @Test
+    void reviewFailureDoesNotPublishDraftOrExtractMemory() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(review.review(any(), any())).thenReturn(AnswerReviewResult.unavailable());
+        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER,
+                harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer());
+        verify(client, never()).generateWithoutTools(any());
+        verifyNoInteractions(extraction);
+    }
+
+    // 审查期间发生并发修改时，不把旧进度对应的回答写入历史。
+    @Test
+    void checksDatabaseVersionAgainAfterReview() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        when(review.review(any(), any())).thenAnswer(inv -> {
+            doThrow(new IllegalStateException("目标版本已变化")).when(plans).requireUnchanged(any());
+            return new AnswerReviewResult(AnswerReviewResult.Action.PASS, "通过", "");
+        });
+        assertThrows(IllegalStateException.class, () -> harness.run(9L, "讲解集合", AgentMode.FOCUS));
+        verify(history, never()).appendMessages(any(), any());
     }
 
     // 生成与 runId 独立的持久目标，后续多次请求可以复用它。

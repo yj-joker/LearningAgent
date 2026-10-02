@@ -162,7 +162,8 @@ class TaskProgressToolServiceTest {
     // 明确只查询进度时，即使模型误调用更新工具，也不能创建审批或写入步骤。
     @Test
     void rejectsProgressMutationForReadOnlyQuestion() {
-        context.bindUserMessage("请告诉我当前有几个步骤以及每一步的状态");
+        context.bindIntent(new com.yjjoker.learningagent.harness.plan.model.GoalIntent(
+                true, false, false, 0.98, "明确要求查询进度"));
         String input = input(change(1, "COMPLETED", "USER_CONFIRMED", ""));
 
         var result = service.update(input, false);

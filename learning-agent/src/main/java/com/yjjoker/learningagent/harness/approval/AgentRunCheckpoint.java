@@ -5,6 +5,7 @@ import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
+import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
 import lombok.Data;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,6 +24,8 @@ public class AgentRunCheckpoint {
     private AgentMode mode = AgentMode.CHAT;
     // 专注目标与版本随审批保存；旧专注检查点缺失此字段时拒绝继续，不猜测目标。
     private SessionGoalSnapshot goalSnapshot;
+    // 保存意图识别快照；审批恢复不重复调用识别模型，也不因上下文变化改变原判断。
+    private GoalIntent goalIntent;
     // 不含动态目标块，恢复后可以整体重建系统消息，避免旧目标与新目标同时生效。
     private String systemPromptBase;
     private String userMessage;
@@ -35,6 +38,8 @@ public class AgentRunCheckpoint {
     private int completedRecoveryCalls;
     private int recoveredCharacters;
     private boolean summaryUsed;
+    // 保存已用审查纠正次数，审批恢复不能获得新的纠正机会。
+    private int answerReviewCorrections;
     // 两种短引用及编号生成器都属于同一个逻辑任务，不能因换线程而重建编号。
     private Map<String, String> recoveryReferences = new LinkedHashMap<>();
     private int nextRecoveryNumber;

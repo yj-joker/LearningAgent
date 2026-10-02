@@ -1,12 +1,13 @@
 package com.yjjoker.learningagent.harness.plan;
 
 import com.yjjoker.learningagent.harness.plan.service.SessionGoalContext;
+import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-// 使用真实关键词边界测试进度意图，不调用模型，也不写数据库。
+// 使用识别结果快照测试进度意图，不调用模型，也不写数据库。
 class SessionGoalContextTest {
     private final SessionGoalContext context = new SessionGoalContext();
 
@@ -19,7 +20,7 @@ class SessionGoalContextTest {
     // 明确的开始、完成和继续下一步属于进度变更请求。
     @Test
     void recognizesExplicitMutation() {
-        context.bindUserMessage("请完成第一步，然后进入下一步");
+        context.bindIntent(new GoalIntent(false, true, false, 0.98, "明确要求完成步骤"));
 
         assertTrue(context.isExplicitProgressMutationRequest());
         assertFalse(context.isExplicitProgressReadOnlyRequest());
@@ -28,7 +29,7 @@ class SessionGoalContextTest {
     // 查询状态只读，不应被进度变更守卫拦截成写操作。
     @Test
     void separatesReadOnlyQuestion() {
-        context.bindUserMessage("请查看当前进度和步骤状态");
+        context.bindIntent(new GoalIntent(true, false, false, 0.98, "明确要求查询进度"));
 
         assertTrue(context.isExplicitProgressReadOnlyRequest());
         assertFalse(context.isExplicitProgressMutationRequest());
@@ -37,7 +38,7 @@ class SessionGoalContextTest {
     // 普通知识问题没有明确变更意图，不触发结构化动作要求。
     @Test
     void ignoresTeachingQuestion() {
-        context.bindUserMessage("核心线程数是什么意思？");
+        context.bindIntent(GoalIntent.unknown());
 
         assertFalse(context.isExplicitProgressMutationRequest());
         assertFalse(context.isExplicitProgressReadOnlyRequest());

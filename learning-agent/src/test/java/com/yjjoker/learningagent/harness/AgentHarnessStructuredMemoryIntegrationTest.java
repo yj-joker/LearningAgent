@@ -556,7 +556,8 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 approvals, mock(com.yjjoker.learningagent.harness.approval.AgentApprovalService.class),
                 mock(com.yjjoker.learningagent.harness.plan.service.SessionGoalService.class),
                 mock(com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner.class),
-                new com.yjjoker.learningagent.harness.plan.service.SessionGoalContext());
+                new com.yjjoker.learningagent.harness.plan.service.SessionGoalContext(),
+                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown());
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

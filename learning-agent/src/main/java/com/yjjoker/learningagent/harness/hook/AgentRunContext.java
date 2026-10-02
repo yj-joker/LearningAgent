@@ -62,6 +62,8 @@ public class AgentRunContext {
 
     // 记录由当前请求独占；普通日志和后续提取都从这里读取，不扫描聊天正文猜执行状态。
     private final List<ToolExecutionRecord> toolExecutions = new ArrayList<>();
+    // 整个逻辑任务共用一次纠正机会，暂停审批不会重置这份预算。
+    private int answerReviewCorrections;
     // 发现记录不一致时保守停止自动提取，不能把记录失败当成没有调用过工具。
     private boolean toolHistoryComplete = true;
 
@@ -137,6 +139,26 @@ public class AgentRunContext {
         return toolExecutions.stream().anyMatch(record ->
                 Objects.equals(record.getToolName(), toolName)
                         && record.getStatus() == ToolExecutionRecord.Status.SUCCEEDED);
+    }
+
+    // 用户已经拒绝工具时，拒绝是明确结果，不应被误判成模型漏调工具而再次纠正。
+    public boolean hasRejectedTool(String toolName) {
+        return toolExecutions.stream().anyMatch(record ->
+                Objects.equals(record.getToolName(), toolName)
+                && record.getStatus() == ToolExecutionRecord.Status.REJECTED);
+    }
+
+    // 在纠正前扣次数；第二次不通过就结束，避免审查与主模型相互重试。
+    public boolean tryUseAnswerReviewCorrection() {
+        if (answerReviewCorrections >= 1) return false;
+        answerReviewCorrections++;
+        return true;
+    }
+
+    // 审批恢复保留已用次数；旧检查点缺少字段时使用默认值 0。
+    public void restoreAnswerReviewCorrections(int used) {
+        if (used < 0 || used > 1) throw new IllegalArgumentException("审查纠正次数不合法");
+        answerReviewCorrections = used;
     }
 
     // 标记记录缺失或不一致，主回答仍可返回，但本轮跳过自动提取记忆。
