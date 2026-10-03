@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.learningplan.service;
 
 import com.yjjoker.learningagent.dto.CreateLearningPlanDraftRequest;
+import com.yjjoker.learningagent.dto.ActivateLearningPlanDraftRequest;
 import com.yjjoker.learningagent.dto.LearningPlanDraftStepRequest;
 import com.yjjoker.learningagent.dto.UpdateLearningPlanDraftRequest;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
@@ -30,7 +31,7 @@ public class LearningPlanDraftToolService {
     // 读取草案索引，返回给模型的内容来自数据库，不依赖模型上轮记忆。
     public ToolExecutionResult list() {
         try {
-            // 工具只返回索引字段和步骤数量，完整步骤由 get_learning_plan_draft 按需读取。
+            // 工具只返回计划索引和步骤数量，完整步骤由 get_learning_plan_draft 按需读取。
             List<Map<String, Object>> index = service.listCurrentUser().stream().map(draft -> {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("draftRef", draft.getDraftRef());
@@ -122,9 +123,9 @@ public class LearningPlanDraftToolService {
         }
     }
 
-    // 审批页面显示更新意图；完整参数仍由检查点逐字保存。
+    // 审批页面显示更新意图；完整参数由检查点保存，DRAFT 和 ACTIVE 都可更新。
     public String updateApprovalReason(String input) {
-        return "修改同一份学习计划草案；批准后版本递增，草案仍保持未正式生效";
+        return "修改同一份学习计划；批准后版本递增，并保留当前 DRAFT 或 ACTIVE 状态";
     }
 
     // 批准后使用原 draftRef 和 expectedVersion 更新同一份草案。
@@ -142,6 +143,47 @@ public class LearningPlanDraftToolService {
         } catch (RuntimeException exception) {
             log.warn("Agent 更新学习计划草案失败，errorType={}", exception.getClass().getSimpleName());
             return ToolExecutionResult.failure("DRAFT_WRITE_FAILED", "更新学习计划草案失败，请稍后重试", false);
+        }
+    }
+
+    // 预检正式生效请求；审批前只读取版本和状态，不修改草案。
+    public ToolExecutionResult validateActivate(String input) {
+        try {
+            ActivateLearningPlanDraftRequest request = parseActivate(input);
+            service.validateAgentActivation(request.getDraftRef(), request.getExpectedVersion());
+            return ToolExecutionResult.success("草案版本和状态检查通过，等待用户审批；当前仍未正式生效");
+        } catch (NotFountException exception) {
+            return ToolExecutionResult.failure("DRAFT_NOT_FOUND", "草案不存在或已经正式生效，请先刷新索引", true);
+        } catch (ClientDataErrorException | IllegalArgumentException exception) {
+            return invalidArgument(exception.getMessage());
+        } catch (JacksonException exception) {
+            return invalidArgument("参数不是有效的 JSON 对象");
+        } catch (RuntimeException exception) {
+            log.warn("Agent 确认学习计划预检失败，errorType={}", exception.getClass().getSimpleName());
+            return ToolExecutionResult.failure("DRAFT_ACTIVATION_VALIDATION_FAILED", "确认草案预检失败，请稍后重试", false);
+        }
+    }
+
+    // 审批卡只说明状态变化，不能把待审批草案写成已经生效。
+    public String activateApprovalReason(String input) {
+        return "确认同一份学习计划草案正式生效；批准后状态变为 ACTIVE";
+    }
+
+    // 批准后把同一份草案切换为 ACTIVE，返回新的版本和正式状态。
+    public ToolExecutionResult activate(String input) {
+        try {
+            ActivateLearningPlanDraftRequest request = parseActivate(input);
+            return ToolExecutionResult.success(JSON.writeValueAsString(
+                    service.activateAgent(request.getDraftRef(), request.getExpectedVersion())));
+        } catch (NotFountException exception) {
+            return ToolExecutionResult.failure("DRAFT_NOT_FOUND", "草案不存在或已经正式生效，请先刷新索引", true);
+        } catch (ClientDataErrorException | IllegalArgumentException exception) {
+            return invalidArgument(exception.getMessage());
+        } catch (JacksonException exception) {
+            return invalidArgument("参数不是有效的 JSON 对象");
+        } catch (RuntimeException exception) {
+            log.warn("Agent 确认学习计划失败，errorType={}", exception.getClass().getSimpleName());
+            return ToolExecutionResult.failure("DRAFT_ACTIVATION_FAILED", "学习计划正式生效失败，请稍后重试", false);
         }
     }
 
@@ -169,6 +211,14 @@ public class LearningPlanDraftToolService {
         properties.put("constraints", optionalText("新限制条件；不传表示保留原值", 2000));
         properties.put("steps", stepsSchema(true));
         return schema(properties, List.of("draftRef", "expectedVersion", "steps"));
+    }
+
+    // 确认工具只接收稳定草案引用和读取到的版本，不允许模型提交用户身份或状态字段。
+    public Map<String, Object> activateSchema() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("draftRef", text("当前索引中的草案引用，必须原样复制", 64));
+        properties.put("expectedVersion", Map.of("type", "integer", "minimum", 1));
+        return schema(properties, List.of("draftRef", "expectedVersion"));
     }
 
     // 解析创建请求并拒绝未声明字段，避免模型偷偷附加用户或权限参数。
@@ -237,6 +287,7 @@ public class LearningPlanDraftToolService {
             case GET -> List.of("draftRef");
             case CREATE -> List.of("title", "objective", "learnerProfile", "weeklyCommitment", "constraints", "steps");
             case UPDATE -> List.of("draftRef", "expectedVersion", "title", "objective", "learnerProfile", "weeklyCommitment", "constraints", "steps");
+            case ACTIVATE -> List.of("draftRef", "expectedVersion");
         };
         for (String name : root.propertyNames()) {
             if (!allowed.contains(name)) throw new IllegalArgumentException("参数包含未允许的字段：" + name);
@@ -293,7 +344,20 @@ public class LearningPlanDraftToolService {
         return ToolExecutionResult.failure("INVALID_ARGUMENT", message == null ? "草案参数不合法" : message, true);
     }
 
-    private enum SetMode { GET, CREATE, UPDATE }
+    // 解析确认参数并复用 DTO，保证预检和正式执行使用完全相同的输入。
+    private ActivateLearningPlanDraftRequest parseActivate(String input) throws JacksonException {
+        JsonNode root = object(input, SetMode.ACTIVATE);
+        ActivateLearningPlanDraftRequest request = new ActivateLearningPlanDraftRequest();
+        request.setDraftRef(requiredText(root, "draftRef", 64));
+        JsonNode version = root.get("expectedVersion");
+        if (version == null || !version.isIntegralNumber() || version.asLong() < 1) {
+            throw new IllegalArgumentException("expectedVersion 必须是正整数");
+        }
+        request.setExpectedVersion(version.asLong());
+        return request;
+    }
+
+    private enum SetMode { GET, CREATE, UPDATE, ACTIVATE }
 
     // 保存更新解析结果，避免同一份 JSON 被重复解析时目标引用和版本不一致。
     private static final class UpdatePayload {

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Plus, Save, Trash2 } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
-import { createLearningPlanDraft, listLearningPlanDrafts, updateLearningPlanDraft } from '@/api/learningPlans'
+import { activateLearningPlanDraft, createLearningPlanDraft, listLearningPlanDrafts, updateLearningPlanDraft } from '@/api/learningPlans'
 import EmptyState from '@/components/EmptyState.vue'
 import { useToast } from '@/composables/useToast'
 import type {
@@ -34,6 +34,8 @@ const form = reactive({
 })
 
 const isEditing = computed(() => Boolean(selectedRef.value))
+const selectedDraft = computed(() => drafts.value.find((draft) => draft.draftRef === selectedRef.value) ?? null)
+const isActive = computed(() => selectedDraft.value?.status === 'ACTIVE')
 
 // 从后端加载草案列表，重启后也能从数据库恢复页面状态。
 async function loadDrafts(selectLatest = false) {
@@ -141,11 +143,28 @@ async function saveDraft() {
       }
       result = await createLearningPlanDraft(payload)
     }
-    showToast('success', '草案已保存', '当前状态仍为未正式生效')
+    showToast('success', '学习计划已保存', result.status === 'ACTIVE' ? '正式计划已更新，版本已递增' : '当前状态仍为未正式生效')
     drafts.value = [result, ...drafts.value.filter((draft) => draft.draftRef !== result.draftRef)]
     openDraft(result)
   } catch (error) {
     showToast('error', '草案保存失败', error instanceof ApiError ? error.message : '请刷新后重试')
+    if (error instanceof ApiError && error.status === 409) await loadDrafts()
+  } finally {
+    saving.value = false
+  }
+}
+
+// 用户明确点击确认后正式生效；版本冲突时重新读取，不能覆盖新的编辑。
+async function activateDraft() {
+  if (!selectedRef.value || !selectedDraft.value || isActive.value || saving.value) return
+  saving.value = true
+  try {
+    const result = await activateLearningPlanDraft(selectedRef.value, selectedDraft.value.version)
+    showToast('success', '学习计划已正式生效', '后续专注模式可以选择这份计划')
+    drafts.value = [result, ...drafts.value.filter((draft) => draft.draftRef !== result.draftRef)]
+    openDraft(result)
+  } catch (error) {
+    showToast('error', '学习计划确认失败', error instanceof ApiError ? error.message : '请刷新后重试')
     if (error instanceof ApiError && error.status === 409) await loadDrafts()
   } finally {
     saving.value = false
@@ -164,7 +183,7 @@ onMounted(() => {
       <div>
         <span class="section-kicker">长期学习规划</span>
         <h2>学习计划草案</h2>
-        <p>手动编辑或让 AI 助教继续讨论同一份草案。草案保存后仍未正式生效。</p>
+        <p>手动编辑或让 AI 助教继续讨论同一份草案；确认后可正式生效。</p>
       </div>
       <button class="button button-primary" type="button" @click="resetForm"><Plus :size="17" /> 新建草案</button>
     </section>
@@ -174,7 +193,7 @@ onMounted(() => {
     <div class="learning-plan-draft-layout">
       <section class="panel learning-plan-draft-list">
         <div class="panel-header">
-          <div><span class="section-kicker">已保存内容</span><h3>我的草案</h3></div>
+          <div><span class="section-kicker">已保存内容</span><h3>我的学习计划</h3></div>
           <span class="count-pill">{{ drafts.length }} 份</span>
         </div>
         <div v-if="loading" class="learning-plan-loading">正在读取草案…</div>
@@ -189,7 +208,7 @@ onMounted(() => {
           >
             <strong>{{ draft.title }}</strong>
             <span>{{ draft.steps.length }} 个步骤 · v{{ draft.version }}</span>
-            <small><span class="draft-status-dot">DRAFT</span> {{ draft.source === 'AGENT' ? 'Agent 创建' : '手动创建' }}</small>
+            <small><span class="draft-status-dot">{{ draft.status }}</span> {{ draft.source === 'AGENT' ? 'Agent 创建' : '手动创建' }}</small>
           </button>
         </div>
         <EmptyState v-else title="还没有学习计划草案" description="先在右侧整理一个目标，或让 AI 助教和你一起讨论。" />
@@ -197,8 +216,8 @@ onMounted(() => {
 
       <section class="panel learning-plan-editor">
         <div class="panel-header">
-          <div><span class="section-kicker">草案编辑器</span><h3>{{ isEditing ? '编辑当前草案' : '创建新草案' }}</h3></div>
-          <span class="draft-formal-badge">DRAFT · 未正式生效</span>
+          <div><span class="section-kicker">学习计划编辑器</span><h3>{{ isActive ? '正式学习计划' : (isEditing ? '编辑当前草案' : '创建新草案') }}</h3></div>
+          <span class="draft-formal-badge">{{ isActive ? 'ACTIVE · 已正式生效' : 'DRAFT · 未正式生效' }}</span>
         </div>
         <form class="form-layout" @submit.prevent="saveDraft">
           <div class="form-section">
@@ -226,7 +245,8 @@ onMounted(() => {
           <p v-if="formError" class="field-error">{{ formError }}</p>
           <footer class="form-actions">
             <span v-if="isEditing" class="learning-plan-version">当前版本 v{{ form.expectedVersion }}</span>
-            <button class="button button-primary" type="submit" :disabled="saving"><Save :size="16" /> {{ saving ? '保存中…' : '保存草案' }}</button>
+            <button v-if="selectedRef && !isActive" class="button button-secondary" type="button" :disabled="saving" @click="activateDraft">确认正式生效</button>
+            <button class="button button-primary" type="submit" :disabled="saving"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存正式计划' : '保存草案') }}</button>
           </footer>
         </form>
       </section>

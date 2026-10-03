@@ -170,8 +170,8 @@ export interface LearningPlanDraft {
   learnerProfile: string | null
   weeklyCommitment: string | null
   constraints: string | null
-  status: 'DRAFT'
-  formal: false
+  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
+  formal: boolean
   source: 'MANUAL' | 'AGENT'
   version: number
   createdAt: string

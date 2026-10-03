@@ -16,10 +16,10 @@ public class ListLearningPlanDraftsTool implements Tool {
     @Override
     public String name() { return "list_learning_plan_drafts"; }
 
-    // 讨论已有学习计划时先读取数据库索引，不依赖上下文中的旧草案。
+    // 讨论已有计划时先读取数据库索引，不依赖上下文中的旧草案。
     @Override
     public String description() {
-        return "读取当前用户保存的学习计划草案索引和版本。草案状态始终是 DRAFT，不能把它说成正式生效计划；需要完整步骤时再用 get_learning_plan_draft。";
+        return "读取当前用户保存的学习计划索引、状态和版本。DRAFT 尚未生效，ACTIVE 已正式生效；需要完整步骤时再用 get_learning_plan_draft。";
     }
 
     // 草案列表可能在下一次请求发生变化，工具消息不作为未来历史直接重放。

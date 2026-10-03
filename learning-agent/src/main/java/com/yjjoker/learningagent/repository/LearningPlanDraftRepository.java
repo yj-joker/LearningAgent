@@ -43,7 +43,7 @@ public interface LearningPlanDraftRepository {
                    constraints_text AS `constraints`, status, source, version,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
-            WHERE user_id = #{userId} AND status = 'DRAFT'
+            WHERE user_id = #{userId} AND status IN ('DRAFT', 'ACTIVE')
             ORDER BY updated_at DESC, draft_ref DESC
             """)
     List<LearningPlanDraft> findDrafts(@Param("userId") Long userId);
@@ -55,18 +55,19 @@ public interface LearningPlanDraftRepository {
                    constraints_text AS `constraints`, status, source, version,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
-            WHERE user_id = #{userId} AND draft_ref = #{draftRef} AND status = 'DRAFT'
+            WHERE user_id = #{userId} AND draft_ref = #{draftRef} AND status IN ('DRAFT', 'ACTIVE')
             """)
     LearningPlanDraft findDraft(@Param("userId") Long userId, @Param("draftRef") String draftRef);
 
-    // 更新时锁住主体，保证版本校验和步骤替换在同一个事务中完成。
+    // 更新时锁住 DRAFT 或 ACTIVE 主体，保证版本校验和步骤替换在同一个事务中完成。
     @Select("""
             SELECT draft_ref AS draftRef, user_id AS userId, title, objective,
                    learner_profile AS learnerProfile, weekly_commitment AS weeklyCommitment,
                    constraints_text AS `constraints`, status, source, version,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
-            WHERE user_id = #{userId} AND draft_ref = #{draftRef} AND status = 'DRAFT'
+            WHERE user_id = #{userId} AND draft_ref = #{draftRef}
+              AND status IN ('DRAFT', 'ACTIVE')
             FOR UPDATE
             """)
     LearningPlanDraft findDraftForUpdate(@Param("userId") Long userId, @Param("draftRef") String draftRef);
@@ -90,12 +91,24 @@ public interface LearningPlanDraftRepository {
                 constraints_text = #{draft.constraints}, source = #{draft.source},
                 version = version + 1, updated_at = #{updatedAt}
             WHERE draft_ref = #{draft.draftRef} AND user_id = #{userId}
-              AND status = 'DRAFT' AND version = #{expectedVersion}
+              AND status IN ('DRAFT', 'ACTIVE') AND version = #{expectedVersion}
             """)
     int updateDraft(@Param("draft") LearningPlanDraft draft,
                     @Param("userId") Long userId,
                     @Param("expectedVersion") long expectedVersion,
                     @Param("updatedAt") LocalDateTime updatedAt);
+
+    // 只有草案状态和版本都匹配时才能正式生效，避免旧页面越过最新修改直接确认。
+    @Update("""
+            UPDATE learning_plan_drafts
+            SET status = 'ACTIVE', version = version + 1, updated_at = #{updatedAt}
+            WHERE draft_ref = #{draftRef} AND user_id = #{userId}
+              AND status = 'DRAFT' AND version = #{expectedVersion}
+            """)
+    int activateDraft(@Param("draftRef") String draftRef,
+                      @Param("userId") Long userId,
+                      @Param("expectedVersion") long expectedVersion,
+                      @Param("updatedAt") LocalDateTime updatedAt);
 
     // 更新采用完整步骤列表，先删除旧步骤再插入新列表，避免顺序交换撞到唯一索引。
     @Delete("DELETE FROM learning_plan_draft_steps WHERE draft_ref = #{draftRef}")

@@ -83,6 +83,18 @@ public class LearningPlanDraftService {
         return update(draftRef, request, "AGENT");
     }
 
+    // 页面确认直接使用用户的明确操作，不需要再创建一条 Agent 工具审批。
+    @Transactional
+    public LearningPlanDraftVO activateManual(String draftRef, long expectedVersion) {
+        return activate(draftRef, expectedVersion, "MANUAL");
+    }
+
+    // Agent 确认必须先通过通用审批，再调用同一个正式生效事务。
+    @Transactional
+    public LearningPlanDraftVO activateAgent(String draftRef, long expectedVersion) {
+        return activate(draftRef, expectedVersion, "AGENT");
+    }
+
     // Agent 申请创建前只校验输入，不写数据库也不改变草案状态。
     public void validateAgentCreate(CreateLearningPlanDraftRequest request) {
         requireUser();
@@ -102,6 +114,19 @@ public class LearningPlanDraftService {
         }
         buildUpdatedSteps(current, request.getSteps(), LocalDateTime.now());
         validateUpdateFields(current, request);
+    }
+
+    // Agent 审批前只检查草案仍是最新 DRAFT，不改变数据库状态。
+    public void validateAgentActivation(String draftRef, long expectedVersion) {
+        Long userId = requireUser();
+        validateActivationVersion(expectedVersion);
+        LearningPlanDraft current = findDraft(userId, draftRef);
+        if (!"DRAFT".equals(current.getStatus())) {
+            throw new ClientDataErrorException("只有 DRAFT 状态的草案才能正式生效");
+        }
+        if (current.getVersion() != expectedVersion) {
+            throw new ClientDataErrorException("草案版本已变化，请先重新读取最新草案");
+        }
     }
 
     // 创建主体和全部步骤放在一个事务中，任一步失败都会回滚整份草案。
@@ -160,9 +185,37 @@ public class LearningPlanDraftService {
         }
         next.setVersion(current.getVersion() + 1);
         next.setSteps(steps);
-        log.info("学习计划草案更新成功，userId={}，draftRef={}，version={}->{}，editorSource={}，stepCount={}，formal=false",
-                userId, draftRef, current.getVersion(), next.getVersion(), source, steps.size());
+        log.info("学习计划草案更新成功，userId={}，draftRef={}，status={}，version={}->{}，editorSource={}，stepCount={}，formal={}",
+                userId, draftRef, next.getStatus(), current.getVersion(), next.getVersion(), source,
+                steps.size(), "ACTIVE".equals(next.getStatus()));
         return new LearningPlanDraftVO(next);
+    }
+
+    // 锁定最新草案并用条件更新完成状态切换；失败时不会留下半次确认。
+    private LearningPlanDraftVO activate(String draftRef, long expectedVersion, String source) {
+        Long userId = requireUser();
+        String ref = normalizeRequired(draftRef, 64, "草案引用");
+        validateActivationVersion(expectedVersion);
+        LearningPlanDraft current = repository.findDraftForUpdate(userId, ref);
+        if (current == null) {
+            throw new NotFountException("学习计划草案不存在");
+        }
+        if (!"DRAFT".equals(current.getStatus())) {
+            throw new ClientDataErrorException("只有 DRAFT 状态的草案才能正式生效");
+        }
+        loadSteps(current);
+        if (current.getVersion() != expectedVersion) {
+            throw new ClientDataErrorException("草案版本已变化，请刷新后重新确认");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        requireOne(repository.activateDraft(ref, userId, expectedVersion, now),
+                "草案状态已变化，请刷新后重试");
+        current.setStatus("ACTIVE");
+        current.setVersion(expectedVersion + 1);
+        current.setUpdatedAt(now);
+        log.info("学习计划草案已正式生效，userId={}，draftRef={}，version={}->{}，source={}，stepCount={}，formal=true",
+                userId, ref, expectedVersion, current.getVersion(), source, current.getSteps().size());
+        return new LearningPlanDraftVO(current);
     }
 
     // 创建步骤时总是由后端生成稳定引用，避免模型伪造数据库编号。
@@ -227,7 +280,7 @@ public class LearningPlanDraftService {
         draft.setSteps(repository.findSteps(draft.getDraftRef()));
     }
 
-    // 复制主体字段并保留草案的创建来源和未生效状态。
+    // 复制主体字段并保留原状态；ACTIVE 修改后仍是同一份正式计划的新版本。
     private LearningPlanDraft copyForUpdate(LearningPlanDraft current, UpdateLearningPlanDraftRequest request,
                                             LocalDateTime now) {
         LearningPlanDraft next = new LearningPlanDraft();
@@ -243,7 +296,7 @@ public class LearningPlanDraftService {
                 MAX_WEEKLY_COMMITMENT, "每周投入"));
         next.setConstraints(normalizeOptional(request.getConstraints() == null ? current.getConstraints() : request.getConstraints(),
                 MAX_CONSTRAINTS, "限制条件"));
-        next.setStatus("DRAFT");
+        next.setStatus(current.getStatus());
         next.setSource(current.getSource());
         next.setVersion(current.getVersion());
         next.setCreatedAt(current.getCreatedAt());
@@ -288,6 +341,13 @@ public class LearningPlanDraftService {
             throw new ClientDataErrorException("expectedVersion 必须是正整数");
         }
         validateStepCount(request.getSteps());
+    }
+
+    // 正式生效也使用版本条件，避免旧页面确认已经被修改的草案。
+    private void validateActivationVersion(long expectedVersion) {
+        if (expectedVersion < 1) {
+            throw new ClientDataErrorException("草案版本必须是正整数");
+        }
     }
 
     // 校验更新主体；为空字段在正式更新时表示保留旧值。

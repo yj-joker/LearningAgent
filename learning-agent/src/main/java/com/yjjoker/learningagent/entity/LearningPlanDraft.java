@@ -23,7 +23,7 @@ public class LearningPlanDraft {
     private String weeklyCommitment;
     // 用户提出的时间、设备或内容限制。
     private String constraints;
-    // 只允许 DRAFT，明确表示内容尚未正式生效。
+    // DRAFT 表示草案，ACTIVE 表示已经正式生效，ARCHIVED 表示历史归档。
     private String status = "DRAFT";
     // MANUAL 或 AGENT，用于展示来源，不改变审批规则。
     private String source;

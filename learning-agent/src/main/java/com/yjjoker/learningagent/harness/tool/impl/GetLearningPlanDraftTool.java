@@ -20,7 +20,7 @@ public class GetLearningPlanDraftTool implements Tool {
     // 只有需要完整步骤时才读取正文，减少无关上下文。
     @Override
     public String description() {
-        return "按当前草案索引中的 draftRef 读取一份学习计划草案的完整字段和步骤。返回内容仍是 DRAFT，不能当作正式计划或已经开始执行。";
+        return "按当前学习计划索引中的 draftRef 读取完整字段和步骤。DRAFT 尚未生效，ACTIVE 是正式计划；正式生效不代表已经开始专注执行。";
     }
 
     @Override

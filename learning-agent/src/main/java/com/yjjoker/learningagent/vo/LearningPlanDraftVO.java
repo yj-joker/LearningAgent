@@ -6,7 +6,7 @@ import lombok.Getter;
 import java.time.LocalDateTime;
 import java.util.List;
 
-// 对外展示一份草案；formal=false 是固定事实，防止把草案误认为已生效计划。
+// 对外展示学习计划生命周期；formal 根据数据库状态计算，避免模型或页面猜测是否生效。
 @Getter
 public class LearningPlanDraftVO {
     // 模型和页面使用的草案稳定引用。
@@ -19,7 +19,7 @@ public class LearningPlanDraftVO {
     private final String weeklyCommitment;
     private final String constraints;
     private final String status;
-    // 当前固定为 false，草案不会伪装成正式计划。
+    // 只有 ACTIVE 才能作为正式学习计划使用。
     private final boolean formal;
     // MANUAL 或 AGENT，只表示来源。
     private final String source;
@@ -39,7 +39,7 @@ public class LearningPlanDraftVO {
         this.weeklyCommitment = draft.getWeeklyCommitment();
         this.constraints = draft.getConstraints();
         this.status = draft.getStatus();
-        this.formal = false;
+        this.formal = "ACTIVE".equals(draft.getStatus());
         this.source = draft.getSource();
         this.version = draft.getVersion();
         this.createdAt = draft.getCreatedAt();

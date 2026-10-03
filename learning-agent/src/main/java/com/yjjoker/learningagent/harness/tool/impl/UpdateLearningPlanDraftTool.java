@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
-// 修改草案的写工具；版本校验和用户审批都不能省略。
+// 修改学习计划的写工具；版本校验和用户审批都不能省略。
 @Component
 @RequiredArgsConstructor
 public class UpdateLearningPlanDraftTool implements Tool {
@@ -20,7 +20,7 @@ public class UpdateLearningPlanDraftTool implements Tool {
     // 修改已有草案时必须复制最新 draftRef、expectedVersion 和完整步骤列表。
     @Override
     public String description() {
-        return "修改同一份学习计划草案。先读取最新草案，再提交 draftRef、expectedVersion 和完整步骤；需要用户审批，成功后版本递增但仍是 DRAFT。";
+        return "修改同一份学习计划（DRAFT 或 ACTIVE）。先读取最新草案，再提交 draftRef、expectedVersion 和完整步骤；需要用户审批，成功后版本递增并保留原状态。";
     }
 
     @Override

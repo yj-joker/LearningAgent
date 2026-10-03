@@ -32,3 +32,11 @@ export function updateLearningPlanDraft(draftRef: string, payload: LearningPlanD
     body: JSON.stringify(payload),
   })
 }
+
+// 用户明确确认后把同一份草案切换为正式计划。
+export function activateLearningPlanDraft(draftRef: string, expectedVersion: number) {
+  return request<LearningPlanDraft>(`${DRAFT_BASE}/${encodeURIComponent(draftRef)}/activate`, {
+    method: 'POST',
+    body: JSON.stringify({ expectedVersion }),
+  })
+}

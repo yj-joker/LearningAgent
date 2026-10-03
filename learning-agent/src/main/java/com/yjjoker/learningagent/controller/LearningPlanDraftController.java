@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.controller;
 
 import com.yjjoker.learningagent.dto.CreateLearningPlanDraftRequest;
+import com.yjjoker.learningagent.dto.ActivateLearningPlanDraftRequest;
 import com.yjjoker.learningagent.dto.UpdateLearningPlanDraftRequest;
 import com.yjjoker.learningagent.entity.Result;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
@@ -59,5 +60,13 @@ public class LearningPlanDraftController {
             throw new ClientDataErrorException("请求体中的 draftRef 与路径不一致");
         }
         return Result.success(service.updateManual(draftRef, request));
+    }
+
+    // 用户在页面明确点击确认时直接生效；这不是模型代替用户的授权。
+    @PostMapping("/{draftRef}/activate")
+    @Operation(summary = "确认学习计划草案正式生效")
+    public Result<LearningPlanDraftVO> activate(@PathVariable String draftRef,
+                                                @Valid @RequestBody ActivateLearningPlanDraftRequest request) {
+        return Result.success(service.activateManual(draftRef, request.getExpectedVersion()));
     }
 }
