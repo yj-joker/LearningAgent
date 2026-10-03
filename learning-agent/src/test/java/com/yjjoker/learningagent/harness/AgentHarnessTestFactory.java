@@ -1,6 +1,9 @@
 package com.yjjoker.learningagent.harness;
 
 import com.yjjoker.learningagent.harness.context.ContextManager;
+import com.yjjoker.learningagent.config.HarnessSkillProperties;
+import com.yjjoker.learningagent.harness.skill.service.SkillRegistry;
+import com.yjjoker.learningagent.harness.skill.service.SkillRunContext;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
 import com.yjjoker.learningagent.harness.hook.AgentHook;
 import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
@@ -128,6 +131,21 @@ public final class AgentHarnessTestFactory {
                                              OriginalToolResultStore resultStore,
                                              StructuredMemoryService structuredMemoryService,
                                              MemoryReferenceRegistry referenceRegistry) {
+        return create(llmClient, toolRegistry, hooks, conversationMemoryService, sessionRepository,
+                contextManager, resultStore, structuredMemoryService, referenceRegistry, emptySkillContext());
+    }
+
+    // 技能流程测试与 load_skill 共用同一个上下文，不给生产类增加测试构造器。
+    public static AgentHarnessService create(LlmClient llmClient,
+                                             ToolRegistry toolRegistry,
+                                             List<AgentHook> hooks,
+                                             ConversationMemoryService conversationMemoryService,
+                                             LearningSessionRepository sessionRepository,
+                                             ContextManager contextManager,
+                                             OriginalToolResultStore resultStore,
+                                             StructuredMemoryService structuredMemoryService,
+                                             MemoryReferenceRegistry referenceRegistry,
+                                             SkillRunContext skillContext) {
         // 测试仍然使用生产完整构造器，确保依赖关系和真实运行一致。
         // Spring 在生产环境自动发现记录 Hook；直接构造的测试需要显式补上它。
         List<AgentHook> installedHooks = new ArrayList<>(hooks);
@@ -159,8 +177,16 @@ public final class AgentHarnessTestFactory {
                 mock(SessionGoalService.class),
                 mock(FocusPlanPlanner.class),
                 goalContext,
-                (GoalIntentRecognitionService) (runId, userMessage) -> GoalIntent.unknown()
+                (GoalIntentRecognitionService) (runId, userMessage) -> GoalIntent.unknown(),
+                skillContext
         );
+    }
+
+    // 原有测试不关心技能时保留空索引，不让新增提示词改变它们的上下文边界。
+    public static SkillRunContext emptySkillContext() {
+        SkillRegistry registry = mock(SkillRegistry.class);
+        when(registry.listSkills()).thenReturn(List.of());
+        return new SkillRunContext(registry, new HarnessSkillProperties());
     }
 
     // 现有 Harness 循环测试只关注工具流程，不额外消耗一次模型响应。

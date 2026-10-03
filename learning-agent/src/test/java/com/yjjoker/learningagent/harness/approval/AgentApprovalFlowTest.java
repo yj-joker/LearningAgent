@@ -51,6 +51,9 @@ class AgentApprovalFlowTest {
     private final Map<String, AgentApprovalRun> runs = new HashMap<>();
     private final List<ToolApprovalRequest> requests = new ArrayList<>();
     private AgentHarnessService harness;
+    // 默认空技能保持原用例不变；技能审批测试会换成真实的运行上下文。
+    private com.yjjoker.learningagent.harness.skill.service.SkillRunContext skillContext =
+            com.yjjoker.learningagent.harness.AgentHarnessTestFactory.emptySkillContext();
 
     // 建立登录范围和仓库存取行为，让测试只控制模型下一步和用户审批决定。
     @BeforeEach
@@ -63,7 +66,9 @@ class AgentApprovalFlowTest {
         when(sessions.findSessionById(9L)).thenReturn(Optional.of(session));
         when(memory.loadUserMemoryIndex(7L)).thenReturn(List.of());
         when(memory.loadSessionMemoryIndex(9L)).thenReturn(List.of());
-        when(history.loadHistory(9L)).thenReturn(List.of(LlmMessage.user("我叫小明"), LlmMessage.assistant("你好，小明")));
+        List<LlmMessage> savedHistory = List.of(LlmMessage.user("我叫小明"), LlmMessage.assistant("你好，小明"));
+        when(history.loadHistory(9L, AgentMode.CHAT)).thenReturn(savedHistory);
+        when(history.loadHistory(9L, AgentMode.FOCUS)).thenReturn(savedHistory);
         when(repository.insertRun(any())).thenAnswer(inv -> {
             AgentApprovalRun run = inv.getArgument(0);
             runs.put(run.getRunId(), run);
@@ -128,7 +133,7 @@ class AgentApprovalFlowTest {
         assertEquals("change_setting", result.getApprovals().getFirst().getToolName());
         assertEquals(0, calls.get());
         verify(llm, times(1)).generate(any());
-        verify(history, never()).appendMessages(any(), any());
+        verify(history, never()).appendMessages(any(), any(AgentMode.class), any());
         verifyNoInteractions(extraction, consolidation);
         AgentRunCheckpoint saved = approvals.restore(runs.get(result.getRunId()));
         assertEquals("a", saved.getMessages().getLast().getToolCalls().getFirst().id());
@@ -163,8 +168,8 @@ class AgentApprovalFlowTest {
         assertEquals("已完成", harness.resume(paused.getRunId()).getAnswer());
         assertEquals(1, calls.get());
         verify(llm, times(2)).generate(any());
-        verify(history, times(1)).loadHistory(9L);
-        verify(history, times(1)).appendMessages(eq(9L), any());
+        verify(history, times(1)).loadHistory(9L, AgentMode.CHAT);
+        verify(history, times(1)).appendMessages(eq(9L), eq(AgentMode.CHAT), any());
         // 暂停、审批决定、取得恢复权、完成分别通知；重复读完成结果不再通知。
         verify(notifier, times(4)).changedAfterCommit(7L);
     }
@@ -327,9 +332,10 @@ class AgentApprovalFlowTest {
         approvals.claim(paused.getRunId());
         java.sql.Connection connection = mock(java.sql.Connection.class);
         AgentApprovalService transactional = transactionalService(connection);
-        doThrow(new IllegalStateException("模拟保存失败")).when(history).appendMessages(any(), any());
+        doThrow(new IllegalStateException("模拟保存失败")).when(history)
+                .appendMessages(any(), any(AgentMode.class), any());
         assertThrows(RuntimeException.class, () -> transactional.complete(paused.getRunId(), 9L,
-                List.of(LlmMessage.user("执行"), LlmMessage.assistant("完成")), "完成"));
+                AgentMode.CHAT, List.of(LlmMessage.user("执行"), LlmMessage.assistant("完成")), "完成"));
         verify(connection).rollback();
         verify(connection, never()).commit();
     }
@@ -483,7 +489,7 @@ class AgentApprovalFlowTest {
                 new LlmRetryExecutor(), memory, references, extraction,
                 mock(MemoryApprovalService.class), approvals,
                 plans, planner, goalContext,
-                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown());
+                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown(), skillContext);
     }
 
     // 专注暂停后模式随检查点恢复，先执行原工具，再继续模型；不会重复规划。
@@ -650,7 +656,7 @@ class AgentApprovalFlowTest {
                 && message.getContent().contains("APPROVAL_REJECTED")));
         // 最终历史只保存真实对话及工具结果，不把审查反馈带入下一轮。
         ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
-        verify(history).appendMessages(eq(9L), saved.capture());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.FOCUS), saved.capture());
         assertFalse(new JsonMapper().writeValueAsString(saved.getValue()).contains("reviewSuggestion"));
     }
 

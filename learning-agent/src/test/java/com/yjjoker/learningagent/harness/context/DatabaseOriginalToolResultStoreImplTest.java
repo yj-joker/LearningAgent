@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.context;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
 import com.yjjoker.learningagent.harness.context.impl.DatabaseOriginalToolResultStoreImpl;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
@@ -30,16 +31,45 @@ class DatabaseOriginalToolResultStoreImplTest {
         message.setRole(LearningSessionMessageRoleEnum.TOOL);
         message.setToolCallId("call_old");
         message.setContent("原始数据库结果");
-        when(messageRepository.findToolResult(10L, "call_old")).thenReturn(message);
+        when(messageRepository.findToolResult(10L, AgentMode.FOCUS.name(), "call_old")).thenReturn(message);
 
         DatabaseOriginalToolResultStoreImpl store = new DatabaseOriginalToolResultStoreImpl(
                 new InMemoryOriginalToolResultStoreImpl(), messageRepository
         );
-        store.beginSession(10L);
+        store.beginSession(10L, AgentMode.FOCUS);
 
         assertEquals("原始数据库结果", store.read("call_old", 0, 100));
         assertEquals(7, store.length("call_old"));
-        verify(messageRepository).findToolResult(eq(10L), eq("call_old"));
+        verify(messageRepository).findToolResult(eq(10L), eq(AgentMode.FOCUS.name()), eq("call_old"));
+    }
+
+    // 同一个会话里即使工具调用 ID 相同，也必须按当前模式回查原文。
+    @Test
+    @DisplayName("工具原文回查会隔离问答与专注模式")
+    void shouldReadToolResultOnlyFromCurrentMode() {
+        LearningSessionMessage chatResult = new LearningSessionMessage();
+        chatResult.setContent("问答工具原文");
+        LearningSessionMessage focusResult = new LearningSessionMessage();
+        focusResult.setContent("专注工具原文");
+        when(messageRepository.findToolResult(10L, AgentMode.CHAT.name(), "shared_call"))
+                .thenReturn(chatResult);
+        when(messageRepository.findToolResult(10L, AgentMode.FOCUS.name(), "shared_call"))
+                .thenReturn(focusResult);
+
+        DatabaseOriginalToolResultStoreImpl store = new DatabaseOriginalToolResultStoreImpl(
+                new InMemoryOriginalToolResultStoreImpl(), messageRepository
+        );
+        store.beginSession(10L, AgentMode.CHAT);
+        assertEquals("问答工具原文", store.read("shared_call", 0, 100));
+
+        // 模拟当前任务结束后线程被下一种模式复用，先清理缓存再建立新范围。
+        store.clear();
+        store.beginSession(10L, AgentMode.FOCUS);
+        assertEquals("专注工具原文", store.read("shared_call", 0, 100));
+
+        verify(messageRepository).findToolResult(10L, AgentMode.CHAT.name(), "shared_call");
+        verify(messageRepository).findToolResult(10L, AgentMode.FOCUS.name(), "shared_call");
+        store.clear();
     }
 
     @Test

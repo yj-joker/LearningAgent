@@ -10,6 +10,7 @@ import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.hook.ToolExecutionRecordingHook;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
@@ -103,7 +104,7 @@ class AgentHarnessStructuredMemoryIntegrationTest {
         // 记录模型收到的消息，检查 system prompt 的实际内容。
         RecordingLlmClient llmClient = new RecordingLlmClient();
         ConversationMemoryService conversationMemoryService = mock(ConversationMemoryService.class);
-        when(conversationMemoryService.loadHistory(SESSION_ID)).thenReturn(List.of());
+        when(conversationMemoryService.loadHistory(SESSION_ID, AgentMode.CHAT)).thenReturn(List.of());
 
         // Mock 会话仓库，让 Harness 通过访问权限校验。
         LearningSessionRepository sessionRepository = mock(LearningSessionRepository.class);
@@ -557,7 +558,8 @@ class AgentHarnessStructuredMemoryIntegrationTest {
                 mock(com.yjjoker.learningagent.harness.plan.service.SessionGoalService.class),
                 mock(com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner.class),
                 new com.yjjoker.learningagent.harness.plan.service.SessionGoalContext(),
-                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown());
+                (runId, userMessage) -> com.yjjoker.learningagent.harness.plan.model.GoalIntent.unknown(),
+                AgentHarnessTestFactory.emptySkillContext());
     }
 
     // 创建属于当前用户的运动记忆，供主循环与提取索引使用。

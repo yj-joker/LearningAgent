@@ -18,6 +18,7 @@ import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.llm.model.ToolCallLlmResponse;
 import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.tool.Tool;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
@@ -702,28 +703,28 @@ class AgentHarnessTest {
         }
 
         @Override
-        public List<LlmMessage> loadHistory(Long sessionId) {
+        public List<LlmMessage> loadHistory(Long sessionId, AgentMode agentMode) {
             loadCount++;
             return history;
         }
 
         @Override
-        public void appendMessage(Long sessionId, LlmMessage message) {
+        public void appendMessage(Long sessionId, AgentMode agentMode, LlmMessage message) {
             savedMessages.add(message);
         }
 
         @Override
-        public void appendMessages(Long sessionId, List<LlmMessage> messages) {
+        public void appendMessages(Long sessionId, AgentMode agentMode, List<LlmMessage> messages) {
             savedMessages.addAll(messages);
         }
 
         @Override
-        public void updateToolContextCopies(Long sessionId, List<LlmMessage> messages) {
+        public void updateToolContextCopies(Long sessionId, AgentMode agentMode, List<LlmMessage> messages) {
             // 单元测试使用内存列表，不需要模拟数据库 UPDATE。
         }
 
         @Override
-        public void replaceReplayableHistoryWithSummary(Long sessionId, LlmMessage summaryMessage) {
+        public void replaceReplayableHistoryWithSummary(Long sessionId, AgentMode agentMode, LlmMessage summaryMessage) {
             // 单元测试不连接数据库，只记录摘要消息，验证 Harness 确实触发了持久化入口。
             savedMessages.add(summaryMessage);
         }

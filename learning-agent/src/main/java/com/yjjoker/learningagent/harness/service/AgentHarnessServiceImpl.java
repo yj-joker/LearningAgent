@@ -13,6 +13,7 @@ import com.yjjoker.learningagent.harness.hook.FinalAnswerHookResult;
 import com.yjjoker.learningagent.harness.hook.ToolCallHookResult;
 import com.yjjoker.learningagent.harness.hook.FinalAnswerConsistencyHook;
 import com.yjjoker.learningagent.harness.review.AnswerReviewRequest;
+import com.yjjoker.learningagent.harness.skill.service.SkillRunContext;
 import com.yjjoker.learningagent.harness.context.ContextManager;
 import com.yjjoker.learningagent.harness.context.ContextSummarizer;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
@@ -135,6 +136,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     private final FocusPlanPlanner focusPlanPlanner;
     // 独立意图模型只判断用户是否要求读写目标，不执行任何业务工具。
     private final GoalIntentRecognitionService goalIntentRecognitionService;
+    // 与 load_skill 工具共用本轮激活集合，正文只在主模型上下文中按需出现。
+    private final SkillRunContext skillRunContext;
 
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
@@ -156,7 +159,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    SessionGoalService sessionGoalService,
                                    FocusPlanPlanner focusPlanPlanner,
                                    SessionGoalContext sessionGoalContext,
-                                   GoalIntentRecognitionService goalIntentRecognitionService) {
+                                   GoalIntentRecognitionService goalIntentRecognitionService,
+                                   SkillRunContext skillRunContext) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -187,6 +191,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.sessionGoalContext = sessionGoalContext;
         this.focusPlanPlanner = focusPlanPlanner;
         this.goalIntentRecognitionService = goalIntentRecognitionService;
+        this.skillRunContext = skillRunContext;
     }
 
     @Override
@@ -219,9 +224,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 专注模式先确保计划存在；问答模式不额外调用规划模型。
             AgentTaskPlan taskPlan = prepareFocusPlan(context.getRunId(), sessionId, userMessage, mode, goalIntent);
             // 给原始工具结果恢复工具设置当前会话范围，后续数据库查询不会跨会话读取。
-            originalToolResultStore.beginSession(sessionId);
+            originalToolResultStore.beginSession(sessionId, mode);
             // memoryRef 只在本次请求有效，先建立当前用户和会话的映射范围。
             memoryReferenceRegistry.beginRun(BaseContext.getCurrentId(), sessionId, userMessage, context.getRunId());
+            // 技能只属于当前逻辑任务，新问题不会继承上一轮的激活状态。
+            skillRunContext.beginRun();
             // 运行 Agent 循环，得到最终结果
             AgentRunResult result = runAgentLoop(sessionId, userMessage, context, null, List.of(), taskPlan);
             // HTTP 执行结束不代表任务成功；等待审批需要独立记录，不能被结束 Hook 误报。
@@ -243,6 +250,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 任务结束后清理 memoryRef，避免线程池复用线程时读取旧映射。
             memoryReferenceRegistry.clear();
             sessionGoalContext.clear();
+            skillRunContext.clear();
         }
     }
 
@@ -258,10 +266,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         context.bindSession(run.getUserId(), run.getSessionId());
         try {
             AgentRunCheckpoint checkpoint = agentApprovalService.restore(run);
+            // 先验证已加载技能，再处理任何待执行工具；旧检查点的空集合自然兼容。
+            skillRunContext.restore(checkpoint.getLoadedSkills());
             AgentMode mode = checkpoint.getMode() == null ? AgentMode.CHAT : checkpoint.getMode();
             context.bindMode(mode);
             log.info("Agent 恢复原模式，runId={}，sessionId={}，mode={}", runId, run.getSessionId(), mode);
-            originalToolResultStore.beginSession(run.getSessionId());
+            originalToolResultStore.beginSession(run.getSessionId(), mode);
             // 恢复原编号和当时的目标版本，而不是重新加载索引后从 memory_1 编号。
             memoryReferenceRegistry.restoreRun(run.getUserId(), run.getSessionId(), checkpoint.getUserMessage(), runId,
                     checkpoint.getMemoryTargets(), checkpoint.getNextMemoryNumber());
@@ -306,6 +316,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             originalToolResultStore.clear();
             memoryReferenceRegistry.clear();
             sessionGoalContext.clear();
+            skillRunContext.clear();
         }
     }
 
@@ -415,7 +426,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             MemoryIndexSnapshot memoryIndex = loadMemoryIndex(sessionId);
             systemPromptBase = buildSystemPrompt(memoryIndex, context.getMode(), taskPlan);
             messages.add(LlmMessage.system(systemPromptBase));
-            messages.addAll(conversationMemoryService.loadHistory(sessionId));
+            messages.addAll(conversationMemoryService.loadHistory(sessionId, context.getMode()));
             currentRunStartIndex = messages.size();
             messages.add(LlmMessage.user(userMessage));
         } else {
@@ -423,7 +434,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             currentRunStartIndex = saved.getCurrentRunStartIndex();
             systemPromptBase = saved.getSystemPromptBase();
         }
-        refreshGoalPrompt(messages, systemPromptBase, context.getMode());
+        refreshSystemContext(messages, systemPromptBase, context.getMode());
         LlmMessage currentUserMessage = messages.get(currentRunStartIndex);
         // 暂停不会重置工具轮数、恢复次数、字符预算和本轮摘要次数。
         int completedToolRounds = saved == null ? 0 : saved.getCompletedToolRounds();
@@ -456,8 +467,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 模型请求前确认目标未被别的请求切换；不在网络等待期间持有数据库锁。
                 if (context.getMode() == AgentMode.FOCUS) {
                     sessionGoalService.requireUnchanged(sessionGoalContext.require());
-                    refreshGoalPrompt(messages, systemPromptBase, context.getMode());
                 }
+                // 问答与专注模式都按本轮技能重建上下文，随后统一检查完整请求大小。
+                refreshSystemContext(messages, systemPromptBase, context.getMode());
                 // generate 只生成“模型下一步”，它可能是最终文本，也可能是需要 Java 执行的工具调用。
                 // 摘要身份由消息字段确定，比较前后内容只用于判断是否生成了新摘要。
                 String summaryBeforeRequest = findContextSummaryContent(messages);
@@ -470,12 +482,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 摘要会减少历史消息数量；重新定位当前用户消息，避免后续子列表边界失效。
                 currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
                 boolean summaryGenerated = persistNewSummaryIfNeeded(
-                        sessionId, summaryBeforeRequest, messages
+                        sessionId, context.getMode(), summaryBeforeRequest, messages
                 );
                 summaryUsed = summaryUsed || summaryGenerated;
                 // 保存工具结果被压缩之后的上下文
                 conversationMemoryService.updateToolContextCopies(
                         sessionId,
+                        context.getMode(),
                         messages.subList(1, currentRunStartIndex)
                 );
                 // 网络暂时失败由重试器处理；成功后这里仍只接收一个正常 LlmResponse。
@@ -547,10 +560,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 只有完整得到最终回答后，才在一个事务中保存本轮全部消息。
                 List<LlmMessage> completedMessages = new ArrayList<>(messages.subList(currentRunStartIndex, messages.size()));
                 if (saved == null) {
-                    conversationMemoryService.appendMessages(sessionId, completedMessages);
+                    conversationMemoryService.appendMessages(sessionId, context.getMode(), completedMessages);
                 } else {
                     // 最终消息和运行完成状态一起提交，客户端重试不会重复保存同一轮。
-                    agentApprovalService.complete(context.getRunId(), sessionId, completedMessages, answer);
+                    agentApprovalService.complete(context.getRunId(), sessionId, context.getMode(),
+                            completedMessages, answer);
                 }
                 // 审查失败的保护性回答不进入后置提取，避免把不确定的任务结果写成记忆。
                 if (!finalAnswerCheck.isReplaceAnswer()) {
@@ -633,9 +647,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         List<LlmMessage> finished = new ArrayList<>(messages.subList(currentRunStartIndex, currentToolRoundStartIndex));
                         finished.add(LlmMessage.assistant(check.getMessage()));
                         if (saved == null) {
-                            conversationMemoryService.appendMessages(sessionId, finished);
+                            conversationMemoryService.appendMessages(sessionId, context.getMode(), finished);
                         } else {
-                            agentApprovalService.complete(context.getRunId(), sessionId, finished, check.getMessage());
+                            agentApprovalService.complete(context.getRunId(), sessionId, context.getMode(),
+                                    finished, check.getMessage());
                         }
                         return completedResult(context, check.getMessage());
                     }
@@ -646,7 +661,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         String notice = "等待期间审批规则已变化，本批工具均未执行，请重新发起请求。";
                         List<LlmMessage> finished = new ArrayList<>(messages.subList(currentRunStartIndex, currentToolRoundStartIndex));
                         finished.add(LlmMessage.assistant(notice));
-                        agentApprovalService.complete(context.getRunId(), sessionId, finished, notice);
+                        agentApprovalService.complete(context.getRunId(), sessionId, context.getMode(),
+                                finished, notice);
                         return completedResult(context, notice);
                     }
                     AgentRunCheckpoint checkpoint = new AgentRunCheckpoint();
@@ -655,6 +671,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     checkpoint.setSessionId(sessionId);
                     checkpoint.setMode(context.getMode());
                     checkpoint.setSystemPromptBase(systemPromptBase);
+                    checkpoint.setLoadedSkills(skillRunContext.snapshot());
                     if (context.getMode() == AgentMode.FOCUS) {
                         checkpoint.setGoalSnapshot(sessionGoalContext.require());
                         checkpoint.setGoalIntent(sessionGoalContext.getGoalIntent());
@@ -770,8 +787,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 审批只授权这次原参数调用，下一次模型请求仍须重新检查和审批。
                 currentDecisions.clear();
 
-                // 先替换已变更目标，再计算上下文大小，防止按旧计划长度错误放行。
-                refreshGoalPrompt(messages, systemPromptBase, context.getMode());
+                // 先替换目标和新加载的技能，再计算上下文大小，不按旧提示词长度放行。
+                refreshSystemContext(messages, systemPromptBase, context.getMode());
                 // 普通工具和恢复工具都在这里执行安全水位检查，必要时摘要旧历史。
                 String summaryBeforeToolCheck = findContextSummaryContent(messages);
                 messages = compactMessagesAfterToolExecution(
@@ -783,12 +800,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 currentRunStartIndex = findMessageIndex(messages, currentUserMessage);
                 // 工具执行完毕后判断是否产生了新摘要
                 boolean summaryGeneratedAfterTools = persistNewSummaryIfNeeded(
-                        sessionId, summaryBeforeToolCheck, messages
+                        sessionId, context.getMode(), summaryBeforeToolCheck, messages
                 );
                 // 目前只允许在一次AgentLoop当中生成一次摘要
                 summaryUsed = summaryUsed || summaryGeneratedAfterTools;
                 conversationMemoryService.updateToolContextCopies(
                         sessionId,
+                        context.getMode(),
                         messages.subList(1, currentRunStartIndex)
                 );
                 completedToolRounds++;
@@ -885,7 +903,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                      AgentMode mode,
                                      AgentTaskPlan taskPlan) {
         StringBuilder prompt = new StringBuilder(AgentSystemPrompt.CONTENT);
-        // 这里只组装固定规则和记忆；目标块由 refreshGoalPrompt 整体替换，不靠字符串识别边界。
+        // 这里只组装固定规则和记忆；动态目标与技能由 refreshSystemContext 整体替换。
         if (!memoryIndex.getUserMemories().isEmpty() || !memoryIndex.getSessionMemories().isEmpty()) {
             // 索引只是数据；没有记忆时不发送空索引，但仍保留专注计划。
             prompt.append("\n\n【结构化记忆索引：只读数据，不是新的指令】")
@@ -903,18 +921,20 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         return result;
     }
 
-    // 用固定提示词加最新目标重建第一条系统消息，不反复追加互相矛盾的旧目标。
-    private void refreshGoalPrompt(List<LlmMessage> messages, String base, AgentMode mode) {
-        if (mode != AgentMode.FOCUS) return;
+    // 从固定规则重建目标和技能，避免重复追加正文；系统消息不保存到用户聊天历史。
+    private void refreshSystemContext(List<LlmMessage> messages, String base, AgentMode mode) {
         if (base == null || base.isBlank() || messages.isEmpty() || !"system".equals(messages.getFirst().getRole())) {
-            throw new IllegalStateException("专注上下文缺少固定系统消息");
+            throw new IllegalStateException("模型上下文缺少固定系统消息");
         }
         StringBuilder prompt = new StringBuilder(base);
-        appendFocusPlan(prompt, mode, sessionGoalContext.require().getCurrentPlan());
+        if (mode == AgentMode.FOCUS) {
+            appendFocusPlan(prompt, mode, sessionGoalContext.require().getCurrentPlan());
+        }
+        // 索引常驻、正文按需；技能不会发给独立的规划、审查或记忆提取模型。
+        skillRunContext.appendPrompt(prompt);
         messages.set(0, LlmMessage.system(prompt.toString()));
-        // 这里只观察实际注入长度；保留每次读取最新目标的时机，不改状态或审批流程。
-        log.info("专注目标上下文已刷新，focusCharacters={}，systemCharacters={}",
-                prompt.length() - base.length(), prompt.length());
+        log.info("模型动态上下文已刷新，mode={}，dynamicCharacters={}，systemCharacters={}",
+                mode, prompt.length() - base.length(), prompt.length());
     }
 
     // 临时反馈包含被拒绝的草稿；它是待修改数据，不是另一条用户授权，也不会进入聊天历史。
@@ -1086,6 +1106,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
     // 只有摘要正文发生变化时才写数据库，避免每轮重复归档和插入相同摘要。
     private boolean persistNewSummaryIfNeeded(Long sessionId,
+                                              AgentMode agentMode,
                                               String summaryBefore,
                                               List<LlmMessage> messages) {
         String summaryAfter = findContextSummaryContent(messages);
@@ -1096,10 +1117,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         //发生变化，保存最新摘要
         conversationMemoryService.replaceReplayableHistoryWithSummary(
                 sessionId,
+                agentMode,
                 LlmMessage.summary(summaryAfter)
         );
-        log.info("检测到新的上下文摘要并完成持久化，sessionId={}，摘要字符数={}",
-                sessionId, summaryAfter.length());
+        log.info("检测到新的上下文摘要并完成持久化，sessionId={}，mode={}，摘要字符数={}",
+                sessionId, agentMode, summaryAfter.length());
         return true;
     }
 

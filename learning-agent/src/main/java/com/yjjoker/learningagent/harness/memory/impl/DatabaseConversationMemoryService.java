@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;
@@ -34,16 +35,17 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     private final LearningSessionSummaryRepository summaryRepository;
 
 
-    // 按数据库中的消息顺序加载历史，并转换成 LLM 能直接使用的消息。
+    // 只加载指定模式的消息和摘要；没有来源标记的旧消息不猜测归属。
     @Override
-    public List<LlmMessage> loadHistory(Long sessionId) {
+    public List<LlmMessage> loadHistory(Long sessionId, AgentMode agentMode) {
         // 先阻止非法 ID 进入数据库查询。
         requireSessionId(sessionId);
-        LearningSessionSummary latestSummary = summaryRepository.findLatestBySessionId(sessionId);
+        requireAgentMode(agentMode);
+        LearningSessionSummary latestSummary = summaryRepository.findLatestBySessionId(sessionId, agentMode.name());
         List<LearningSessionMessage> storedMessages = latestSummary == null
-                ? messageRepository.findReplayableBySessionId(sessionId)
+                ? messageRepository.findReplayableBySessionId(sessionId, agentMode.name())
                 : messageRepository.findReplayableAfterMessageId(
-                        sessionId, latestSummary.getCoveredUntilMessageId()
+                        sessionId, agentMode.name(), latestSummary.getCoveredUntilMessageId()
                 );
 
         List<LlmMessage> history = storedMessages
@@ -54,36 +56,41 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
         if (latestSummary != null) {
             history = prependSummary(latestSummary, history);
         }
-        log.info("加载会话上下文，sessionId={}，使用摘要={}，摘要覆盖消息ID={}，消息数={}",
+        log.info("加载会话上下文，sessionId={}，mode={}，使用摘要={}，摘要覆盖消息ID={}，消息数={}",
                 sessionId,
+                agentMode,
                 latestSummary != null,
                 latestSummary == null ? null : latestSummary.getCoveredUntilMessageId(),
                 history.size());
         return history;
     }
 
-    // 把 Agent Loop 中新产生的一条消息追加到指定会话。
+    // 把 Agent Loop 中新产生的一条消息追加到指定模式。
     @Override
     @Transactional
-    public void appendMessage(Long sessionId, LlmMessage message) {
+    public void appendMessage(Long sessionId, AgentMode agentMode, LlmMessage message) {
         // 阻止非法 ID 进入数据库查询。
         requireSessionId(sessionId);
+        requireAgentMode(agentMode);
         if (message == null) {
             throw new LearningAgentServiceException("保存的会话消息不能为空");
         }
 
         // 先完成角色映射和工具调用序列化，再交给 Repository 写入。
-        LearningSessionMessage storedMessage = toStoredMessage(sessionId, message);
+        LearningSessionMessage storedMessage = toStoredMessage(sessionId, agentMode, message);
         if (messageRepository.save(storedMessage) != 1) {
             throw new LearningAgentServiceException("保存会话消息失败，请稍后重试");
         }
+        log.info("会话消息已保存，sessionId={}，mode={}，role={}，replayable={}",
+                    sessionId, agentMode, storedMessage.getRole(), storedMessage.isContextReplayable());
     }
 
-    // 在同一事务中保存本轮全部消息，任何一条失败都会整体回滚。
+    // 在同一事务中保存本轮同一模式的全部消息，任何一条失败都会整体回滚。
     @Override
     @Transactional
-    public void appendMessages(Long sessionId, List<LlmMessage> messages) {
+    public void appendMessages(Long sessionId, AgentMode agentMode, List<LlmMessage> messages) {
         requireSessionId(sessionId);
+        requireAgentMode(agentMode);
         if (messages == null) {
             throw new LearningAgentServiceException("保存的会话消息列表不能为空");
         }
@@ -93,18 +100,21 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
                 throw new LearningAgentServiceException("保存的会话消息不能为空");
             }
 
-            LearningSessionMessage storedMessage = toStoredMessage(sessionId, message);
+            LearningSessionMessage storedMessage = toStoredMessage(sessionId, agentMode, message);
             if (messageRepository.save(storedMessage) != 1) {
                 throw new LearningAgentServiceException("保存会话消息失败，请稍后重试");
             }
         }
+        log.info("本轮会话消息已保存，sessionId={}，mode={}，messageCount={}",
+                sessionId, agentMode, messages.size());
     }
 
-    // 更新本轮工具调用的上下文副本，供后续轮次使用。
+    // 更新当前模式的工具上下文副本，避免同一会话另一模式的调用编号被改写。
     @Override
     @Transactional
-    public void updateToolContextCopies(Long sessionId, List<LlmMessage> messages) {
+    public void updateToolContextCopies(Long sessionId, AgentMode agentMode, List<LlmMessage> messages) {
         requireSessionId(sessionId);
+        requireAgentMode(agentMode);
         if (messages == null) {
             throw new LearningAgentServiceException("更新的上下文消息列表不能为空");
         }
@@ -119,34 +129,39 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
             }
             messageRepository.updateToolContextContent(
                     sessionId,
+                    agentMode.name(),
                     message.getToolCallId(),
                     message.getContextContent()
             );
         }
     }
 
-    // 摘要单独保存，原始消息不改写；覆盖点决定下一次 loadHistory 从哪里继续读取。
+    // 摘要只覆盖当前模式的原始消息，另一模式的摘要与历史保持独立。
     @Override
     @Transactional
-    public void replaceReplayableHistoryWithSummary(Long sessionId, LlmMessage summaryMessage) {
+    public void replaceReplayableHistoryWithSummary(Long sessionId,
+                                                    AgentMode agentMode,
+                                                    LlmMessage summaryMessage) {
         requireSessionId(sessionId);
+        requireAgentMode(agentMode);
         if (summaryMessage == null || !summaryMessage.isSummary()
                 || !"assistant".equals(summaryMessage.getRole())
                 || summaryMessage.getContent() == null || summaryMessage.getContent().isBlank()) {
             throw new LearningAgentServiceException("持久化的上下文摘要不能为空且必须是 assistant 消息");
         }
 
-        Long coveredUntilMessageId = messageRepository.findMaxMessageId(sessionId);
+        Long coveredUntilMessageId = messageRepository.findMaxMessageId(sessionId, agentMode.name());
         LearningSessionSummary summary = new LearningSessionSummary();
         summary.setSessionId(sessionId);
+        summary.setAgentMode(agentMode.name());
         summary.setSummaryContent(summaryMessage.getContent());
         summary.setCoveredUntilMessageId(coveredUntilMessageId == null ? 0L : coveredUntilMessageId);
         summary.setCreatedAt(LocalDateTime.now());
         if (summaryRepository.save(summary) != 1) {
             throw new LearningAgentServiceException("保存上下文摘要失败，请稍后重试");
         }
-        log.info("上下文摘要已持久化，sessionId={}，覆盖到消息ID={}，摘要字符数={}",
-                sessionId, summary.getCoveredUntilMessageId(), summaryMessage.getContent().length());
+        log.info("上下文摘要已持久化，sessionId={}，mode={}，覆盖到消息ID={}，摘要字符数={}",
+                sessionId, agentMode, summary.getCoveredUntilMessageId(), summaryMessage.getContent().length());
     }
 
     // 摘要作为第一条历史消息返回，后面的消息仍按原始数据库顺序追加。
@@ -160,9 +175,10 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     }
 
     // 将 Harness 消息转换成数据库实体。
-    private LearningSessionMessage toStoredMessage(Long sessionId, LlmMessage message) {
+    private LearningSessionMessage toStoredMessage(Long sessionId, AgentMode agentMode, LlmMessage message) {
         LearningSessionMessage storedMessage = new LearningSessionMessage();
         storedMessage.setSessionId(sessionId);
+        storedMessage.setAgentMode(agentMode.name());
         // content 永远保存完整原文，contextContent 只保存发送给模型的压缩副本。
         storedMessage.setContent(message.getOriginalContent());
         storedMessage.setContextContent(message.getContextContent());
@@ -239,6 +255,13 @@ public class DatabaseConversationMemoryService implements ConversationMemoryServ
     private void requireSessionId(Long sessionId) {
         if (sessionId == null || sessionId <= 0) {
             throw new LearningAgentServiceException("学习会话 ID 不合法");
+        }
+    }
+
+    // 模式必须明确，不能把消息静默归入另一个模式的历史。
+    private void requireAgentMode(AgentMode agentMode) {
+        if (agentMode == null) {
+            throw new LearningAgentServiceException("会话上下文模式不能为空");
         }
     }
 }

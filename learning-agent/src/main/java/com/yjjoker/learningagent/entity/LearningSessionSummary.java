@@ -12,6 +12,8 @@ public class LearningSessionSummary {
 
     private Long id;
     private Long sessionId;
+    // 摘要只覆盖同一模式的历史，防止跨模式重复带入。
+    private String agentMode;
     private String summaryContent;
     private Long coveredUntilMessageId;
     private LocalDateTime createdAt;

@@ -266,6 +266,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',
                                                         session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
+                                                        agent_mode VARCHAR(16) DEFAULT NULL COMMENT '上下文来源模式：CHAT 或 FOCUS；NULL 表示旧记录未分类',
                                                         role VARCHAR(20) NOT NULL COMMENT '消息角色：USER、ASSISTANT、TOOL',
                                                         content LONGTEXT DEFAULT NULL COMMENT '消息正文或工具执行结果',
                                                         context_content LONGTEXT DEFAULT NULL COMMENT '发送给模型的工具结果压缩副本',
@@ -276,9 +277,12 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
 
                                                         PRIMARY KEY (id),
                                                         KEY idx_session_messages_session_id_id (session_id, id),
+                                                        KEY idx_session_messages_mode (session_id, agent_mode, id),
 
                                                         CONSTRAINT chk_learning_session_messages_role
-                                                            CHECK (role IN ('USER', 'ASSISTANT', 'TOOL'))
+                                                            CHECK (role IN ('USER', 'ASSISTANT', 'TOOL')),
+                                                        CONSTRAINT chk_learning_session_messages_mode
+                                                            CHECK (agent_mode IS NULL OR agent_mode IN ('CHAT', 'FOCUS'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
@@ -288,12 +292,15 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
 CREATE TABLE IF NOT EXISTS learning_session_summaries (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '摘要主键',
                                                         session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
+                                                        agent_mode VARCHAR(16) NOT NULL COMMENT '摘要覆盖的上下文模式：CHAT 或 FOCUS',
                                                         summary_content LONGTEXT NOT NULL COMMENT '发送给模型的历史摘要',
                                                         covered_until_message_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '摘要覆盖到的消息主键',
                                                         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '摘要生成时间',
 
                                                         PRIMARY KEY (id),
-                                                        KEY idx_session_summaries_session_id_id (session_id, id)
+                                                        KEY idx_session_summaries_session_mode_id (session_id, agent_mode, id),
+                                                        CONSTRAINT chk_learning_session_summaries_mode
+                                                            CHECK (agent_mode IN ('CHAT', 'FOCUS'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci

@@ -1,11 +1,13 @@
 package com.yjjoker.learningagent.harness.context;
 
+import com.yjjoker.learningagent.harness.model.AgentMode;
+
 // 保存本次 Agent 运行期间的完整工具结果，供模型需要更多细节时按片段读取。
 public interface OriginalToolResultStore {
 
-    // Harness 在一次请求开始时设置会话范围，数据库实现据此限制查询范围。
-    // 内存实现只依赖当前线程隔离，因此可以直接继承这个空实现。
-    default void beginSession(Long sessionId) {
+    // Harness 同时设置会话和模式范围，数据库恢复不能跨会话或跨模式读取。
+    // 纯内存实现按当前线程隔离，因此不需要额外保存这两个值。
+    default void beginSession(Long sessionId, AgentMode agentMode) {
     }
 
     // toolCallId 是模型本次工具调用的唯一标识，originalResult 是完整 JSON 结果。

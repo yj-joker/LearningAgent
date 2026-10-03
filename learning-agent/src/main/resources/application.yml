@@ -72,12 +72,17 @@ aliyun:
     # OpenAI 兼容的聊天完成接口完整地址，测试时也可以通过环境变量替换成本地地址。
     base-url: ${ALIYUN_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
     # 默认模型使用稳定别名；更换模型只需要修改环境变量，不需要重新修改 Java 客户端。
-    model: ${ALIYUN_LLM_MODEL:qwen-plus}
+    model: ${ALIYUN_LLM_MODEL:qwen3.8-flash}
     # 分别限制建立连接和等待模型生成结果的最长时间，避免请求线程无限期阻塞。
     connect-timeout-seconds: ${ALIYUN_LLM_CONNECT_TIMEOUT_SECONDS:5}
     read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
 
 harness:
+  skills:
+    # 控制单次任务激活的技能规模；重复读取不增加数量，暂停恢复沿用同一集合。
+    max-active-skills: ${HARNESS_SKILL_MAX_ACTIVE_SKILLS:3}
+    # 只统计活跃正文字符，整个请求仍要经过 context 的安全水位检查。
+    max-active-characters: ${HARNESS_SKILL_MAX_ACTIVE_CHARACTERS:12000}
   llm:
     retry:
       # 最大尝试次数包含第一次请求；3 表示首次请求失败后最多再重试两次。

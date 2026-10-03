@@ -56,7 +56,8 @@ class AgentHarnessModeTest {
         session.setUserId(7L);
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(sessions.findSessionById(9L)).thenReturn(Optional.of(session));
-        when(history.loadHistory(9L)).thenReturn(List.of());
+        when(history.loadHistory(9L, AgentMode.CHAT)).thenReturn(List.of());
+        when(history.loadHistory(9L, AgentMode.FOCUS)).thenReturn(List.of());
         when(memory.loadUserMemoryIndex(7L)).thenReturn(List.of());
         when(memory.loadSessionMemoryIndex(9L)).thenReturn(List.of());
         when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(PLAN));
@@ -72,7 +73,8 @@ class AgentHarnessModeTest {
                 plans, new FocusPlanPlanner(client, retry, new ToolRegistry(List.of())), goalContext,
                 (runId, userMessage) -> new GoalIntent(
                         false, userMessage != null && userMessage.contains("开始第一步"), false,
-                        1.0, "测试替身识别到进度变更"));
+                        1.0, "测试替身识别到进度变更"),
+                com.yjjoker.learningagent.harness.AgentHarnessTestFactory.emptySkillContext());
     }
 
     // 不让登录身份残留到其他测试。
@@ -176,7 +178,7 @@ class AgentHarnessModeTest {
     // 摘要只能替换旧历史，位于系统消息中的专注计划仍完整保留。
     @Test
     void preservesPlanThroughHistorySummary() {
-        when(history.loadHistory(9L)).thenReturn(List.of(LlmMessage.user("旧消息".repeat(4000))));
+        when(history.loadHistory(9L, AgentMode.FOCUS)).thenReturn(List.of(LlmMessage.user("旧消息".repeat(4000))));
         when(summarizer.summarize(any())).thenReturn("用户之前学习过 Java。");
         harness.run(9L, "解释事务", AgentMode.FOCUS);
         ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
@@ -244,7 +246,7 @@ class AgentHarnessModeTest {
         assertEquals(List.of("system", "user"), reviewed.getValue().getDialogue().stream().map(LlmMessage::getRole).toList());
         assertFalse(reviewed.getValue().getDialogue().getFirst().getContent().contains("【回答审查反馈】"));
         ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
-        verify(history).appendMessages(eq(9L), saved.capture());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.FOCUS), saved.capture());
         assertEquals(List.of("讲解集合", result.getAnswer()), saved.getValue().stream().map(LlmMessage::getContent).toList());
         assertEquals(AgentTaskStepStatus.PENDING, result.getProgress().getSteps().getFirst().getStatus());
     }
@@ -291,7 +293,7 @@ class AgentHarnessModeTest {
         verifyNoInteractions(extraction);
         // 错误草稿和反馈都不保存，只保留用户问题和保护回答。
         ArgumentCaptor<List<LlmMessage>> saved = ArgumentCaptor.forClass(List.class);
-        verify(history).appendMessages(eq(9L), saved.capture());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.FOCUS), saved.capture());
         assertEquals(List.of("讲解第一步", result.getAnswer()), saved.getValue().stream().map(LlmMessage::getContent).toList());
     }
 
@@ -330,7 +332,7 @@ class AgentHarnessModeTest {
             return new AnswerReviewResult(AnswerReviewResult.Action.PASS, "通过", "");
         });
         assertThrows(IllegalStateException.class, () -> harness.run(9L, "讲解集合", AgentMode.FOCUS));
-        verify(history, never()).appendMessages(any(), any());
+        verify(history, never()).appendMessages(any(), any(AgentMode.class), any());
     }
 
     // 生成与 runId 独立的持久目标，后续多次请求可以复用它。

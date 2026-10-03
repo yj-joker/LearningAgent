@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
+import com.yjjoker.learningagent.harness.skill.model.SkillCheckpointEntry;
 import lombok.Data;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -28,6 +29,8 @@ public class AgentRunCheckpoint {
     private GoalIntent goalIntent;
     // 不含动态目标块，恢复后可以整体重建系统消息，避免旧目标与新目标同时生效。
     private String systemPromptBase;
+    // 旧检查点缺少此字段时为空；恢复已加载技能前核对版本和内容指纹。
+    private List<SkillCheckpointEntry> loadedSkills = new ArrayList<>();
     private String userMessage;
     private int batchNumber;
     // 包含尚未得到结果的 assistant(tool_calls)，恢复时先补 tool 消息再请求模型。

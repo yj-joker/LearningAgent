@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.approval;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.memory.service.ConversationMemoryService;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.model.AgentRunStatus;
 import com.yjjoker.learningagent.repository.AgentApprovalRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
@@ -179,17 +180,23 @@ public class AgentApprovalService {
 
     // 保存完整聊天消息并清空检查点正文；同一事务一起提交，消息保存失败时不会丢掉检查点。
     @Transactional
-    public void complete(String runId, Long sessionId, List<LlmMessage> messages, String answer) {
+    public void complete(String runId, Long sessionId, AgentMode agentMode,
+                         List<LlmMessage> messages, String answer) {
         AgentApprovalRun run = requireRun(repository.lock(runId, currentUser()));
         requireOwner(run.getUserId(), sessionId);
         if (!Objects.equals(run.getSessionId(), sessionId)) {
             throw new ClientDataErrorException("任务与会话不匹配");
         }
+        // 恢复时必须明确使用检查点模式，不能把消息写入未分类的历史。
+        if (agentMode == null) {
+            throw new ClientDataErrorException("任务模式不能为空");
+        }
         requireOne(repository.complete(runId, run.getUserId(), answer));
-        history.appendMessages(sessionId, messages);
+        history.appendMessages(sessionId, agentMode, messages);
         // 历史和完成状态一起提交，前端收到通知后才会读取最终回答。
         notifier.changedAfterCommit(run.getUserId());
-        log.info("恢复任务已完成，已保存历史并清理检查点正文，runId={}，messageCount={}", runId, messages.size());
+        log.info("恢复任务已完成，已保存原模式历史并清理检查点正文，runId={}，mode={}，messageCount={}",
+                runId, agentMode, messages.size());
     }
 
     // 未知系统异常不自动重跑可能已经产生副作用的工具，避免重复删除或写入。

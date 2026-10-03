@@ -2,8 +2,10 @@ package com.yjjoker.learningagent.harness.context.impl;
 
 import com.yjjoker.learningagent.entity.LearningSessionMessage;
 import com.yjjoker.learningagent.harness.context.OriginalToolResultStore;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 @Primary
 @Component
 @AllArgsConstructor
+@Slf4j
 public class DatabaseOriginalToolResultStoreImpl implements OriginalToolResultStore {
 
     // 注入内存工具结果存储类
@@ -20,12 +23,20 @@ public class DatabaseOriginalToolResultStoreImpl implements OriginalToolResultSt
 
     // 当前线程对应的会话 ID由 Harness 设置，数据库查询必须带上它进行会话隔离。
     private final ThreadLocal<Long> currentSessionId = new ThreadLocal<>();
+    // 同一会话的问答和专注工具调用也必须分别查询。
+    private final ThreadLocal<AgentMode> currentAgentMode = new ThreadLocal<>();
 
 
     @Override
-    public void beginSession(Long sessionId) {
-        // 新请求开始时记录会话范围；内存实现的线程空间会按需自动创建。
+    public void beginSession(Long sessionId, AgentMode agentMode) {
+        // 建立完整读取范围前先拒绝缺失参数，不能让数据库回查失去隔离条件。
+        if (sessionId == null || agentMode == null) {
+            throw new IllegalArgumentException("原始工具结果的会话和模式范围不能为空");
+        }
+        // 新请求开始时记录会话和模式范围；内存实现的线程空间会按需自动创建。
         currentSessionId.set(sessionId);
+        currentAgentMode.set(agentMode);
+        log.info("原始工具结果范围已设置，sessionId={}，mode={}", sessionId, agentMode);
     }
 
     @Override
@@ -80,17 +91,24 @@ public class DatabaseOriginalToolResultStoreImpl implements OriginalToolResultSt
         // 同时清理组合实现和内部实现，避免线程池复用线程时残留会话 ID或工具结果。
         memoryStore.clear();
         currentSessionId.remove();
+        currentAgentMode.remove();
     }
 
     // 从数据库中加载工具调用原始结果
     private String loadFromDatabase(String toolCallId) {
         Long sessionId = currentSessionId.get();
-        if (sessionId == null) {
-            // 没有 Harness 设置的会话范围时，禁止查询数据库，避免出现跨会话读取风险。
+        AgentMode agentMode = currentAgentMode.get();
+        if (sessionId == null || agentMode == null) {
+            // 缺少会话或模式范围时，禁止查询数据库，避免跨会话或跨模式读取。
             return null;
         }
-        // Repository 查询同时使用 sessionId 和 toolCallId，不能只按调用 ID 查询。
-        LearningSessionMessage message = messageRepository.findToolResult(sessionId, toolCallId);
+        // Repository 同时使用会话、模式和调用 ID，不能只按调用 ID 查询。
+        LearningSessionMessage message = messageRepository.findToolResult(sessionId, agentMode.name(), toolCallId);
+        if (message != null) {
+            // 只记录范围和长度，不把完整工具结果写入日志。
+            log.info("已从数据库恢复工具原文，sessionId={}，mode={}，toolCallId={}，characters={}",
+                    sessionId, agentMode, toolCallId, message.getContent() == null ? 0 : message.getContent().length());
+        }
         return message == null ? null : message.getContent();
     }
 }

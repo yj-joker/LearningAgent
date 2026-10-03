@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.harness.llm.model.ToolCall;
 import com.yjjoker.learningagent.harness.memory.impl.DatabaseConversationMemoryService;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import com.yjjoker.learningagent.repository.LearningSessionMessageRepository;
 import com.yjjoker.learningagent.repository.LearningSessionSummaryRepository;
@@ -47,13 +48,14 @@ class DatabaseConversationMemoryServiceTest {
                 new ToolCall("call_1", "search_course", "{\"keyword\":\"事务\"}")
         ));
 
-        service.appendMessage(10L, message);
+        service.appendMessage(10L, AgentMode.CHAT, message);
 
         ArgumentCaptor<LearningSessionMessage> captor =
                 ArgumentCaptor.forClass(LearningSessionMessage.class);
         verify(messageRepository).save(captor.capture());
         LearningSessionMessage storedMessage = captor.getValue();
         assertEquals(10L, storedMessage.getSessionId());
+        assertEquals(AgentMode.CHAT.name(), storedMessage.getAgentMode());
         assertEquals(LearningSessionMessageRoleEnum.ASSISTANT, storedMessage.getRole());
         assertNotNull(storedMessage.getCreatedAt());
         assertFalse(storedMessage.getToolCallsJson().isBlank());
@@ -87,14 +89,14 @@ class DatabaseConversationMemoryServiceTest {
                 null,
                 null
         );
-        when(messageRepository.findReplayableBySessionId(10L)).thenReturn(List.of(
+        when(messageRepository.findReplayableBySessionId(10L, AgentMode.CHAT.name())).thenReturn(List.of(
                 userMessage,
                 assistantToolCall,
                 toolResult,
                 assistantAnswer
         ));
 
-        List<LlmMessage> history = service().loadHistory(10L);
+        List<LlmMessage> history = service().loadHistory(10L, AgentMode.CHAT);
 
         assertEquals(List.of("user", "assistant", "tool", "assistant"),
                 history.stream().map(LlmMessage::getRole).toList());
@@ -104,7 +106,7 @@ class DatabaseConversationMemoryServiceTest {
         assertEquals("{\"success\":true,\"content\":\"完整资料\"}",
                 history.get(2).getOriginalContent());
         assertEquals("事务是一组不可分割的操作。", history.get(3).getContent());
-        verify(messageRepository).findReplayableBySessionId(10L);
+        verify(messageRepository).findReplayableBySessionId(10L, AgentMode.CHAT.name());
     }
 
     @Test
@@ -113,7 +115,7 @@ class DatabaseConversationMemoryServiceTest {
         LearningSessionSummary summary = new LearningSessionSummary();
         summary.setSummaryContent("用户正在学习事务");
         summary.setCoveredUntilMessageId(20L);
-        when(summaryRepository.findLatestBySessionId(10L)).thenReturn(summary);
+        when(summaryRepository.findLatestBySessionId(10L, AgentMode.CHAT.name())).thenReturn(summary);
 
         LearningSessionMessage recentMessage = storedMessage(
                 LearningSessionMessageRoleEnum.USER,
@@ -121,17 +123,53 @@ class DatabaseConversationMemoryServiceTest {
                 null,
                 null
         );
-        when(messageRepository.findReplayableAfterMessageId(10L, 20L))
+        when(messageRepository.findReplayableAfterMessageId(10L, AgentMode.CHAT.name(), 20L))
                 .thenReturn(List.of(recentMessage));
 
-        List<LlmMessage> history = service().loadHistory(10L);
+        List<LlmMessage> history = service().loadHistory(10L, AgentMode.CHAT);
 
         assertEquals(2, history.size());
         assertEquals("用户正在学习事务", history.getFirst().getContent());
         assertTrue(history.getFirst().isSummary());
         assertEquals("继续讲锁", history.get(1).getContent());
-        verify(messageRepository).findReplayableAfterMessageId(10L, 20L);
-        verify(messageRepository, never()).findReplayableBySessionId(10L);
+        verify(messageRepository).findReplayableAfterMessageId(10L, AgentMode.CHAT.name(), 20L);
+        verify(messageRepository, never()).findReplayableBySessionId(10L, AgentMode.CHAT.name());
+    }
+
+    // 同一会话的两个模式分别取自己的摘要和摘要后的新消息。
+    @Test
+    @DisplayName("问答与专注历史及摘要互不混用")
+    void shouldLoadHistoryAndSummaryOnlyForRequestedMode() {
+        LearningSessionSummary chatSummary = new LearningSessionSummary();
+        chatSummary.setSummaryContent("问答摘要");
+        chatSummary.setCoveredUntilMessageId(10L);
+        LearningSessionSummary focusSummary = new LearningSessionSummary();
+        focusSummary.setSummaryContent("专注摘要");
+        focusSummary.setCoveredUntilMessageId(20L);
+        when(summaryRepository.findLatestBySessionId(10L, AgentMode.CHAT.name())).thenReturn(chatSummary);
+        when(summaryRepository.findLatestBySessionId(10L, AgentMode.FOCUS.name())).thenReturn(focusSummary);
+
+        LearningSessionMessage chatMessage = storedMessage(
+                LearningSessionMessageRoleEnum.USER, "问答新消息", null, null);
+        LearningSessionMessage focusMessage = storedMessage(
+                LearningSessionMessageRoleEnum.USER, "专注新消息", null, null);
+        when(messageRepository.findReplayableAfterMessageId(10L, AgentMode.CHAT.name(), 10L))
+                .thenReturn(List.of(chatMessage));
+        when(messageRepository.findReplayableAfterMessageId(10L, AgentMode.FOCUS.name(), 20L))
+                .thenReturn(List.of(focusMessage));
+
+        DatabaseConversationMemoryService service = service();
+        List<LlmMessage> chatHistory = service.loadHistory(10L, AgentMode.CHAT);
+        List<LlmMessage> focusHistory = service.loadHistory(10L, AgentMode.FOCUS);
+
+        assertEquals(List.of("问答摘要", "问答新消息"),
+                chatHistory.stream().map(LlmMessage::getContent).toList());
+        assertEquals(List.of("专注摘要", "专注新消息"),
+                focusHistory.stream().map(LlmMessage::getContent).toList());
+        verify(summaryRepository).findLatestBySessionId(10L, AgentMode.CHAT.name());
+        verify(summaryRepository).findLatestBySessionId(10L, AgentMode.FOCUS.name());
+        verify(messageRepository).findReplayableAfterMessageId(10L, AgentMode.CHAT.name(), 10L);
+        verify(messageRepository).findReplayableAfterMessageId(10L, AgentMode.FOCUS.name(), 20L);
     }
 
     @Test
@@ -150,7 +188,7 @@ class DatabaseConversationMemoryServiceTest {
                 .toolResult("call_large", "完整工具结果")
                 .withContextContent("压缩工具结果");
 
-        service.appendMessage(10L, compactedToolMessage);
+        service.appendMessage(10L, AgentMode.FOCUS, compactedToolMessage);
 
         ArgumentCaptor<LearningSessionMessage> captor =
                 ArgumentCaptor.forClass(LearningSessionMessage.class);
@@ -167,10 +205,11 @@ class DatabaseConversationMemoryServiceTest {
                 .toolResult("call_old", "完整历史结果")
                 .withContextContent("更小的上下文副本");
 
-        service.updateToolContextCopies(10L, List.of(compactedToolMessage));
+        service.updateToolContextCopies(10L, AgentMode.FOCUS, List.of(compactedToolMessage));
 
         verify(messageRepository).updateToolContextContent(
                 10L,
+                AgentMode.FOCUS.name(),
                 "call_old",
                 "更小的上下文副本"
         );
@@ -187,7 +226,7 @@ class DatabaseConversationMemoryServiceTest {
                 false
         );
 
-        service.appendMessage(10L, recoveryResult);
+        service.appendMessage(10L, AgentMode.CHAT, recoveryResult);
 
         ArgumentCaptor<LearningSessionMessage> captor =
                 ArgumentCaptor.forClass(LearningSessionMessage.class);
@@ -199,11 +238,12 @@ class DatabaseConversationMemoryServiceTest {
     @Test
     @DisplayName("摘要会归档旧历史并保存为新的可重放消息")
     void shouldArchiveHistoryAndPersistSummary() {
-        when(messageRepository.findMaxMessageId(10L)).thenReturn(42L);
+        when(messageRepository.findMaxMessageId(10L, AgentMode.FOCUS.name())).thenReturn(42L);
         when(summaryRepository.save(any())).thenReturn(1);
 
         service().replaceReplayableHistoryWithSummary(
                 10L,
+                AgentMode.FOCUS,
                 LlmMessage.summary("用户正在学习事务")
         );
 
@@ -211,6 +251,7 @@ class DatabaseConversationMemoryServiceTest {
                 ArgumentCaptor.forClass(LearningSessionSummary.class);
         verify(summaryRepository).save(captor.capture());
         assertEquals(10L, captor.getValue().getSessionId());
+        assertEquals(AgentMode.FOCUS.name(), captor.getValue().getAgentMode());
         assertEquals(42L, captor.getValue().getCoveredUntilMessageId());
     }
 
@@ -221,7 +262,7 @@ class DatabaseConversationMemoryServiceTest {
 
         LearningAgentServiceException exception = assertThrows(
                 LearningAgentServiceException.class,
-                () -> service.appendMessage(10L, LlmMessage.system("系统规则"))
+                () -> service.appendMessage(10L, AgentMode.CHAT, LlmMessage.system("系统规则"))
         );
 
         assertEquals("System Prompt 不能保存到会话历史", exception.getMessage());

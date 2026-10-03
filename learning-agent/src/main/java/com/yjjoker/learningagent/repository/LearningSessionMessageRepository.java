@@ -25,56 +25,62 @@ public interface LearningSessionMessageRepository {
 
     // 保存一条消息；工具调用 JSON 为空时，MySQL 会保存为 NULL。
     @Insert("INSERT INTO learning_session_messages " +
-            "(session_id, role, content, context_content, tool_calls, tool_call_id, " +
+            "(session_id, agent_mode, role, content, context_content, tool_calls, tool_call_id, " +
             "context_replayable, created_at) " +
-            "VALUES (#{message.sessionId}, #{message.role}, #{message.content}, " +
+            "VALUES (#{message.sessionId}, #{message.agentMode}, #{message.role}, #{message.content}, " +
             "#{message.contextContent}, #{message.toolCallsJson}, #{message.toolCallId}, " +
             "#{message.contextReplayable}, #{message.createdAt})")
     @Options(useGeneratedKeys = true, keyProperty = "message.id", keyColumn = "id")
     int save(@Param("message") LearningSessionMessage message);
 
     // 只加载允许重放的消息；恢复工具轨迹虽然保留在数据库，但不会进入未来上下文。
-    @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
+    @Select("SELECT id, session_id AS sessionId, agent_mode AS agentMode, role, content, context_content AS contextContent, " +
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
             "context_replayable AS contextReplayable, created_at AS createdAt " +
             "FROM learning_session_messages " +
-            "WHERE session_id = #{sessionId} AND context_replayable = TRUE ORDER BY id")
-    List<LearningSessionMessage> findReplayableBySessionId(@Param("sessionId") Long sessionId);
+            "WHERE session_id = #{sessionId} AND agent_mode = #{agentMode} " +
+            "AND context_replayable = TRUE ORDER BY id")
+    List<LearningSessionMessage> findReplayableBySessionId(@Param("sessionId") Long sessionId,
+                                                           @Param("agentMode") String agentMode);
 
     // 有摘要时只加载摘要覆盖位置之后的新消息，避免旧原文再次进入模型上下文。
-    @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
+    @Select("SELECT id, session_id AS sessionId, agent_mode AS agentMode, role, content, context_content AS contextContent, " +
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
             "context_replayable AS contextReplayable, created_at AS createdAt " +
             "FROM learning_session_messages " +
-            "WHERE session_id = #{sessionId} AND context_replayable = TRUE " +
+            "WHERE session_id = #{sessionId} AND agent_mode = #{agentMode} AND context_replayable = TRUE " +
             "AND id > #{coveredUntilMessageId} ORDER BY id")
     List<LearningSessionMessage> findReplayableAfterMessageId(
             @Param("sessionId") Long sessionId,
+            @Param("agentMode") String agentMode,
             @Param("coveredUntilMessageId") Long coveredUntilMessageId
     );
 
     // 摘要覆盖的是当前已经持久化的历史，当前请求产生的消息尚未保存，不会被错误纳入摘要范围。
     @Select("SELECT COALESCE(MAX(id), 0) FROM learning_session_messages " +
-            "WHERE session_id = #{sessionId}")
-    Long findMaxMessageId(@Param("sessionId") Long sessionId);
+            "WHERE session_id = #{sessionId} AND agent_mode = #{agentMode}")
+    Long findMaxMessageId(@Param("sessionId") Long sessionId,
+                          @Param("agentMode") String agentMode);
 
-    // 恢复工具结果时只允许查询当前会话中对应调用 ID 的 TOOL 消息。
-    @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
+    // 恢复工具结果时只查询当前会话、当前模式和调用 ID 对应的 TOOL 消息。
+    @Select("SELECT id, session_id AS sessionId, agent_mode AS agentMode, role, content, context_content AS contextContent, " +
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
             "context_replayable AS contextReplayable, created_at AS createdAt " +
             "FROM learning_session_messages " +
-            "WHERE session_id = #{sessionId} AND role = 'TOOL' " +
+            "WHERE session_id = #{sessionId} AND agent_mode = #{agentMode} AND role = 'TOOL' " +
             "AND tool_call_id = #{toolCallId} AND context_replayable = TRUE " +
             "ORDER BY id DESC LIMIT 1")
     LearningSessionMessage findToolResult(@Param("sessionId") Long sessionId,
+                                          @Param("agentMode") String agentMode,
                                           @Param("toolCallId") String toolCallId);
 
     // 历史工具结果被压缩时只更新上下文副本，完整原文 content 保持不变。
     @Update("UPDATE learning_session_messages SET context_content = #{contextContent} " +
-            "WHERE session_id = #{sessionId} AND role = 'TOOL' " +
+            "WHERE session_id = #{sessionId} AND agent_mode = #{agentMode} AND role = 'TOOL' " +
             "AND tool_call_id = #{toolCallId} AND context_replayable = TRUE " +
             "AND (context_content IS NULL OR context_content <> #{contextContent})")
     int updateToolContextContent(@Param("sessionId") Long sessionId,
+                                 @Param("agentMode") String agentMode,
                                  @Param("toolCallId") String toolCallId,
                                  @Param("contextContent") String contextContent);
 
