@@ -1,15 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-
-declare const URL: {
-  new (url: string, base?: string): { pathname: string }
-}
-
-declare global {
-  interface ImportMeta {
-    readonly url: string
-  }
-}
+import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [vue()],
@@ -17,7 +8,8 @@ export default defineConfig({
     alias: {
       // Keep the alias configuration portable in environments that do not
       // install Node's ambient type declarations for the Vite config.
-      '@': new URL('./src', import.meta.url).pathname,
+      // 使用 fileURLToPath 处理 Windows 盘符，开发服务器和生产构建共用同一别名。
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
   server: {

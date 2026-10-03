@@ -156,6 +156,49 @@ export interface SessionCreatePayload {
   sessionTitle: string
 }
 
+export interface LearningPlanDraftStep {
+  stepRef: string
+  position: number
+  description: string
+  completionCriteria: string
+}
+
+export interface LearningPlanDraft {
+  draftRef: string
+  title: string
+  objective: string
+  learnerProfile: string | null
+  weeklyCommitment: string | null
+  constraints: string | null
+  status: 'DRAFT'
+  formal: false
+  source: 'MANUAL' | 'AGENT'
+  version: number
+  createdAt: string
+  updatedAt: string
+  steps: LearningPlanDraftStep[]
+}
+
+export interface LearningPlanDraftStepPayload {
+  stepRef?: string | null
+  description: string
+  completionCriteria: string
+}
+
+export interface LearningPlanDraftCreatePayload {
+  title: string
+  objective: string
+  learnerProfile?: string | null
+  weeklyCommitment?: string | null
+  constraints?: string | null
+  steps: LearningPlanDraftStepPayload[]
+}
+
+export interface LearningPlanDraftUpdatePayload extends LearningPlanDraftCreatePayload {
+  draftRef?: string
+  expectedVersion: number
+}
+
 export interface LearningSessionVO {
   id: ApiId
   courseId?: ApiId

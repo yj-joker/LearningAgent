@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.HashSet;
 import java.util.List;
@@ -255,6 +256,12 @@ public class AgentApprovalService {
             } catch (RuntimeException exception) {
                 log.warn("审批进度检查点读取失败，runId={}，errorType={}", run.getRunId(), exception.getClass().getSimpleName());
             }
+        }
+        // 写事务中只使用检查点里的进度，不再为页面展示调用可能失败的目标读取。
+        // 目标读取异常如果污染当前事务，会把已经保存成功的审批一起回滚。
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            log.info("写事务内跳过当前专注进度补读，runId={}，原因=检查点没有目标快照", run.getRunId());
+            return null;
         }
         if (sessionGoals == null) return null;
         try {

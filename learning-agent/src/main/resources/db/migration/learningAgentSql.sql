@@ -120,6 +120,46 @@ CREATE TABLE IF NOT EXISTS agent_session_focus (
     CONSTRAINT chk_session_focus_number CHECK (next_goal_number >= 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话当前专注目标';
 
+-- 跨会话复用的学习计划草案；草案始终未正式生效，正式执行仍由专注模式单独管理。
+CREATE TABLE IF NOT EXISTS learning_plan_drafts (
+    draft_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '草案稳定引用',
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户 ID，逻辑外键',
+    title VARCHAR(200) NOT NULL COMMENT '草案标题',
+    objective VARCHAR(2000) NOT NULL COMMENT '总体学习目标',
+    learner_profile VARCHAR(1000) NULL COMMENT '学习者基础情况',
+    weekly_commitment VARCHAR(500) NULL COMMENT '每周可投入时间',
+    constraints_text VARCHAR(2000) NULL COMMENT '限制条件',
+    status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT '当前只允许 DRAFT',
+    source VARCHAR(20) NOT NULL COMMENT 'MANUAL 或 AGENT',
+    version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '乐观锁版本',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (draft_ref),
+    KEY idx_learning_plan_draft_user_updated (user_id, updated_at),
+    CONSTRAINT chk_learning_plan_draft_status CHECK (status = 'DRAFT'),
+    CONSTRAINT chk_learning_plan_draft_source CHECK (source IN ('MANUAL', 'AGENT')),
+    CONSTRAINT chk_learning_plan_draft_version CHECK (version >= 1),
+    CONSTRAINT chk_learning_plan_draft_title CHECK (CHAR_LENGTH(TRIM(title)) > 0),
+    CONSTRAINT chk_learning_plan_draft_objective CHECK (CHAR_LENGTH(TRIM(objective)) > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='学习计划草案';
+
+-- 草案步骤与草案分表保存，step_ref 在更新时保持稳定。
+CREATE TABLE IF NOT EXISTS learning_plan_draft_steps (
+    step_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '步骤稳定引用',
+    draft_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '所属草案引用',
+    position INT UNSIGNED NOT NULL COMMENT '步骤顺序，从 1 开始',
+    description VARCHAR(1000) NOT NULL COMMENT '步骤内容',
+    completion_criteria VARCHAR(1000) NOT NULL COMMENT '完成条件',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (step_ref),
+    UNIQUE KEY uk_learning_plan_draft_step_position (draft_ref, position),
+    KEY idx_learning_plan_draft_step_draft (draft_ref, position),
+    CONSTRAINT chk_learning_plan_draft_step_position CHECK (position >= 1),
+    CONSTRAINT chk_learning_plan_draft_step_description CHECK (CHAR_LENGTH(TRIM(description)) > 0),
+    CONSTRAINT chk_learning_plan_draft_step_criteria CHECK (CHAR_LENGTH(TRIM(completion_criteria)) > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='学习计划草案步骤';
+
 -- 用户长期记忆；只保存结构化事实，不替代完整会话消息。
 CREATE TABLE IF NOT EXISTS user_memories (
                                              id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '长期记忆主键',

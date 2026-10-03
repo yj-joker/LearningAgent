@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, X } from 'lucide-vue-next'
+import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, ScrollText, X } from 'lucide-vue-next'
 import { useAuth } from '@/composables/useAuth'
 
 defineProps<{ open: boolean; collapsed: boolean }>()
@@ -19,7 +19,7 @@ const openGroup = ref<'courses' | 'assistant' | null>(null)
 const chaptersExpanded = ref(false)
 
 const isCourseArea = computed(() => ['/courses', '/chapters', '/knowledge-points'].some((path) => route.path.startsWith(path)))
-const isAssistantArea = computed(() => route.path.startsWith('/ai-assistant') || route.path.startsWith('/sessions'))
+const isAssistantArea = computed(() => route.path.startsWith('/ai-assistant') || route.path.startsWith('/sessions') || route.path.startsWith('/learning-plans'))
 
 function toggleGroup(group: 'courses' | 'assistant') {
   openGroup.value = openGroup.value === group ? null : group
@@ -137,6 +137,10 @@ function openCreateCourse() {
           <RouterLink :to="{ path: '/sessions', query: { from: 'sidebar' } }" @click="closeNavigation">
             <MessageSquareText :size="17" />
             <span>学习会话</span>
+          </RouterLink>
+          <RouterLink :to="{ path: '/learning-plans', query: { from: 'sidebar' } }" @click="closeNavigation">
+            <ScrollText :size="17" />
+            <span>学习计划草案</span>
           </RouterLink>
         </div>
       </div>
