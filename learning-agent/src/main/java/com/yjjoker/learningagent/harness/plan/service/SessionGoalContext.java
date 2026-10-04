@@ -5,6 +5,7 @@ import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
 import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.utils.BaseContext;
+import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
 import org.springframework.stereotype.Component;
 import java.util.Objects;
 import java.util.List;
@@ -19,6 +20,8 @@ public class SessionGoalContext {
     private final ThreadLocal<GoalIntent> goalIntent = new ThreadLocal<>();
     // 保存本次 AgentLoop 开始时读取的长期计划快照，循环中途不热替换。
     private final ThreadLocal<LearningPlanDraft> learningPlan = new ThreadLocal<>();
+    // 保存本次 AgentLoop 开始时读取的长期计划进度，教学过程中不动态读取数据库。
+    private final ThreadLocal<LearningPlanProgressVO> learningPlanProgress = new ThreadLocal<>();
 
     // 绑定本轮意图快照；调用方必须先完成后端识别再进入 Agent Loop。
     public void bindIntent(GoalIntent intent) {
@@ -33,6 +36,16 @@ public class SessionGoalContext {
     // 返回本轮固定的长期计划快照。
     public LearningPlanDraft getLearningPlan() {
         return learningPlan.get();
+    }
+
+    // 绑定本轮长期计划步骤进度，模型只能读取这份快照。
+    public void bindLearningPlanProgress(LearningPlanProgressVO progress) {
+        learningPlanProgress.set(progress);
+    }
+
+    // 返回本轮固定的长期计划步骤进度。
+    public LearningPlanProgressVO getLearningPlanProgress() {
+        return learningPlanProgress.get();
     }
 
     // 返回当前意图快照，审批检查点会保存并在恢复时重新绑定。
@@ -97,5 +110,6 @@ public class SessionGoalContext {
         dialogue.remove();
         goalIntent.remove();
         learningPlan.remove();
+        learningPlanProgress.remove();
     }
 }

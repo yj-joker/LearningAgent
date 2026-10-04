@@ -50,6 +50,8 @@ import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
 import com.yjjoker.learningagent.harness.plan.service.FocusPlanPlanner;
 import com.yjjoker.learningagent.harness.plan.service.GoalIntentRecognitionService;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
+import com.yjjoker.learningagent.service.LearningPlanProgressService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
@@ -140,6 +142,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     private final GoalIntentRecognitionService goalIntentRecognitionService;
     // 与 load_skill 工具共用本轮激活集合，正文只在主模型上下文中按需出现。
     private final SkillRunContext skillRunContext;
+
+    // 读取长期学习计划的步骤进度；本轮只读一次，不让模型直接修改数据库。
+    @org.springframework.beans.factory.annotation.Autowired
+    private LearningPlanProgressService learningPlanProgressService;
 
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
@@ -296,6 +302,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 sessionGoalContext.bindIntent(checkpoint.getGoalIntent());
                 // 审批恢复使用暂停时的长期计划快照，不在同一 AgentLoop 中途热替换。
                 sessionGoalContext.bindLearningPlan(checkpoint.getLearningPlan());
+                // 恢复时沿用暂停前的学习进度快照，避免审批等待期间状态漂移。
+                sessionGoalContext.bindLearningPlanProgress(checkpoint.getLearningPlanProgress());
                 taskPlan = snapshot.getCurrentPlan();
             }
             AgentRunResult result = runAgentLoop(run.getSessionId(), checkpoint.getUserMessage(), context,
@@ -392,6 +400,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
         // 每轮开始只读取一次 ACTIVE 计划，规划和主循环共用这份快照。
         LearningPlanDraft learningPlan = sessionGoalService.loadBoundLearningPlan(sessionId);
+        // 关联长期计划时只读取一次步骤进度，教学过程使用固定快照。
+        LearningPlanProgressVO learningPlanProgress = learningPlan == null || learningPlanProgressService == null
+                ? null : learningPlanProgressService.loadCurrentUser(learningPlan.getDraftRef());
         // 同一会话的后续消息继续当前目标，不因新 runId 自动创建另一份短计划。
         SessionGoalSnapshot snapshot = sessionGoalService.load(sessionId);
         if (snapshot == null) {
@@ -402,6 +413,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         sessionGoalContext.bindIntent(goalIntent);
         // 后续模型调用固定使用本轮快照，计划在循环中途更新不会改变当前请求。
         sessionGoalContext.bindLearningPlan(learningPlan);
+        sessionGoalContext.bindLearningPlanProgress(learningPlanProgress);
         log.info("专注目标已准备，runId={}，sessionId={}，planId={}，goalNumber={}，focusVersion={}",
                 runId, sessionId, snapshot.getCurrentPlan().getPlanId(), snapshot.getCurrentPlan().getGoalNumber(),
                 snapshot.getState().getVersion());
@@ -409,6 +421,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 runId, sessionId, learningPlan == null ? null : learningPlan.getDraftRef(),
                 learningPlan == null ? null : learningPlan.getVersion(),
                 learningPlan == null ? null : learningPlan.getSemanticVersion());
+        log.info("专注请求长期计划进度已加载，runId={}，draftRef={}，stepCount={}，confirmedCount={}",
+                runId, learningPlanProgress == null ? null : learningPlanProgress.getDraftRef(),
+                learningPlanProgress == null ? 0 : learningPlanProgress.getSteps().size(),
+                learningPlanProgress == null ? 0 : learningPlanProgress.getSteps().stream()
+                        .filter(step -> step.getStatus() == com.yjjoker.learningagent.projectenum.LearningPlanStepProgressStatus.CONFIRMED).count());
         return snapshot.getCurrentPlan();
     }
 
@@ -688,6 +705,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         checkpoint.setGoalSnapshot(sessionGoalContext.require());
                         checkpoint.setGoalIntent(sessionGoalContext.getGoalIntent());
                         checkpoint.setLearningPlan(sessionGoalContext.getLearningPlan());
+                        checkpoint.setLearningPlanProgress(sessionGoalContext.getLearningPlanProgress());
                     }
                     checkpoint.setUserMessage(userMessage);
                     checkpoint.setBatchNumber(saved == null ? 0 : saved.getBatchNumber());
@@ -943,6 +961,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         if (mode == AgentMode.FOCUS) {
             appendFocusPlan(prompt, mode, sessionGoalContext.require().getCurrentPlan());
             appendLearningPlan(prompt, sessionGoalContext.getLearningPlan());
+            appendLearningPlanProgress(prompt, sessionGoalContext.getLearningPlanProgress());
         }
         // 索引常驻、正文按需；技能不会发给独立的规划、审查或记忆提取模型。
         skillRunContext.appendPrompt(prompt);
@@ -980,6 +999,31 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     .append(plan.getPreviousSemanticSnapshot());
         }
         prompt.append("\n该计划是学习安排资料，不代表本轮短期目标已经完成；计划内容变化以数据库最新版本为准。");
+    }
+
+    // 把步骤真实状态和已有证据放入教学上下文，防止模型凭自然语言猜测进度。
+    private void appendLearningPlanProgress(StringBuilder prompt, LearningPlanProgressVO progress) {
+        if (progress == null) return;
+        prompt.append("\n\n【长期学习计划步骤进度：只读数据】")
+                .append("\n进度对应计划版本：").append(progress.getPlanVersion())
+                .append("；语义版本：").append(progress.getSemanticVersion());
+        for (var step : progress.getSteps()) {
+            prompt.append("\n").append(step.getPosition()).append(". [")
+                    .append(step.getStatus()).append("] ")
+                    .append(step.getDescription())
+                    .append("；完成条件：").append(step.getCompletionCriteria());
+            if (step.getEvidenceType() != null) {
+                prompt.append("；已有证据类型：").append(step.getEvidenceType());
+            }
+            if (step.getEvidenceSummary() != null && !step.getEvidenceSummary().isBlank()) {
+                prompt.append("；证据摘要：").append(step.getEvidenceSummary());
+            }
+            if (step.getAssessmentReason() != null && !step.getAssessmentReason().isBlank()) {
+                prompt.append("；上次判断：").append(step.getAssessmentReason());
+            }
+        }
+        prompt.append("\n进度状态来自数据库，只能作为教学参考；讲解、练习和点评不等于步骤已确认。")
+                .append("达到完成条件时只能提出建议并说明证据，长期状态必须经过用户审批后由后端更新。");
     }
 
     // 临时反馈包含被拒绝的草稿；它是待修改数据，不是另一条用户授权，也不会进入聊天历史。

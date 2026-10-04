@@ -167,6 +167,29 @@ CREATE TABLE IF NOT EXISTS learning_plan_draft_steps (
     CONSTRAINT chk_learning_plan_draft_step_criteria CHECK (CHAR_LENGTH(TRIM(completion_criteria)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='学习计划草案步骤';
 
+-- 长期学习计划步骤的独立进度；计划内容修改不会直接覆盖学习证据。
+CREATE TABLE IF NOT EXISTS learning_plan_step_progress (
+    draft_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '所属学习计划引用',
+    step_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '所属计划步骤引用',
+    user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户 ID，逻辑外键',
+    status VARCHAR(20) NOT NULL DEFAULT 'NOT_STARTED' COMMENT '未开始、学习中、已确认',
+    evidence_type VARCHAR(20) NULL COMMENT 'EXPLANATION、EXERCISE 或 BOTH',
+    evidence_summary VARCHAR(2000) NULL COMMENT '最近一次已记录证据的简短摘要',
+    assessment_reason VARCHAR(2000) NULL COMMENT '模型判断理由，仅作为审批说明',
+    evaluated_plan_version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '证据对应的计划数据库版本',
+    evaluated_semantic_version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '证据对应的计划语义版本',
+    version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '进度记录乐观锁版本',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (draft_ref, step_ref),
+    KEY idx_learning_plan_progress_user_draft (user_id, draft_ref),
+    CONSTRAINT chk_learning_plan_progress_status CHECK (status IN ('NOT_STARTED','IN_PROGRESS','CONFIRMED')),
+    CONSTRAINT chk_learning_plan_progress_evidence CHECK (evidence_type IS NULL OR evidence_type IN ('EXPLANATION','EXERCISE','BOTH')),
+    CONSTRAINT chk_learning_plan_progress_version CHECK (version >= 1),
+    CONSTRAINT chk_learning_plan_progress_plan_version CHECK (evaluated_plan_version >= 1),
+    CONSTRAINT chk_learning_plan_progress_semantic_version CHECK (evaluated_semantic_version >= 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='长期学习计划步骤进度';
+
 -- 用户长期记忆；只保存结构化事实，不替代完整会话消息。
 CREATE TABLE IF NOT EXISTS user_memories (
                                              id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '长期记忆主键',
