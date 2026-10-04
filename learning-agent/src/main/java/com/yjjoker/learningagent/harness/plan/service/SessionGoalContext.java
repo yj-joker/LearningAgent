@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.plan.service;
 
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
+import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
 import com.yjjoker.learningagent.utils.BaseContext;
 import org.springframework.stereotype.Component;
@@ -16,10 +17,22 @@ public class SessionGoalContext {
     private final ThreadLocal<List<String>> dialogue = new ThreadLocal<>();
     // 保存独立意图模型生成的本轮快照，Hook 和工具共用同一份判断。
     private final ThreadLocal<GoalIntent> goalIntent = new ThreadLocal<>();
+    // 保存本次 AgentLoop 开始时读取的长期计划快照，循环中途不热替换。
+    private final ThreadLocal<LearningPlanDraft> learningPlan = new ThreadLocal<>();
 
     // 绑定本轮意图快照；调用方必须先完成后端识别再进入 Agent Loop。
     public void bindIntent(GoalIntent intent) {
         goalIntent.set(intent == null ? GoalIntent.unknown() : intent);
+    }
+
+    // 绑定本轮长期计划快照；传空表示会话没有关联学习计划。
+    public void bindLearningPlan(LearningPlanDraft draft) {
+        learningPlan.set(draft);
+    }
+
+    // 返回本轮固定的长期计划快照。
+    public LearningPlanDraft getLearningPlan() {
+        return learningPlan.get();
     }
 
     // 返回当前意图快照，审批检查点会保存并在恢复时重新绑定。
@@ -83,5 +96,6 @@ public class SessionGoalContext {
         current.remove();
         dialogue.remove();
         goalIntent.remove();
+        learningPlan.remove();
     }
 }

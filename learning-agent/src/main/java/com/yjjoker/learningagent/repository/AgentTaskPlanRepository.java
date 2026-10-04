@@ -133,6 +133,8 @@ public interface AgentTaskPlanRepository {
     // 普通读用于组装一个一致的模型快照。
     @Select("""
             SELECT user_id AS userId, session_id AS sessionId, active_plan_id AS activePlanId,
+                   learning_plan_draft_ref AS learningPlanDraftRef,
+                   learning_plan_binding_version AS learningPlanBindingVersion,
                    version, next_goal_number AS nextGoalNumber FROM agent_session_focus
             WHERE user_id = #{userId} AND session_id = #{sessionId}
             """)
@@ -141,6 +143,8 @@ public interface AgentTaskPlanRepository {
     // 切换先锁会话指针，再锁计划；并发修改按同一顺序进入。
     @Select("""
             SELECT user_id AS userId, session_id AS sessionId, active_plan_id AS activePlanId,
+                   learning_plan_draft_ref AS learningPlanDraftRef,
+                   learning_plan_binding_version AS learningPlanBindingVersion,
                    version, next_goal_number AS nextGoalNumber FROM agent_session_focus
             WHERE user_id = #{userId} AND session_id = #{sessionId} FOR UPDATE
             """)
@@ -155,6 +159,17 @@ public interface AgentTaskPlanRepository {
     int changeFocus(@Param("userId") Long userId, @Param("sessionId") Long sessionId,
                     @Param("planId") String planId, @Param("version") long version,
                     @Param("nextNumber") int nextNumber);
+
+    // 只修改长期计划关联版本，不推进短期目标版本。
+    @Update("""
+            UPDATE agent_session_focus
+            SET learning_plan_draft_ref = #{draftRef}, learning_plan_binding_version = learning_plan_binding_version + 1
+            WHERE user_id = #{userId} AND session_id = #{sessionId}
+              AND learning_plan_binding_version = #{expectedVersion}
+            """)
+    int updateLearningPlanBinding(@Param("userId") Long userId, @Param("sessionId") Long sessionId,
+                                  @Param("draftRef") String draftRef,
+                                  @Param("expectedVersion") long expectedVersion);
 
     // 目标序号只分配一次；切换回来时保留原引用，不重编号。
     @Update("""

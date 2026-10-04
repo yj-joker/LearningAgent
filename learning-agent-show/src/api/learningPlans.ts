@@ -3,6 +3,7 @@ import type {
   LearningPlanDraft,
   LearningPlanDraftCreatePayload,
   LearningPlanDraftUpdatePayload,
+  SessionLearningPlanBinding,
 } from '@/types/api'
 
 const DRAFT_BASE = '/learning-agent/learning-plans/drafts'
@@ -38,5 +39,19 @@ export function activateLearningPlanDraft(draftRef: string, expectedVersion: num
   return request<LearningPlanDraft>(`${DRAFT_BASE}/${encodeURIComponent(draftRef)}/activate`, {
     method: 'POST',
     body: JSON.stringify({ expectedVersion }),
+  })
+}
+
+// 读取会话当前关联的长期学习计划。
+export function getSessionLearningPlanBinding(sessionId: string) {
+  return request<SessionLearningPlanBinding>(`/agent/sessions/${encodeURIComponent(sessionId)}/learning-plan`)
+}
+
+// 保存会话关联或清除关联；后端按 bindingVersion 做并发校验。
+export function updateSessionLearningPlanBinding(sessionId: string, draftRef: string | null,
+                                                 expectedBindingVersion: number) {
+  return request<SessionLearningPlanBinding>(`/agent/sessions/${encodeURIComponent(sessionId)}/learning-plan`, {
+    method: 'PUT',
+    body: JSON.stringify({ draftRef, expectedBindingVersion }),
   })
 }

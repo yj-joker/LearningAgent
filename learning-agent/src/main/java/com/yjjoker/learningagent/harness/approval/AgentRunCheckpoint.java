@@ -6,6 +6,7 @@ import com.yjjoker.learningagent.harness.memory.model.MemoryExtractionTarget;
 import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.harness.plan.model.GoalIntent;
+import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.harness.skill.model.SkillCheckpointEntry;
 import lombok.Data;
 import java.util.ArrayList;
@@ -27,6 +28,8 @@ public class AgentRunCheckpoint {
     private SessionGoalSnapshot goalSnapshot;
     // 保存意图识别快照；审批恢复不重复调用识别模型，也不因上下文变化改变原判断。
     private GoalIntent goalIntent;
+    // 保存本次循环开始时的长期计划快照，审批恢复不读取中途新版本。
+    private LearningPlanDraft learningPlan;
     // 不含动态目标块，恢复后可以整体重建系统消息，避免旧目标与新目标同时生效。
     private String systemPromptBase;
     // 旧检查点缺少此字段时为空；恢复已加载技能前核对版本和内容指纹。

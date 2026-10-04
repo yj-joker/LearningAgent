@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.plan.service;
 
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
+import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
@@ -9,9 +10,11 @@ import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.AgentTaskPlanRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.service.LearningPlanDraftService;
+import com.yjjoker.learningagent.vo.SessionLearningPlanBindingVO;
 import com.yjjoker.learningagent.utils.BaseContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,7 +25,6 @@ import java.util.UUID;
 
 // 会话目标的持久化入口；所有修改都是短事务，事务内不调用模型或等待用户审批。
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class SessionGoalService {
     // 当前先保留一个有界索引；超过上限明确拒绝，不静默丢弃旧目标。
@@ -30,6 +32,23 @@ public class SessionGoalService {
     private final AgentTaskPlanRepository repository;
     private final AgentTaskPlanService plans;
     private final LearningSessionRepository sessions;
+    private final LearningPlanDraftService learningPlans;
+
+    // 生产环境注入长期计划服务；旧单元测试可使用三参数构造器测试短期目标。
+    @Autowired
+    public SessionGoalService(AgentTaskPlanRepository repository, AgentTaskPlanService plans,
+                              LearningSessionRepository sessions, LearningPlanDraftService learningPlans) {
+        this.repository = repository;
+        this.plans = plans;
+        this.sessions = sessions;
+        this.learningPlans = learningPlans;
+    }
+
+    // 保留短期目标测试的最小构造入口；未调用长期计划绑定方法时不影响旧测试。
+    public SessionGoalService(AgentTaskPlanRepository repository, AgentTaskPlanService plans,
+                              LearningSessionRepository sessions) {
+        this(repository, plans, sessions, null);
+    }
 
     // 每次新请求读取会话当前目标；没有目标时，Harness 才调用规划器。
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -73,6 +92,64 @@ public class SessionGoalService {
         log.info("会话目标切换已写入，等待事务提交，sessionId={}，goalNumber={}，focusVersion={}",
                 state.getSessionId(), target.getGoalNumber(), state.getVersion());
         return snapshot(state);
+    }
+
+    // 绑定或清除会话的长期计划引用；长期计划不会覆盖短期目标指针。
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public SessionLearningPlanBindingVO bindLearningPlan(Long sessionId, String draftRef,
+                                                         long expectedBindingVersion) {
+        Long userId = requireAccess(sessionId);
+        if (expectedBindingVersion < 0) throw new ClientDataErrorException("关联版本不能小于 0");
+        repository.ensureFocus(userId, sessionId);
+        SessionFocusState state = repository.lockFocus(userId, sessionId)
+                .orElseThrow(() -> new SecurityException("会话目标归属不一致"));
+        if (state.getLearningPlanBindingVersion() != expectedBindingVersion) {
+            throw new ClientDataErrorException("会话学习计划关联已变化，请刷新后重试");
+        }
+        String normalized = draftRef == null || draftRef.isBlank() ? null : draftRef.strip();
+        if (normalized != null) {
+            // 绑定前验证计划属于当前用户且已经 ACTIVE。
+            learningPlans.findActiveForUser(userId, normalized);
+        }
+        if (!Objects.equals(state.getLearningPlanDraftRef(), normalized)) {
+            if (repository.updateLearningPlanBinding(userId, sessionId, normalized,
+                    state.getLearningPlanBindingVersion()) != 1) {
+                throw changed();
+            }
+            state.setLearningPlanDraftRef(normalized);
+            state.setLearningPlanBindingVersion(state.getLearningPlanBindingVersion() + 1);
+            log.info("专注会话学习计划关联已更新，sessionId={}，draftRef={}，bindingVersion={}",
+                    sessionId, normalized, state.getLearningPlanBindingVersion());
+        }
+        return bindingView(state);
+    }
+
+    // 返回当前关联；还没有焦点表记录时版本从 0 开始。
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public SessionLearningPlanBindingVO getLearningPlanBinding(Long sessionId) {
+        Long userId = requireAccess(sessionId);
+        SessionFocusState state = repository.findFocus(userId, sessionId).orElse(null);
+        if (state == null) return new SessionLearningPlanBindingVO(sessionId, null, 0, null);
+        return bindingView(state);
+    }
+
+    // 每轮开始时按会话绑定引用读取最新 ACTIVE 计划；未绑定时返回空。
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public LearningPlanDraft loadBoundLearningPlan(Long sessionId) {
+        SessionFocusState state = repository.findFocus(requireAccess(sessionId), sessionId).orElse(null);
+        if (state == null || state.getLearningPlanDraftRef() == null) return null;
+        if (learningPlans == null) throw new IllegalStateException("长期学习计划服务未配置");
+        return learningPlans.findActiveForUser(state.getUserId(), state.getLearningPlanDraftRef());
+    }
+
+    // 绑定响应只附带标题，计划正文仍由每轮专注请求单独读取。
+    private SessionLearningPlanBindingVO bindingView(SessionFocusState state) {
+        String title = null;
+        if (state.getLearningPlanDraftRef() != null) {
+            title = learningPlans.findActiveForUser(state.getUserId(), state.getLearningPlanDraftRef()).getTitle();
+        }
+        return new SessionLearningPlanBindingVO(state.getSessionId(), state.getLearningPlanDraftRef(),
+                state.getLearningPlanBindingVersion(), title);
     }
 
     // 审批前确认目标版本和状态流转合法；这个入口绝不写库。

@@ -11,6 +11,8 @@ import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskStepRequest;
+import com.yjjoker.learningagent.entity.LearningPlanDraft;
+import com.yjjoker.learningagent.entity.LearningPlanDraftStep;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -54,8 +56,13 @@ public class FocusPlanPlanner {
 
     // 首次格式错误时反馈原因再生成一次；整个过程不写数据库。
     public CreateTaskPlanRequest createPlan(String runId, String userMessage) {
+        return createPlan(runId, userMessage, null);
+    }
+
+    // 有长期计划关联时参考其目标和阶段，但本轮用户要求仍优先。
+    public CreateTaskPlanRequest createPlan(String runId, String userMessage, LearningPlanDraft learningPlan) {
         List<LlmMessage> messages = new ArrayList<>(List.of(
-                LlmMessage.system(planningPrompt()),
+                LlmMessage.system(planningPrompt(learningPlan)),
                 LlmMessage.user(userMessage)
         ));
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -128,6 +135,26 @@ public class FocusPlanPlanner {
         }
         return AgentSystemPrompt.FOCUS_PLANNER_PROMPT
                 + "\n后续主 AgentLoop 可执行的工具定义如下；你只据此拆解步骤，不在规划阶段执行：\n" + catalog;
+    }
+
+    // 只把本轮开始时的计划快照加入首次短目标规划，不动态读取或修改长期计划。
+    private String planningPrompt(LearningPlanDraft plan) {
+        String base = planningPrompt();
+        if (plan == null) return base;
+        StringBuilder prompt = new StringBuilder(base)
+                .append("\n\n【本会话关联的 ACTIVE 学习计划快照】")
+                .append("\n标题：").append(plan.getTitle())
+                .append("\n总体目标：").append(plan.getObjective())
+                .append("\n当前数据库版本：").append(plan.getVersion())
+                .append("；语义版本：").append(plan.getSemanticVersion())
+                .append("\n阶段：");
+        for (LearningPlanDraftStep step : plan.getSteps()) {
+            prompt.append("\n").append(step.getPosition()).append(". ")
+                    .append(step.getDescription()).append("；完成条件：")
+                    .append(step.getCompletionCriteria());
+        }
+        prompt.append("\n据此理解本次目标与整体计划的关系；原始用户要求优先，不能把长期阶段当成已经完成。");
+        return prompt.toString();
     }
 
     // 规划器和新增目标工具共用短计划校验；调用此方法不会请求模型或写数据库。

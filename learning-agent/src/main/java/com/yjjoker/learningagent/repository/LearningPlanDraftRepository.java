@@ -20,10 +20,13 @@ public interface LearningPlanDraftRepository {
     @Insert("""
             INSERT INTO learning_plan_drafts
                 (draft_ref, user_id, title, objective, learner_profile, weekly_commitment,
-                 constraints_text, status, source, version, created_at, updated_at)
+                 constraints_text, status, source, version, semantic_version,
+                 semantic_change_version, previous_semantic_snapshot, created_at, updated_at)
             VALUES (#{draft.draftRef}, #{draft.userId}, #{draft.title}, #{draft.objective},
                 #{draft.learnerProfile}, #{draft.weeklyCommitment}, #{draft.constraints},
-                #{draft.status}, #{draft.source}, #{draft.version}, #{draft.createdAt}, #{draft.updatedAt})
+                #{draft.status}, #{draft.source}, #{draft.version}, #{draft.semanticVersion},
+                #{draft.semanticChangeVersion}, #{draft.previousSemanticSnapshot},
+                #{draft.createdAt}, #{draft.updatedAt})
             """)
     int insertDraft(@Param("draft") LearningPlanDraft draft);
 
@@ -41,6 +44,8 @@ public interface LearningPlanDraftRepository {
             SELECT draft_ref AS draftRef, user_id AS userId, title, objective,
                    learner_profile AS learnerProfile, weekly_commitment AS weeklyCommitment,
                    constraints_text AS `constraints`, status, source, version,
+                   semantic_version AS semanticVersion, semantic_change_version AS semanticChangeVersion,
+                   previous_semantic_snapshot AS previousSemanticSnapshot,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
             WHERE user_id = #{userId} AND status IN ('DRAFT', 'ACTIVE')
@@ -53,6 +58,8 @@ public interface LearningPlanDraftRepository {
             SELECT draft_ref AS draftRef, user_id AS userId, title, objective,
                    learner_profile AS learnerProfile, weekly_commitment AS weeklyCommitment,
                    constraints_text AS `constraints`, status, source, version,
+                   semantic_version AS semanticVersion, semantic_change_version AS semanticChangeVersion,
+                   previous_semantic_snapshot AS previousSemanticSnapshot,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
             WHERE user_id = #{userId} AND draft_ref = #{draftRef} AND status IN ('DRAFT', 'ACTIVE')
@@ -64,6 +71,8 @@ public interface LearningPlanDraftRepository {
             SELECT draft_ref AS draftRef, user_id AS userId, title, objective,
                    learner_profile AS learnerProfile, weekly_commitment AS weeklyCommitment,
                    constraints_text AS `constraints`, status, source, version,
+                   semantic_version AS semanticVersion, semantic_change_version AS semanticChangeVersion,
+                   previous_semantic_snapshot AS previousSemanticSnapshot,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM learning_plan_drafts
             WHERE user_id = #{userId} AND draft_ref = #{draftRef}
@@ -89,6 +98,9 @@ public interface LearningPlanDraftRepository {
             SET title = #{draft.title}, objective = #{draft.objective},
                 learner_profile = #{draft.learnerProfile}, weekly_commitment = #{draft.weeklyCommitment},
                 constraints_text = #{draft.constraints}, source = #{draft.source},
+                semantic_version = #{draft.semanticVersion},
+                semantic_change_version = #{draft.semanticChangeVersion},
+                previous_semantic_snapshot = #{draft.previousSemanticSnapshot},
                 version = version + 1, updated_at = #{updatedAt}
             WHERE draft_ref = #{draft.draftRef} AND user_id = #{userId}
               AND status IN ('DRAFT', 'ACTIVE') AND version = #{expectedVersion}

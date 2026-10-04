@@ -25,6 +25,12 @@ public class LearningPlanDraftVO {
     private final String source;
     // 页面和 Agent 更新时使用的乐观锁版本。
     private final long version;
+    // 语义版本忽略常见标点和空白差异，不等同于完整自然语言语义理解。
+    private final long semanticVersion;
+    // 最近一次实质变化的数据库版本。
+    private final long semanticChangeVersion;
+    // 最近一次实质变化前的完整内容快照；首次创建时为空。
+    private final String previousSemanticSnapshot;
     // 展示时间，不参与模型权限判断。
     private final LocalDateTime createdAt;
     private final LocalDateTime updatedAt;
@@ -42,6 +48,9 @@ public class LearningPlanDraftVO {
         this.formal = "ACTIVE".equals(draft.getStatus());
         this.source = draft.getSource();
         this.version = draft.getVersion();
+        this.semanticVersion = draft.getSemanticVersion();
+        this.semanticChangeVersion = draft.getSemanticChangeVersion();
+        this.previousSemanticSnapshot = draft.getPreviousSemanticSnapshot();
         this.createdAt = draft.getCreatedAt();
         this.updatedAt = draft.getUpdatedAt();
         this.steps = draft.getSteps().stream()

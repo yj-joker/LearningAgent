@@ -29,6 +29,12 @@ public class LearningPlanDraft {
     private String source;
     // 每次成功更新递增，拒绝旧页面覆盖新版本。
     private long version;
+    // 只有实质内容变化才递增；标点和空白调整不改变这个版本。
+    private long semanticVersion = 1;
+    // 记录最近一次实质变化发生时的数据库版本。
+    private long semanticChangeVersion = 1;
+    // 保留最近一次实质变化前的完整计划，供下一轮模型理解前后差异。
+    private String previousSemanticSnapshot;
     // 草案首次创建时间。
     private LocalDateTime createdAt;
     // 草案最近修改时间。

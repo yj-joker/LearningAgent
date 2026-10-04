@@ -174,9 +174,19 @@ export interface LearningPlanDraft {
   formal: boolean
   source: 'MANUAL' | 'AGENT'
   version: number
+  semanticVersion: number
+  semanticChangeVersion: number
+  previousSemanticSnapshot: string | null
   createdAt: string
   updatedAt: string
   steps: LearningPlanDraftStep[]
+}
+
+export interface SessionLearningPlanBinding {
+  sessionId: ApiId
+  draftRef: string | null
+  bindingVersion: number
+  title: string | null
 }
 
 export interface LearningPlanDraftStepPayload {

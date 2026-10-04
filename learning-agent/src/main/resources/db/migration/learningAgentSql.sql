@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS agent_session_focus (
     session_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
     user_id BIGINT UNSIGNED NOT NULL,
     active_plan_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    learning_plan_draft_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '可选关联的跨会话学习计划',
+    learning_plan_binding_version BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '学习计划关联独立版本',
     version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '每次新增或切换目标递增，防止旧审批覆盖',
     next_goal_number INT UNSIGNED NOT NULL DEFAULT 1 COMMENT '下一可用目标序号，不循环复用',
     CONSTRAINT chk_session_focus_version CHECK (version >= 1),
@@ -132,6 +134,9 @@ CREATE TABLE IF NOT EXISTS learning_plan_drafts (
     status VARCHAR(20) NOT NULL DEFAULT 'DRAFT' COMMENT '生命周期：DRAFT、ACTIVE、ARCHIVED',
     source VARCHAR(20) NOT NULL COMMENT 'MANUAL 或 AGENT',
     version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '乐观锁版本',
+    semantic_version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '忽略标点空白后的实质内容版本',
+    semantic_change_version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '最近一次实质变化对应的数据库版本',
+    previous_semantic_snapshot LONGTEXT NULL COMMENT '最近一次实质变化前的计划内容快照',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (draft_ref),
@@ -139,6 +144,8 @@ CREATE TABLE IF NOT EXISTS learning_plan_drafts (
     CONSTRAINT chk_learning_plan_draft_status CHECK (status IN ('DRAFT', 'ACTIVE', 'ARCHIVED')),
     CONSTRAINT chk_learning_plan_draft_source CHECK (source IN ('MANUAL', 'AGENT')),
     CONSTRAINT chk_learning_plan_draft_version CHECK (version >= 1),
+    CONSTRAINT chk_learning_plan_draft_semantic_version CHECK (semantic_version >= 1),
+    CONSTRAINT chk_learning_plan_draft_semantic_change_version CHECK (semantic_change_version >= 1),
     CONSTRAINT chk_learning_plan_draft_title CHECK (CHAR_LENGTH(TRIM(title)) > 0),
     CONSTRAINT chk_learning_plan_draft_objective CHECK (CHAR_LENGTH(TRIM(objective)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='学习计划草案';

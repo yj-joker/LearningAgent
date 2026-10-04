@@ -8,6 +8,10 @@ public class SessionFocusState {
     private Long sessionId;
     private Long userId;
     private String activePlanId;
+    // 长期学习计划引用独立于本会话短期目标。
+    private String learningPlanDraftRef;
+    // 独立关联版本，不影响短期目标的版本校验。
+    private long learningPlanBindingVersion;
     // 切换回同一个目标也有新版本，能发现 A -> B -> A 期间的变化。
     private long version;
     private int nextGoalNumber;

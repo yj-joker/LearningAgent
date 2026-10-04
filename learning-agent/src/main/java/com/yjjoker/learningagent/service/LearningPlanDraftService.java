@@ -24,12 +24,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
+import tools.jackson.databind.json.JsonMapper;
 
 // 学习计划草案的唯一业务入口；手动接口和 Agent 工具最终调用同一组事务方法。
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class LearningPlanDraftService {
+    private static final JsonMapper JSON = new JsonMapper();
     private static final int MAX_STEPS = 12;
     private static final int MAX_TITLE = 200;
     private static final int MAX_OBJECTIVE = 2000;
@@ -69,6 +71,20 @@ public class LearningPlanDraftService {
         log.info("读取学习计划草案，userId={}，draftRef={}，version={}，stepCount={}",
                 userId, draftRef, draft.getVersion(), draft.getSteps().size());
         return new LearningPlanDraftVO(draft);
+    }
+
+    // 按稳定引用读取当前用户的 ACTIVE 计划，供专注会话在每轮开始时动态加载。
+    @Transactional(readOnly = true)
+    public LearningPlanDraft findActiveForUser(Long userId, String draftRef) {
+        if (userId == null || draftRef == null || draftRef.isBlank()) {
+            throw new ClientDataErrorException("学习计划引用不能为空");
+        }
+        LearningPlanDraft draft = repository.findDraft(userId, draftRef.strip());
+        if (draft == null || !"ACTIVE".equals(draft.getStatus())) {
+            throw new NotFountException("ACTIVE 学习计划不存在或无权访问");
+        }
+        loadSteps(draft);
+        return draft;
     }
 
     // 手动更新草案；HTTP 路径中的 draftRef 是唯一目标，正文中的引用不能改变目标。
@@ -146,6 +162,8 @@ public class LearningPlanDraftService {
         draft.setStatus("DRAFT");
         draft.setSource(source);
         draft.setVersion(1);
+        draft.setSemanticVersion(1);
+        draft.setSemanticChangeVersion(1);
         draft.setCreatedAt(now);
         draft.setUpdatedAt(now);
 
@@ -176,6 +194,12 @@ public class LearningPlanDraftService {
         LocalDateTime now = LocalDateTime.now();
         LearningPlanDraft next = copyForUpdate(current, request, now);
         List<LearningPlanDraftStep> steps = buildUpdatedSteps(current, request.getSteps(), now);
+        // 数据库版本照常递增；语义版本只在忽略格式差异后内容仍不同时递增。
+        if (!sameSemanticContent(current, next, steps)) {
+            next.setSemanticVersion(current.getSemanticVersion() + 1);
+            next.setSemanticChangeVersion(current.getVersion() + 1);
+            next.setPreviousSemanticSnapshot(snapshotJson(current));
+        }
         requireOne(repository.updateDraft(next, userId, request.getExpectedVersion(), now),
                 "草案版本已变化，请刷新后重试");
         // 删除和重插入都在当前事务内，数据库异常会让主体版本更新一起回滚。
@@ -185,8 +209,10 @@ public class LearningPlanDraftService {
         }
         next.setVersion(current.getVersion() + 1);
         next.setSteps(steps);
-        log.info("学习计划草案更新成功，userId={}，draftRef={}，status={}，version={}->{}，editorSource={}，stepCount={}，formal={}",
-                userId, draftRef, next.getStatus(), current.getVersion(), next.getVersion(), source,
+        log.info("学习计划草案更新成功，userId={}，draftRef={}，status={}，version={}->{}，semanticVersion={}->{}，semanticChanged={}，editorSource={}，stepCount={}，formal={}",
+                userId, draftRef, next.getStatus(), current.getVersion(), next.getVersion(),
+                current.getSemanticVersion(), next.getSemanticVersion(),
+                next.getSemanticVersion() != current.getSemanticVersion(), source,
                 steps.size(), "ACTIVE".equals(next.getStatus()));
         return new LearningPlanDraftVO(next);
     }
@@ -299,9 +325,58 @@ public class LearningPlanDraftService {
         next.setStatus(current.getStatus());
         next.setSource(current.getSource());
         next.setVersion(current.getVersion());
+        next.setSemanticVersion(current.getSemanticVersion());
+        next.setSemanticChangeVersion(current.getSemanticChangeVersion());
+        next.setPreviousSemanticSnapshot(current.getPreviousSemanticSnapshot());
         next.setCreatedAt(current.getCreatedAt());
         next.setUpdatedAt(now);
         return next;
+    }
+
+    // 忽略常见句读符号和空白后比较计划字段与有序步骤，不调用模型猜测语义。
+    private boolean sameSemanticContent(LearningPlanDraft current, LearningPlanDraft next,
+                                        List<LearningPlanDraftStep> nextSteps) {
+        String before = canonicalContent(current, current.getSteps());
+        String after = canonicalContent(next, nextSteps);
+        return before.equals(after);
+    }
+
+    // 用长度前缀拼接字段，避免字段内容中的分隔符造成误判。
+    private String canonicalContent(LearningPlanDraft draft, List<LearningPlanDraftStep> steps) {
+        StringBuilder value = new StringBuilder();
+        appendCanonical(value, draft.getTitle());
+        appendCanonical(value, draft.getObjective());
+        appendCanonical(value, draft.getLearnerProfile());
+        appendCanonical(value, draft.getWeeklyCommitment());
+        appendCanonical(value, draft.getConstraints());
+        for (LearningPlanDraftStep step : steps) {
+            appendCanonical(value, step.getDescription());
+            appendCanonical(value, step.getCompletionCriteria());
+        }
+        return value.toString();
+    }
+
+    // 比较时去掉空格和常见句读符号；连字符等可能影响数值含义的符号仍保留。
+    private void appendCanonical(StringBuilder target, String text) {
+        String normalized = text == null ? "" : text.replaceAll("[\\s,，。.!！?？;；:：、]+", "");
+        target.append(normalized.length()).append(':').append(normalized).append('|');
+    }
+
+    // 保存变化前完整字段和步骤，下一轮主模型可以对照当前内容。
+    private String snapshotJson(LearningPlanDraft draft) {
+        Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("version", draft.getVersion());
+        snapshot.put("semanticVersion", draft.getSemanticVersion());
+        snapshot.put("title", draft.getTitle());
+        snapshot.put("objective", draft.getObjective());
+        snapshot.put("learnerProfile", draft.getLearnerProfile());
+        snapshot.put("weeklyCommitment", draft.getWeeklyCommitment());
+        snapshot.put("constraints", draft.getConstraints());
+        snapshot.put("steps", draft.getSteps().stream().map(step -> Map.of(
+                "position", step.getPosition(),
+                "description", step.getDescription(),
+                "completionCriteria", step.getCompletionCriteria())).toList());
+        return JSON.writeValueAsString(snapshot);
     }
 
     // 按当前用户和稳定引用读取草案，隐藏“存在但属于别人”的差异。

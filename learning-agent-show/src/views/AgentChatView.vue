@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Bot, BookOpenText, MessageSquareText, Send, Sparkles, UserRound } from 'lucide-vue-next'
 import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeAgentRun } from '@/api/agent'
-import type { AgentRunResult, ToolApprovalRequest } from '@/types/api'
+import { getSessionLearningPlanBinding, listLearningPlanDrafts, updateSessionLearningPlanBinding } from '@/api/learningPlans'
+import type { AgentRunResult, LearningPlanDraft, ToolApprovalRequest } from '@/types/api'
 import { ApiError } from '@/api/client'
 import { useActivity } from '@/composables/useActivity'
 import { useAuth } from '@/composables/useAuth'
@@ -44,6 +45,11 @@ const messages = ref<ChatMessage[]>([])
 const sending = ref(false)
 // 当前发送模式只影响新请求，审批恢复仍由后端检查点决定。
 const agentMode = ref<'CHAT' | 'FOCUS'>('CHAT')
+// 当前专注请求可选择一个 ACTIVE 学习计划；空值表示沿用会话绑定。
+const learningPlanDraftRef = ref('')
+const learningPlans = ref<LearningPlanDraft[]>([])
+const learningPlanBindingVersion = ref(0)
+const learningPlanBindingSaving = ref(false)
 // 审批状态来自后端，等待期间没有挂起中的聊天请求。
 const activeRun = ref<AgentRunResult | null>(null)
 const approvalBusy = ref(false)
@@ -118,6 +124,40 @@ async function selectSession(sessionId: string) {
   await router.replace({ name: 'agent-chat', query: { session: sessionId } })
 }
 
+// 会话切换后读取当前绑定，避免把上一会话的计划误显示到新会话。
+async function loadLearningPlanBinding(sessionId: string) {
+  try {
+    const binding = await getSessionLearningPlanBinding(sessionId)
+    if (sessionId === selectedSessionId.value) {
+      learningPlanDraftRef.value = binding.draftRef ?? ''
+      learningPlanBindingVersion.value = binding.bindingVersion
+    }
+  } catch {
+    if (sessionId === selectedSessionId.value) learningPlanDraftRef.value = ''
+  }
+}
+
+// 页面选择立即保存为会话绑定，空选项表示解除关联。
+async function saveLearningPlanBinding() {
+  const sessionId = selectedSessionId.value
+  if (!sessionId || learningPlanBindingSaving.value) return
+  learningPlanBindingSaving.value = true
+  try {
+    const binding = await updateSessionLearningPlanBinding(
+      sessionId, learningPlanDraftRef.value || null, learningPlanBindingVersion.value,
+    )
+    if (sessionId !== selectedSessionId.value) return
+    learningPlanDraftRef.value = binding.draftRef ?? ''
+    learningPlanBindingVersion.value = binding.bindingVersion
+    showToast('success', '学习计划关联已保存', binding.title ?? '当前会话不关联长期计划')
+  } catch (error) {
+    showToast('error', '保存学习计划关联失败', error instanceof Error ? error.message : '请刷新后重试')
+    await loadLearningPlanBinding(sessionId)
+  } finally {
+    learningPlanBindingSaving.value = false
+  }
+}
+
 async function sendMessage() {
   const session = selectedSession.value
   const ownerToken = currentUser.value?.token
@@ -138,7 +178,11 @@ async function sendMessage() {
   await scrollToLatest()
 
   try {
-    const result = await chatWithAgent({ sessionId: session.id, userMessage, mode: agentMode.value })
+    const result = await chatWithAgent({
+      sessionId: session.id,
+      userMessage,
+      mode: agentMode.value,
+    })
     if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     // 后端直接返回暂停状态；展示原工具参数，不把它误报为执行成功。
     acceptRunResult(result)
@@ -298,6 +342,7 @@ watch(
       activeRun.value = null
       if (nextId) {
         loadConversation(nextId)
+        void loadLearningPlanBinding(nextId)
         void restorePendingRun(nextId)
       }
       void scrollToLatest()
@@ -306,7 +351,14 @@ watch(
   { immediate: true },
 )
 
-onMounted(() => composer.value?.focus())
+onMounted(async () => {
+  composer.value?.focus()
+  try {
+    learningPlans.value = await listLearningPlanDrafts()
+  } catch {
+    learningPlans.value = []
+  }
+})
 </script>
 
 <template>
@@ -365,6 +417,16 @@ onMounted(() => composer.value?.focus())
               <option value="FOCUS">专注模式</option>
             </select>
             <small>{{ activeRun ? '审批恢复保持原任务模式' : agentMode === 'FOCUS' ? '先规划，再分步完成一个目标' : '即时答疑，按需使用工具' }}</small>
+          </label>
+          <label v-if="agentMode === 'FOCUS'" class="agent-mode-select" for="learning-plan-select">
+            关联学习计划
+            <select id="learning-plan-select" v-model="learningPlanDraftRef" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun) || learningPlanBindingSaving" @change="saveLearningPlanBinding">
+              <option value="">不关联学习计划</option>
+              <option v-for="plan in learningPlans.filter(item => item.status === 'ACTIVE')" :key="plan.draftRef" :value="plan.draftRef">
+                {{ plan.title }} · v{{ plan.version }}
+              </option>
+            </select>
+            <small>每轮开始读取最新内容</small>
           </label>
         </header>
 
