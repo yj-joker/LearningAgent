@@ -11,8 +11,10 @@ import com.yjjoker.learningagent.harness.llm.model.LlmResponse;
 import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskStepRequest;
+import com.yjjoker.learningagent.harness.plan.model.LearningPlanTaskScope;
 import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.entity.LearningPlanDraftStep;
+import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.tool.ToolRegistry;
 import lombok.extern.slf4j.Slf4j;
@@ -61,8 +63,14 @@ public class FocusPlanPlanner {
 
     // 有长期计划关联时参考其目标和阶段，但本轮用户要求仍优先。
     public CreateTaskPlanRequest createPlan(String runId, String userMessage, LearningPlanDraft learningPlan) {
+        return createPlan(runId, userMessage, learningPlan, null);
+    }
+
+    // 规划时同时读取长期阶段进度，让模型区分当前阶段、其他阶段和计划外内容。
+    public CreateTaskPlanRequest createPlan(String runId, String userMessage, LearningPlanDraft learningPlan,
+                                            LearningPlanProgressVO learningPlanProgress) {
         List<LlmMessage> messages = new ArrayList<>(List.of(
-                LlmMessage.system(planningPrompt(learningPlan)),
+                LlmMessage.system(planningPrompt(learningPlan, learningPlanProgress)),
                 LlmMessage.user(userMessage)
         ));
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -76,6 +84,8 @@ public class FocusPlanPlanner {
                 }
                 CreateTaskPlanRequest request = parsePlan(text.content());
                 validateExplicitStepCoverage(userMessage, request);
+                // 关联长期计划时必须明确给出归属；没有长期计划时统一视为计划外任务。
+                validateLearningScope(request, learningPlan);
                 log.info("专注规划校验通过，runId={}，attempt={}，stepCount={}，responseCharacters={}",
                         runId, attempt, request.getSteps().size(), text.content().length());
                 return request;
@@ -139,6 +149,11 @@ public class FocusPlanPlanner {
 
     // 只把本轮开始时的计划快照加入首次短目标规划，不动态读取或修改长期计划。
     private String planningPrompt(LearningPlanDraft plan) {
+        return planningPrompt(plan, null);
+    }
+
+    // 把长期阶段的事实和状态放入规划请求，避免模型把未完成阶段当成已完成。
+    private String planningPrompt(LearningPlanDraft plan, LearningPlanProgressVO progress) {
         String base = planningPrompt();
         if (plan == null) return base;
         StringBuilder prompt = new StringBuilder(base)
@@ -149,12 +164,44 @@ public class FocusPlanPlanner {
                 .append("；语义版本：").append(plan.getSemanticVersion())
                 .append("\n阶段：");
         for (LearningPlanDraftStep step : plan.getSteps()) {
-            prompt.append("\n").append(step.getPosition()).append(". ")
+            String status = progress == null ? "UNKNOWN" : progress.getSteps().stream()
+                    .filter(item -> item.getStepRef().equals(step.getStepRef()))
+                    .findFirst().map(item -> item.getStatus().name()).orElse("NOT_STARTED");
+            prompt.append("\n").append(step.getPosition()).append(". [").append(status).append("] ")
                     .append(step.getDescription()).append("；完成条件：")
-                    .append(step.getCompletionCriteria());
+                    .append(step.getCompletionCriteria()).append("；stageRef：").append(step.getStepRef());
         }
-        prompt.append("\n据此理解本次目标与整体计划的关系；原始用户要求优先，不能把长期阶段当成已经完成。");
+        prompt.append("\n请额外返回 learningScope 和 learningPlanStageRef：")
+                .append("CURRENT_STAGE 表示请求符合当前第一个未确认阶段；")
+                .append("OTHER_STAGE 表示请求明确对应计划中的其他阶段；")
+                .append("OUT_OF_PLAN 表示请求与整份计划无关，此时 learningPlanStageRef 必须为 null。")
+                .append("原始用户要求优先，不能因为只是提问就修改长期计划或声称阶段完成。");
         return prompt.toString();
+    }
+
+    // 规划器只检查模型是否提供了完整归属字段，最终阶段归属仍由后端按快照复核。
+    private static void validateLearningScope(CreateTaskPlanRequest request, LearningPlanDraft plan) {
+        if (plan == null) {
+            request.setLearningPlanScope(LearningPlanTaskScope.OUT_OF_PLAN);
+            request.setLearningPlanStageRef(null);
+            return;
+        }
+        if (request.getLearningPlanScope() == null) {
+            throw invalidPlan("关联长期计划时必须返回 learningScope");
+        }
+        if (request.getLearningPlanScope() == LearningPlanTaskScope.OUT_OF_PLAN) {
+            if (request.getLearningPlanStageRef() != null && !request.getLearningPlanStageRef().isBlank()) {
+                throw invalidPlan("OUT_OF_PLAN 不能携带 learningPlanStageRef");
+            }
+            request.setLearningPlanStageRef(null);
+            return;
+        }
+        if (request.getLearningPlanStageRef() == null || request.getLearningPlanStageRef().isBlank()) {
+            throw invalidPlan("计划内任务必须返回 learningPlanStageRef");
+        }
+        boolean exists = plan.getSteps().stream()
+                .anyMatch(step -> step.getStepRef().equals(request.getLearningPlanStageRef()));
+        if (!exists) throw invalidPlan("learningPlanStageRef 不属于当前长期计划");
     }
 
     // 规划器和新增目标工具共用短计划校验；调用此方法不会请求模型或写数据库。
@@ -164,7 +211,8 @@ public class FocusPlanPlanner {
         }
         try {
             JsonNode root = JSON.readTree(content);
-            requireFields(root, Set.of("goal", "constraints", "steps"));
+            requireFields(root, Set.of("goal", "steps"),
+                    Set.of("goal", "constraints", "steps", "learningScope", "learningPlanStageRef"));
             CreateTaskPlanRequest request = new CreateTaskPlanRequest();
             request.setGoal(readText(root, "goal", 500));
             // 限制是可选内容，不把 null、空字符串或缺失字段当作模型已确认的新要求。
@@ -188,6 +236,15 @@ public class FocusPlanPlanner {
                 steps.add(step);
             }
             request.setSteps(List.copyOf(steps));
+            // 归属字段由规划器使用，普通短计划仍可以不返回这两个字段。
+            JsonNode scope = root.path("learningScope");
+            if (!scope.isMissingNode() && !scope.isNull()) {
+                request.setLearningPlanScope(readEnum(scope, "learningScope", LearningPlanTaskScope.class));
+            }
+            JsonNode stageRef = root.path("learningPlanStageRef");
+            if (!stageRef.isMissingNode() && !stageRef.isNull()) {
+                request.setLearningPlanStageRef(readTextNode(stageRef, "learningPlanStageRef", 64));
+            }
             return request;
         } catch (JacksonException exception) {
             // 不把解析器包含的原始文本放进日志或修复提示。
@@ -197,7 +254,13 @@ public class FocusPlanPlanner {
 
     // 拒绝模型自定 ID、状态和额外字段，归属与初始进度由后端生成。
     private static void requireFields(JsonNode node, Set<String> allowedFields) {
-        if (node == null || !node.isObject() || !allowedFields.containsAll(node.propertyNames())) {
+        requireFields(node, Set.of(), allowedFields);
+    }
+
+    // 同时检查必填字段和允许字段，拒绝模型夹带状态、编号或额外指令。
+    private static void requireFields(JsonNode node, Set<String> requiredFields, Set<String> allowedFields) {
+        if (node == null || !node.isObject() || !node.propertyNames().containsAll(requiredFields)
+                || !allowedFields.containsAll(node.propertyNames())) {
             throw invalidPlan("计划和步骤必须是对象，并且只能包含约定字段");
         }
     }
@@ -213,6 +276,28 @@ public class FocusPlanPlanner {
             throw invalidPlan(field + " 不能超过 " + maximum + " 字");
         }
         return text;
+    }
+
+    // 读取已经定位的字符串节点，统一检查类型、空值和长度。
+    private static String readTextNode(JsonNode node, String field, int maximum) {
+        if (node == null || !node.isTextual() || node.asString().isBlank()) {
+            throw invalidPlan(field + " 必须是非空字符串");
+        }
+        String text = node.asString().strip();
+        if (text.codePointCount(0, text.length()) > maximum) {
+            throw invalidPlan(field + " 不能超过 " + maximum + " 字");
+        }
+        return text;
+    }
+
+    // 只接受预先定义的归属枚举，不把模型任意字符串写入数据库。
+    private static <E extends Enum<E>> E readEnum(JsonNode node, String field, Class<E> type) {
+        if (!node.isTextual() || node.asString().isBlank()) throw invalidPlan(field + " 必须是有效枚举值");
+        try {
+            return Enum.valueOf(type, node.asString().strip());
+        } catch (IllegalArgumentException exception) {
+            throw invalidPlan(field + " 不是有效的长期计划归属");
+        }
     }
 
     // 规划结果属于模型边界格式错误，不应继续进入业务工具执行。

@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.plan.dto;
 
 import lombok.Data;
+import com.yjjoker.learningagent.harness.plan.model.LearningPlanTaskScope;
 
 import java.util.List;
 
@@ -12,4 +13,10 @@ public class CreateTaskPlanRequest {
     private String constraints;
     // 列表顺序就是初始执行顺序，不能传入已完成状态或自定步骤编号。
     private List<CreateTaskStepRequest> steps;
+    // 以下字段只由长期计划规划流程内部填写，普通新增目标不能伪造绑定快照。
+    private LearningPlanTaskScope learningPlanScope;
+    private String learningPlanStageRef;
+    private String learningPlanDraftRef;
+    private long learningPlanVersion;
+    private long learningPlanSemanticVersion;
 }

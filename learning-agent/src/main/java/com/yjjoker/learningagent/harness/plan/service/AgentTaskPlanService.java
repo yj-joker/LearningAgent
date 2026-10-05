@@ -10,6 +10,7 @@ import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskStepRequest;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStep;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskStepStatus;
+import com.yjjoker.learningagent.harness.plan.model.LearningPlanTaskScope;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.AgentTaskPlanRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
@@ -358,6 +359,13 @@ public class AgentTaskPlanService {
         plan.setSessionId(sessionId);
         plan.setGoal(goal);
         plan.setConstraints(constraints);
+        // 计划外任务默认不携带长期计划引用，避免普通目标伪造绑定关系。
+        plan.setLearningPlanScope(request.getLearningPlanScope() == null
+                ? LearningPlanTaskScope.OUT_OF_PLAN : request.getLearningPlanScope());
+        plan.setLearningPlanDraftRef(request.getLearningPlanDraftRef());
+        plan.setLearningPlanStageRef(request.getLearningPlanStageRef());
+        plan.setLearningPlanVersion(request.getLearningPlanVersion());
+        plan.setLearningPlanSemanticVersion(request.getLearningPlanSemanticVersion());
         plan.setVersion(1L);
         plan.setCreatedAt(now);
         plan.setUpdatedAt(now);

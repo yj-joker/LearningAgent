@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS agent_task_plans (
     goal_number INT UNSIGNED NULL COMMENT '会话内固定目标序号，未接入会话时为空',
     goal VARCHAR(2000) NOT NULL COMMENT '任务目标',
     constraints_text VARCHAR(2000) NULL COMMENT '用户限制，不保存完整历史',
+    learning_plan_draft_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '创建任务时绑定的长期计划引用',
+    learning_plan_stage_ref CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '创建任务时绑定的长期阶段引用',
+    learning_plan_version BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '创建任务时看到的长期计划数据库版本',
+    learning_plan_semantic_version BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '创建任务时看到的长期计划语义版本',
+    learning_plan_scope VARCHAR(20) NOT NULL DEFAULT 'OUT_OF_PLAN' COMMENT 'CURRENT_STAGE、OTHER_STAGE 或 OUT_OF_PLAN',
     version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '计划版本，后续用于拒绝旧版本覆盖',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -86,6 +91,9 @@ CREATE TABLE IF NOT EXISTS agent_task_plans (
     UNIQUE KEY uk_session_goal_number (session_id, goal_number),
     KEY idx_task_plan_owner_session (user_id, session_id, created_at),
     CONSTRAINT chk_task_plan_version CHECK (version >= 1),
+    CONSTRAINT chk_task_learning_plan_version CHECK (learning_plan_version >= 0),
+    CONSTRAINT chk_task_learning_plan_semantic_version CHECK (learning_plan_semantic_version >= 0),
+    CONSTRAINT chk_task_learning_plan_scope CHECK (learning_plan_scope IN ('CURRENT_STAGE','OTHER_STAGE','OUT_OF_PLAN')),
     CONSTRAINT chk_task_goal_number CHECK (goal_number IS NULL OR goal_number >= 1),
     CONSTRAINT chk_task_plan_goal CHECK (CHAR_LENGTH(TRIM(goal)) > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 任务计划';

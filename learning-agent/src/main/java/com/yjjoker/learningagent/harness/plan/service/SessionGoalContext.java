@@ -84,6 +84,12 @@ public class SessionGoalContext {
                 && messages.stream().anyMatch(message -> message.contains(evidence));
     }
 
+    // 返回本轮用户最后一条原话，长期进度工具据此核对证据引用。
+    public String currentUserMessage() {
+        List<String> messages = dialogue.get();
+        return messages == null || messages.isEmpty() ? null : messages.getLast();
+    }
+
     // 初次加载、批准后更新和检查点恢复都绑定明确的快照。
     public void bind(SessionGoalSnapshot snapshot) {
         if (snapshot == null || snapshot.getState() == null || snapshot.getCurrentPlan() == null

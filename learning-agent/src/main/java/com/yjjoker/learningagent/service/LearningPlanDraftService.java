@@ -87,6 +87,20 @@ public class LearningPlanDraftService {
         return draft;
     }
 
+    // 审批执行时锁住 ACTIVE 计划，保证计划版本和步骤内容在本次更新中保持一致。
+    @Transactional
+    public LearningPlanDraft findActiveForUserForUpdate(Long userId, String draftRef) {
+        if (userId == null || draftRef == null || draftRef.isBlank()) {
+            throw new ClientDataErrorException("学习计划引用不能为空");
+        }
+        LearningPlanDraft draft = repository.findDraftForUpdate(userId, draftRef.strip());
+        if (draft == null || !"ACTIVE".equals(draft.getStatus())) {
+            throw new NotFountException("ACTIVE 学习计划不存在或无权访问");
+        }
+        loadSteps(draft);
+        return draft;
+    }
+
     // 手动更新草案；HTTP 路径中的 draftRef 是唯一目标，正文中的引用不能改变目标。
     @Transactional
     public LearningPlanDraftVO updateManual(String draftRef, UpdateLearningPlanDraftRequest request) {

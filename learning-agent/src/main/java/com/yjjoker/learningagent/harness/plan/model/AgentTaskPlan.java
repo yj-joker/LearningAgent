@@ -21,6 +21,16 @@ public class AgentTaskPlan {
     private String constraints;
     // 新计划从 1 开始；更新步骤和恢复审批时，用它拒绝旧快照。
     private long version;
+    // 保存创建短期任务时绑定的长期计划引用。
+    private String learningPlanDraftRef;
+    // 保存创建短期任务时绑定的长期阶段引用。
+    private String learningPlanStageRef;
+    // 保存绑定时看到的长期计划数据库版本。
+    private long learningPlanVersion;
+    // 保存绑定时看到的长期计划语义版本。
+    private long learningPlanSemanticVersion;
+    // 保存本次任务属于当前阶段、其他阶段还是计划外。
+    private LearningPlanTaskScope learningPlanScope = LearningPlanTaskScope.OUT_OF_PLAN;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     // 步骤单独存表，读取时按 position 组装，不在计划表重复存 JSON。

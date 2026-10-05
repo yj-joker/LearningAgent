@@ -406,17 +406,21 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         // 同一会话的后续消息继续当前目标，不因新 runId 自动创建另一份短计划。
         SessionGoalSnapshot snapshot = sessionGoalService.load(sessionId);
         if (snapshot == null) {
-            CreateTaskPlanRequest request = focusPlanPlanner.createPlan(runId, userMessage, learningPlan);
-            snapshot = sessionGoalService.initialize(sessionId, request);
+            // 没有关联长期计划时沿用普通短计划入口；有关联时才要求模型返回阶段归属。
+            CreateTaskPlanRequest request = learningPlan == null
+                    ? focusPlanPlanner.createPlan(runId, userMessage)
+                    : focusPlanPlanner.createPlan(runId, userMessage, learningPlan, learningPlanProgress);
+            snapshot = sessionGoalService.initialize(sessionId, request, learningPlan, learningPlanProgress);
         }
         sessionGoalContext.bind(snapshot);
         sessionGoalContext.bindIntent(goalIntent);
         // 后续模型调用固定使用本轮快照，计划在循环中途更新不会改变当前请求。
         sessionGoalContext.bindLearningPlan(learningPlan);
         sessionGoalContext.bindLearningPlanProgress(learningPlanProgress);
-        log.info("专注目标已准备，runId={}，sessionId={}，planId={}，goalNumber={}，focusVersion={}",
+        log.info("专注目标已准备，runId={}，sessionId={}，planId={}，goalNumber={}，focusVersion={}，learningScope={}，stageRef={}",
                 runId, sessionId, snapshot.getCurrentPlan().getPlanId(), snapshot.getCurrentPlan().getGoalNumber(),
-                snapshot.getState().getVersion());
+                snapshot.getState().getVersion(), snapshot.getCurrentPlan().getLearningPlanScope(),
+                snapshot.getCurrentPlan().getLearningPlanStageRef());
         log.info("专注请求学习计划快照已加载，runId={}，sessionId={}，draftRef={}，version={}，semanticVersion={}",
                 runId, sessionId, learningPlan == null ? null : learningPlan.getDraftRef(),
                 learningPlan == null ? null : learningPlan.getVersion(),
@@ -1053,7 +1057,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 把当前目标完整步骤和其他目标的索引放入请求；搁置目标不是本轮执行指令。
     private void appendFocusPlan(StringBuilder prompt, AgentMode mode, AgentTaskPlan taskPlan) {
         // TODO 有关联学习计划时按需加载；其他会话在下次请求或继续执行前检查版本，不假定已发请求实时更新。
-        // TODO 专注任务结束后可根据实际成果提出学习计划进度更新，复用审批且不能把回答结束等同于学会。
         if (mode != AgentMode.FOCUS) {
             return;
         }
@@ -1068,6 +1071,14 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 .append("\n目标：").append(progress.getGoal());
         if (progress.getConstraints() != null && !progress.getConstraints().isBlank()) {
             prompt.append("\n限制：").append(progress.getConstraints());
+        }
+        // 注入短期任务创建时保存的长期计划绑定快照，后续请求不重新猜测任务归属。
+        prompt.append("\n长期计划归属：").append(taskPlan.getLearningPlanScope());
+        if (taskPlan.getLearningPlanDraftRef() != null) {
+            prompt.append("；draftRef=").append(taskPlan.getLearningPlanDraftRef())
+                    .append("；stageRef=").append(taskPlan.getLearningPlanStageRef())
+                    .append("；planVersion=").append(taskPlan.getLearningPlanVersion())
+                    .append("；semanticVersion=").append(taskPlan.getLearningPlanSemanticVersion());
         }
         prompt.append("\n步骤：");
         for (SessionGoalStepProgress step : progress.getSteps()) {

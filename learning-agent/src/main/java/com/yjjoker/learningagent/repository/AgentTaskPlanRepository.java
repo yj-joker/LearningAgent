@@ -20,9 +20,14 @@ public interface AgentTaskPlanRepository {
     // 直接新增，由 plan_id 主键阻止重复创建；不能用 upsert 覆盖旧计划。
     @Insert("""
             INSERT INTO agent_task_plans
-                (plan_id, user_id, session_id, goal, constraints_text, version, created_at, updated_at)
+                (plan_id, user_id, session_id, goal, constraints_text,
+                 learning_plan_draft_ref, learning_plan_stage_ref, learning_plan_version,
+                 learning_plan_semantic_version, learning_plan_scope,
+                 version, created_at, updated_at)
             VALUES (#{plan.planId}, #{plan.userId}, #{plan.sessionId}, #{plan.goal},
-                #{plan.constraints}, #{plan.version}, #{plan.createdAt}, #{plan.updatedAt})
+                #{plan.constraints}, #{plan.learningPlanDraftRef}, #{plan.learningPlanStageRef},
+                #{plan.learningPlanVersion}, #{plan.learningPlanSemanticVersion},
+                #{plan.learningPlanScope}, #{plan.version}, #{plan.createdAt}, #{plan.updatedAt})
             """)
     int insertPlan(@Param("plan") AgentTaskPlan plan);
 
@@ -41,6 +46,11 @@ public interface AgentTaskPlanRepository {
     @Select("""
             SELECT plan_id AS planId, user_id AS userId, session_id AS sessionId,
                    goal_number AS goalNumber, goal, constraints_text AS `constraints`, version,
+                   learning_plan_draft_ref AS learningPlanDraftRef,
+                   learning_plan_stage_ref AS learningPlanStageRef,
+                   learning_plan_version AS learningPlanVersion,
+                   learning_plan_semantic_version AS learningPlanSemanticVersion,
+                   learning_plan_scope AS learningPlanScope,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM agent_task_plans
             WHERE user_id = #{userId} AND session_id = #{sessionId} AND plan_id = #{planId}
@@ -78,6 +88,11 @@ public interface AgentTaskPlanRepository {
     @Select("""
             SELECT plan_id AS planId, user_id AS userId, session_id AS sessionId,
                    goal_number AS goalNumber, goal, constraints_text AS `constraints`, version,
+                   learning_plan_draft_ref AS learningPlanDraftRef,
+                   learning_plan_stage_ref AS learningPlanStageRef,
+                   learning_plan_version AS learningPlanVersion,
+                   learning_plan_semantic_version AS learningPlanSemanticVersion,
+                   learning_plan_scope AS learningPlanScope,
                    created_at AS createdAt, updated_at AS updatedAt
             FROM agent_task_plans
             WHERE user_id = #{userId} AND session_id = #{sessionId} AND plan_id = #{planId}
@@ -183,7 +198,12 @@ public interface AgentTaskPlanRepository {
     // 只返回当前会话已登记的目标索引，完整步骤由选中的计划单独加载。
     @Select("""
             SELECT plan_id AS planId, user_id AS userId, session_id AS sessionId, goal_number AS goalNumber,
-                   goal, constraints_text AS `constraints`, version
+                   goal, constraints_text AS `constraints`, version,
+                   learning_plan_draft_ref AS learningPlanDraftRef,
+                   learning_plan_stage_ref AS learningPlanStageRef,
+                   learning_plan_version AS learningPlanVersion,
+                   learning_plan_semantic_version AS learningPlanSemanticVersion,
+                   learning_plan_scope AS learningPlanScope
             FROM agent_task_plans WHERE user_id = #{userId} AND session_id = #{sessionId}
               AND goal_number IS NOT NULL ORDER BY goal_number
             """)

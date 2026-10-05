@@ -12,6 +12,9 @@ import com.yjjoker.learningagent.repository.AgentTaskPlanRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.service.LearningPlanDraftService;
 import com.yjjoker.learningagent.vo.SessionLearningPlanBindingVO;
+import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
+import com.yjjoker.learningagent.projectenum.LearningPlanStepProgressStatus;
+import com.yjjoker.learningagent.harness.plan.model.LearningPlanTaskScope;
 import com.yjjoker.learningagent.utils.BaseContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +64,14 @@ public class SessionGoalService {
     // 首次专注请求沿用已有行为：规划器生成短计划后，原子保存首个目标和当前指针。
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public SessionGoalSnapshot initialize(Long sessionId, CreateTaskPlanRequest request) {
+        return initialize(sessionId, request, null, null);
+    }
+
+    // 首次专注请求使用本轮已经读取的长期计划和进度快照创建短期目标。
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public SessionGoalSnapshot initialize(Long sessionId, CreateTaskPlanRequest request,
+                                          LearningPlanDraft learningPlan,
+                                          LearningPlanProgressVO learningPlanProgress) {
         Long userId = requireAccess(sessionId);
         repository.ensureFocus(userId, sessionId);
         SessionFocusState state = repository.lockFocus(userId, sessionId)
@@ -70,14 +81,14 @@ public class SessionGoalService {
             log.info("复用并发创建的会话目标，sessionId={}，focusVersion={}", sessionId, state.getVersion());
             return snapshot(state);
         }
-        return createAndSelect(state, request);
+        return createAndSelect(state, request, learningPlan, learningPlanProgress);
     }
 
     // 新目标写入和指针切换一起提交；原目标及其全部步骤都保留。
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public SessionGoalSnapshot create(SessionGoalSnapshot expected, CreateTaskPlanRequest request) {
         SessionFocusState state = lockExpected(expected, null);
-        return createAndSelect(state, request);
+        return createAndSelect(state, request, null, null);
     }
 
     // 切换到已有目标就是恢复原计划；不再调用规划器，也不重置步骤进度。
@@ -199,7 +210,11 @@ public class SessionGoalService {
     }
 
     // 新增前检查数量和完全重复的目标；语义是否相同由用户在审批中确认。
-    private SessionGoalSnapshot createAndSelect(SessionFocusState state, CreateTaskPlanRequest request) {
+    private SessionGoalSnapshot createAndSelect(SessionFocusState state, CreateTaskPlanRequest request,
+                                                LearningPlanDraft learningPlan,
+                                                LearningPlanProgressVO learningPlanProgress) {
+        // 在写入计划前把模型归属转成后端认可的绑定快照。
+        normalizeLearningBinding(state, request, learningPlan, learningPlanProgress);
         List<AgentTaskPlan> existing = repository.findGoals(state.getUserId(), state.getSessionId());
         if (existing.size() >= MAX_GOALS) {
             throw new ClientDataErrorException("当前会话最多保留 20 个目标，请另开会话");
@@ -219,6 +234,58 @@ public class SessionGoalService {
         log.info("会话目标已写入，等待事务提交，sessionId={}，planId={}，goalNumber={}，stepCount={}",
                 state.getSessionId(), plan.getPlanId(), number, plan.getSteps().size());
         return snapshot(state);
+    }
+
+    // 校验阶段归属和版本，防止模型把任意短任务写成长期计划任务。
+    private void normalizeLearningBinding(SessionFocusState state, CreateTaskPlanRequest request,
+                                          LearningPlanDraft learningPlan,
+                                          LearningPlanProgressVO learningPlanProgress) {
+        if (request == null) throw new ClientDataErrorException("任务计划不能为空");
+        if (learningPlan == null) {
+            // 没有关联长期计划时，清除模型可能携带的所有计划字段。
+            request.setLearningPlanScope(LearningPlanTaskScope.OUT_OF_PLAN);
+            request.setLearningPlanDraftRef(null);
+            request.setLearningPlanStageRef(null);
+            request.setLearningPlanVersion(0);
+            request.setLearningPlanSemanticVersion(0);
+            return;
+        }
+        if (!Objects.equals(state.getLearningPlanDraftRef(), learningPlan.getDraftRef())) {
+            throw new ClientDataErrorException("长期计划快照不是当前会话绑定的计划");
+        }
+        LearningPlanTaskScope scope = request.getLearningPlanScope();
+        if (scope == null) throw new ClientDataErrorException("短期任务缺少长期计划归属");
+        if (scope == LearningPlanTaskScope.OUT_OF_PLAN) {
+            request.setLearningPlanDraftRef(null);
+            request.setLearningPlanStageRef(null);
+            request.setLearningPlanVersion(0);
+            request.setLearningPlanSemanticVersion(0);
+            log.info("短期任务判定为计划外，sessionId={}，draftRef={}", state.getSessionId(), learningPlan.getDraftRef());
+            return;
+        }
+        String stageRef = request.getLearningPlanStageRef();
+        if (stageRef == null || stageRef.isBlank()) {
+            throw new ClientDataErrorException("计划内短期任务缺少阶段引用");
+        }
+        boolean stageExists = learningPlan.getSteps().stream()
+                .anyMatch(step -> stageRef.equals(step.getStepRef()));
+        if (!stageExists) throw new ClientDataErrorException("短期任务阶段不属于当前长期计划");
+        if (learningPlanProgress == null) throw new ClientDataErrorException("缺少长期计划阶段进度快照");
+        String currentStageRef = learningPlanProgress.getSteps().stream()
+                .filter(step -> step.getStatus() != LearningPlanStepProgressStatus.CONFIRMED)
+                .map(step -> step.getStepRef()).findFirst().orElse(null);
+        if (scope == LearningPlanTaskScope.CURRENT_STAGE && !Objects.equals(stageRef, currentStageRef)) {
+            throw new ClientDataErrorException("CURRENT_STAGE 必须绑定当前未确认阶段");
+        }
+        if (scope == LearningPlanTaskScope.OTHER_STAGE && Objects.equals(stageRef, currentStageRef)) {
+            throw new ClientDataErrorException("OTHER_STAGE 不能绑定当前未确认阶段");
+        }
+        request.setLearningPlanDraftRef(learningPlan.getDraftRef());
+        request.setLearningPlanVersion(learningPlan.getVersion());
+        request.setLearningPlanSemanticVersion(learningPlan.getSemanticVersion());
+        log.info("短期任务长期阶段绑定校验通过，sessionId={}，draftRef={}，stageRef={}，scope={}，planVersion={}，semanticVersion={}",
+                state.getSessionId(), learningPlan.getDraftRef(), stageRef, scope,
+                learningPlan.getVersion(), learningPlan.getSemanticVersion());
     }
 
     // 先锁会话指针，再按固定编号锁相关计划；检查成功到提交前不允许并发修改它们。
