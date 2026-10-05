@@ -69,14 +69,15 @@ public class SessionGoalContext {
         return getGoalIntent().isPlanMutation();
     }
 
-    // 新请求、摘要后和审批恢复时重新绑定，不能拿已移出上下文的原话冒充当前证据。
+    // 新请求、摘要后和审批恢复时只绑定当前 AgentLoop 的最后一条用户消息。
     public void bindDialogue(List<LlmMessage> messages) {
         require();
-        dialogue.set(messages.stream().filter(message -> "user".equals(message.getRole()))
-                .map(LlmMessage::getContent).filter(Objects::nonNull).toList());
+        String current = messages.stream().filter(message -> "user".equals(message.getRole()))
+                .map(LlmMessage::getContent).filter(Objects::nonNull).reduce((first, last) -> last).orElse(null);
+        dialogue.set(current == null ? List.of() : List.of(current));
     }
 
-    // 验证模型引用确实来自用户；存在引用不代表它满足完成条件，仍由用户审批。
+    // 验证模型引用来自本轮当前用户消息；存在引用不代表它满足完成条件，仍由用户审批。
     public boolean containsUserEvidence(String evidence) {
         require();
         List<String> messages = dialogue.get();

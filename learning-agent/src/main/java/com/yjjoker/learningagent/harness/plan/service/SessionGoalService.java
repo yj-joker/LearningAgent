@@ -87,8 +87,16 @@ public class SessionGoalService {
     // 新目标写入和指针切换一起提交；原目标及其全部步骤都保留。
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public SessionGoalSnapshot create(SessionGoalSnapshot expected, CreateTaskPlanRequest request) {
+        return create(expected, request, null, null);
+    }
+
+    // 创建阶段专属短期任务时沿用本轮已经读取的长期计划和进度快照。
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public SessionGoalSnapshot create(SessionGoalSnapshot expected, CreateTaskPlanRequest request,
+                                      LearningPlanDraft learningPlan,
+                                      LearningPlanProgressVO learningPlanProgress) {
         SessionFocusState state = lockExpected(expected, null);
-        return createAndSelect(state, request, null, null);
+        return createAndSelect(state, request, learningPlan, learningPlanProgress);
     }
 
     // 切换到已有目标就是恢复原计划；不再调用规划器，也不重置步骤进度。

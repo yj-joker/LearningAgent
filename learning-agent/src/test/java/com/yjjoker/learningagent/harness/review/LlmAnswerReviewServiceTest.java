@@ -32,7 +32,7 @@ class LlmAnswerReviewServiceTest {
         verify(client, never()).generate(any());
     }
 
-    // 格式失败、重复字段和未知动作都保守结束，不再套一个无限 JSON 修复循环。
+    // 格式失败、重复字段和未知动作最多修复一次，修复仍失败时保守结束。
     @ParameterizedTest
     @ValueSource(strings = {"not-json", "null", "[]", "{}",
             "{\"action\":\"PASS\",\"action\":\"CONTINUE\",\"reason\":\"\",\"instruction\":\"继续\"}",
@@ -43,7 +43,21 @@ class LlmAnswerReviewServiceTest {
     void invalidOutputIsNotAllowed(String output) {
         when(client.generateWithoutTools(any())).thenReturn(new TextLlmResponse(output));
         assertEquals(AnswerReviewResult.Action.UNAVAILABLE, service.review(new AgentRunContext(), request("回答")).getAction());
-        verify(client).generateWithoutTools(any());
+        verify(client, times(2)).generateWithoutTools(any());
+    }
+
+    // 第一次返回不完整 JSON 时，第二次只修复协议；成功后不产生工具调用权限。
+    @Test
+    void retriesMalformedJsonOnceAndAcceptsCorrectedProtocol() {
+        when(client.generateWithoutTools(any()))
+                .thenReturn(new TextLlmResponse("{\"action\":\"PASS\","))
+                .thenReturn(new TextLlmResponse("{\"action\":\"PASS\",\"reason\":\"事实一致\",\"instruction\":\"\"}"));
+        assertEquals(AnswerReviewResult.Action.PASS,
+                service.review(new AgentRunContext(), request("回答")).getAction());
+        ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
+        verify(client, times(2)).generateWithoutTools(sent.capture());
+        assertTrue(sent.getAllValues().getLast().getLast().getContent().contains("协议修复"));
+        verify(client, never()).generate(any());
     }
 
     // 工具结果带状态与截断标记；历史摘要、系统消息和完整大正文不能混进审查证据。

@@ -549,7 +549,8 @@ class AgentApprovalFlowTest {
         assertFalse(checkpointJson.contains("correctionAction"));
         approveAll(paused);
         AgentRunResult done = harness.resume(paused.getRunId());
-        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, done.getAnswer());
+        assertTrue(done.getAnswer().startsWith(FinalAnswerConsistencyHook.SAFE_ANSWER));
+        assertTrue(done.getAnswer().contains("当前专注目标") || done.getAnswer().contains("工具执行记录"));
         assertEquals(1, executions.get());
         ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
         verify(llm, times(3)).generate(sent.capture());

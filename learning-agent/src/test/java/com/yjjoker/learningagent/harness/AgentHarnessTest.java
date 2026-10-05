@@ -210,8 +210,11 @@ class AgentHarnessTest {
                 List.of(new ToolCall("call_repeat", "find_all_users", "{}"))
         );
 
-        // 准备六次相同工具请求：前五轮允许执行，第六轮会触发 Harness 的循环保护。
+        // 准备九次相同工具请求：前八轮允许执行，第九轮会触发 Harness 的循环保护。
         FakeLlmClient fakeLlmClient = new FakeLlmClient(
+                repeatedToolCall,
+                repeatedToolCall,
+                repeatedToolCall,
                 repeatedToolCall,
                 repeatedToolCall,
                 repeatedToolCall,
@@ -231,8 +234,8 @@ class AgentHarnessTest {
                 () -> harness.run(SESSION_ID, "一直查用户")
         );
 
-        assertEquals("Harness 超过最多 5 轮工具调用，已停止继续执行", exception.getMessage());
-        assertEquals(5, tool.executeCount);
+        assertEquals("Harness 超过最多 8 轮工具调用，已停止继续执行", exception.getMessage());
+        assertEquals(8, tool.executeCount);
     }
 
     @Test

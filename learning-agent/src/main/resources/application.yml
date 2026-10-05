@@ -78,6 +78,12 @@ aliyun:
     read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
 
 harness:
+  answer-review:
+    # 审查模型格式错误时最多再请求一次，只修复 JSON，不重复执行业务工具。
+    max-attempts: ${HARNESS_ANSWER_REVIEW_MAX_ATTEMPTS:2}
+  tool-loop:
+    # 单次逻辑任务最多连续请求八批工具；审批恢复继续消耗同一预算。
+    max-rounds: ${HARNESS_TOOL_LOOP_MAX_ROUNDS:8}
   skills:
     # 控制单次任务激活的技能规模；重复读取不增加数量，暂停恢复沿用同一集合。
     max-active-skills: ${HARNESS_SKILL_MAX_ACTIVE_SKILLS:3}

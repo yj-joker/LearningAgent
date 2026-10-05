@@ -45,8 +45,11 @@ public final class AgentSystemPrompt {
             SESSION 记忆表示仅当前会话可用，不代表不能持久化或会话结束后自动删除。
             只规划当前目标的短步骤，不扩展成长课程；需要用户反馈的部分可在后续对话确认，不能提前宣称完成。
             只能返回合法 JSON，不要返回 Markdown 或解释文字。
+            没有关联 ACTIVE 学习计划时，learningScope 必须为 OUT_OF_PLAN，learningPlanStageRef 必须为 null。
+            关联 ACTIVE 学习计划时，learningScope 必须为 CURRENT_STAGE 或 OTHER_STAGE，
+            learningPlanStageRef 必须原样填写上方阶段列表中的 stageRef。
             格式必须是：
-            {"goal":"用户目标","constraints":"必要限制或空字符串","steps":[{"description":"步骤内容","completionCriteria":"完成条件"}]}
+            {"goal":"用户目标","constraints":"必要限制或空字符串","learningScope":"OUT_OF_PLAN|CURRENT_STAGE|OTHER_STAGE","learningPlanStageRef":null,"steps":[{"description":"步骤内容","completionCriteria":"完成条件"}]}
             """;
 
     public static final String MEMORY_EXTRACTION_PROMPT = """

@@ -1,6 +1,7 @@
 package com.yjjoker.learningagent.harness.review;
 
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
+import com.yjjoker.learningagent.config.HarnessAnswerReviewProperties;
 import com.yjjoker.learningagent.harness.llm.LlmClient;
 import com.yjjoker.learningagent.harness.llm.LlmRetryExecutor;
 import com.yjjoker.learningagent.harness.llm.model.LlmMessage;
@@ -8,9 +9,9 @@ import com.yjjoker.learningagent.harness.llm.model.TextLlmResponse;
 import com.yjjoker.learningagent.harness.prompt.AgentSystemPrompt;
 import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionRecord;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -21,7 +22,6 @@ import java.util.Set;
 
 // 独立的无工具审查调用；复用 Aliyun 客户端和网络重试，不新增 AgentLoop。
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class LlmAnswerReviewService implements AnswerReviewService {
     private static final JsonMapper JSON = JsonMapper.builder()
@@ -33,8 +33,23 @@ public class LlmAnswerReviewService implements AnswerReviewService {
     private static final int MAX_OUTPUT_CHARACTERS = 3_000;
     private final LlmClient llmClient;
     private final LlmRetryExecutor retryExecutor;
+    private final HarnessAnswerReviewProperties properties;
 
-    // 每次拟回复只审查一次；网络瞬时错误沿用统一重试，格式错误不再套一层修复循环。
+    // Spring 使用配置构造器，生产环境可以调整审查格式修复次数。
+    @Autowired
+    public LlmAnswerReviewService(LlmClient llmClient, LlmRetryExecutor retryExecutor,
+                                  HarnessAnswerReviewProperties properties) {
+        this.llmClient = llmClient;
+        this.retryExecutor = retryExecutor;
+        this.properties = properties;
+    }
+
+    // 单元测试和旧调用方使用默认的两次审查预算。
+    public LlmAnswerReviewService(LlmClient llmClient, LlmRetryExecutor retryExecutor) {
+        this(llmClient, retryExecutor, new HarnessAnswerReviewProperties());
+    }
+
+    // 每次拟回复只审查一次；格式错误只允许有限修复，网络错误沿用统一网络重试。
     @Override
     public AnswerReviewResult review(AgentRunContext context, AnswerReviewRequest request) {
         long started = System.nanoTime();
@@ -46,18 +61,32 @@ public class LlmAnswerReviewService implements AnswerReviewService {
             if (input.length() > MAX_INPUT_CHARACTERS) {
                 throw new IllegalArgumentException("审查输入超过字符上限");
             }
-            log.info("回答审查开始，runId={}，inputCharacters={}，toolCount={}，corrections={}",
+            log.info("回答审查开始，runId={}，inputCharacters={}，toolCount={}，corrections={}，maxAttempts={}",
                     context.getRunId(), input.length(), context.getToolExecutions().size(),
-                    context.getAnswerReviewCorrections());
-            var response = retryExecutor.generateWithoutTools("answer-review", llmClient, List.of(
-                    LlmMessage.system(AgentSystemPrompt.ANSWER_REVIEW_PROMPT), LlmMessage.user(input)));
-            if (!(response instanceof TextLlmResponse text)) {
-                throw new IllegalArgumentException("审查只能返回文本 JSON");
+                    context.getAnswerReviewCorrections(), reviewAttempts());
+            ReviewFormatException lastFormatException = null;
+            for (int attempt = 1; attempt <= reviewAttempts(); attempt++) {
+                try {
+                    // 第二次请求只增加格式修复说明，不把原始模型输出再次拼回上下文。
+                    String requestInput = attempt == 1 ? input : appendFormatRepairInstruction(input);
+                    var response = retryExecutor.generateWithoutTools("answer-review", llmClient, List.of(
+                            LlmMessage.system(AgentSystemPrompt.ANSWER_REVIEW_PROMPT),
+                            LlmMessage.user(requestInput)));
+                    if (!(response instanceof TextLlmResponse text)) {
+                        throw new ReviewFormatException("审查只能返回文本 JSON");
+                    }
+                    AnswerReviewResult result = parse(text.content());
+                    log.info("回答审查完成，runId={}，action={}，attempt={}，elapsedMs={}", context.getRunId(),
+                            result.getAction(), attempt, (System.nanoTime() - started) / 1_000_000);
+                    return result;
+                } catch (ReviewFormatException exception) {
+                    lastFormatException = exception;
+                    log.warn("回答审查格式无效，runId={}，attempt={}，maxAttempts={}，errorType={}",
+                            context.getRunId(), attempt, reviewAttempts(), exception.getClass().getSimpleName());
+                }
             }
-            AnswerReviewResult result = parse(text.content());
-            log.info("回答审查完成，runId={}，action={}，elapsedMs={}", context.getRunId(),
-                    result.getAction(), (System.nanoTime() - started) / 1_000_000);
-            return result;
+            throw lastFormatException == null
+                    ? new ReviewFormatException("审查格式修复未完成") : lastFormatException;
         } catch (RuntimeException exception) {
             // 不输出异常正文、用户输入或审查原文，避免日志泄露业务信息。
             log.warn("回答审查未完成，使用保守结果，runId={}，errorType={}，elapsedMs={}",
@@ -65,6 +94,17 @@ public class LlmAnswerReviewService implements AnswerReviewService {
                     (System.nanoTime() - started) / 1_000_000);
             return AnswerReviewResult.unavailable();
         }
+    }
+
+    // 防御非法配置，确保格式错误至少有一次请求机会。
+    private int reviewAttempts() {
+        return Math.max(1, properties.getMaxAttempts());
+    }
+
+    // 告诉审查模型只修复协议，不允许改变后端事实或执行任何工具。
+    private String appendFormatRepairInstruction(String input) {
+        return input + "\n\n【协议修复】上一次审查输出无法解析。请严格只返回完整 JSON，字段必须为 action、reason、instruction，"
+                + "不要输出 Markdown、解释文字或额外字段；不要改变执行事实。";
     }
 
     // 把可信执行状态和不可信自然语言分开标记，审查不能把历史助手说过的话当成写入凭据。
@@ -161,19 +201,33 @@ public class LlmAnswerReviewService implements AnswerReviewService {
     // 严格校验审查协议；多字段、未知动作或空纠正建议都不能驱动主循环。
     private AnswerReviewResult parse(String content) {
         if (content == null || content.length() > MAX_OUTPUT_CHARACTERS) {
-            throw new IllegalArgumentException("审查输出长度不合法");
+            throw new ReviewFormatException("审查输出长度不合法");
         }
-        JsonNode root = JSON.readTree(content);
+        JsonNode root;
+        try {
+            root = JSON.readTree(content);
+        } catch (RuntimeException exception) {
+            // Jackson 不完整 JSON、尾随内容和重复字段都属于模型协议格式错误。
+            throw new ReviewFormatException("审查 JSON 无法解析");
+        }
+        if (root == null) {
+            throw new ReviewFormatException("审查 JSON 为空");
+        }
         if (!root.isObject() || !root.propertyNames().equals(FIELDS)) {
-            throw new IllegalArgumentException("审查字段不完整或含额外字段");
+            throw new ReviewFormatException("审查字段不完整或含额外字段");
         }
         String actionText = requiredText(root, "action", 30);
         String reason = requiredText(root, "reason", 800);
         String instruction = requiredText(root, "instruction", 1_200);
-        AnswerReviewResult.Action action = AnswerReviewResult.Action.valueOf(actionText);
+        AnswerReviewResult.Action action;
+        try {
+            action = AnswerReviewResult.Action.valueOf(actionText);
+        } catch (IllegalArgumentException exception) {
+            throw new ReviewFormatException("审查动作不合法");
+        }
         if (action == AnswerReviewResult.Action.UNAVAILABLE
                 || (action != AnswerReviewResult.Action.PASS && instruction.isBlank())) {
-            throw new IllegalArgumentException("审查动作或建议不合法");
+            throw new ReviewFormatException("审查动作或建议不合法");
         }
         return new AnswerReviewResult(action, reason, instruction);
     }
@@ -182,8 +236,15 @@ public class LlmAnswerReviewService implements AnswerReviewService {
     private String requiredText(JsonNode node, String field, int limit) {
         JsonNode value = node.path(field);
         if (!value.isTextual() || value.asString().length() > limit) {
-            throw new IllegalArgumentException("审查字段类型或长度不合法");
+            throw new ReviewFormatException("审查字段类型或长度不合法");
         }
         return value.asString();
+    }
+
+    // 单独标记模型协议错误，避免把网络或后端故障误当成格式错误反复请求。
+    private static class ReviewFormatException extends RuntimeException {
+        private ReviewFormatException(String message) {
+            super(message);
+        }
     }
 }

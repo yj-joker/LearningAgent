@@ -201,7 +201,7 @@ class AgentHarnessModeTest {
         AgentRunResult result = harness.run(9L, "开始第一步", AgentMode.FOCUS);
 
         assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
-        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, result.getAnswer());
+        assertTrue(result.getAnswer().startsWith(FinalAnswerConsistencyHook.SAFE_ANSWER));
         ArgumentCaptor<List<LlmMessage>> sent = ArgumentCaptor.forClass(List.class);
         verify(client, times(2)).generate(sent.capture());
         // 允许补行动时也必须收到完整反馈，但不会因此直接修改进度。
@@ -286,7 +286,7 @@ class AgentHarnessModeTest {
 
         AgentRunResult result = harness.run(9L, "讲解第一步", AgentMode.FOCUS);
 
-        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER, result.getAnswer());
+        assertTrue(result.getAnswer().startsWith(FinalAnswerConsistencyHook.SAFE_ANSWER));
         verify(client).generate(any());
         verify(client, never()).generateWithoutTools(any());
         verify(review).review(any(), any());
@@ -305,8 +305,8 @@ class AgentHarnessModeTest {
                 AnswerReviewResult.Action.REWRITE, "不实声明", "只修正回答"));
         when(client.generateWithoutTools(any())).thenReturn(new ToolCallLlmResponse(List.of(
                 new ToolCall("unexpected", "update_task_progress", "{}"))));
-        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER,
-                harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer());
+        String protectedAnswer = harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer();
+        assertTrue(protectedAnswer.startsWith(FinalAnswerConsistencyHook.SAFE_ANSWER));
         verify(plans, never()).updateProgress(any(), any());
         verifyNoInteractions(extraction);
         verify(review).review(any(), any());
@@ -317,8 +317,8 @@ class AgentHarnessModeTest {
     void reviewFailureDoesNotPublishDraftOrExtractMemory() {
         when(plans.load(9L)).thenReturn(storedSnapshot(null));
         when(review.review(any(), any())).thenReturn(AnswerReviewResult.unavailable());
-        assertEquals(FinalAnswerConsistencyHook.SAFE_ANSWER,
-                harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer());
+        String protectedAnswer = harness.run(9L, "讲解集合", AgentMode.FOCUS).getAnswer();
+        assertTrue(protectedAnswer.startsWith(FinalAnswerConsistencyHook.SAFE_ANSWER));
         verify(client, never()).generateWithoutTools(any());
         verifyNoInteractions(extraction);
     }

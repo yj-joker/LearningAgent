@@ -5,6 +5,7 @@ import com.yjjoker.learningagent.entity.SessionMemory;
 import com.yjjoker.learningagent.entity.UserMemory;
 import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.entity.LearningPlanDraftStep;
+import com.yjjoker.learningagent.config.HarnessToolLoopProperties;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
 import com.yjjoker.learningagent.exception.LearningAgentServiceException;
 import com.yjjoker.learningagent.exception.LearningSessionStatusException;
@@ -84,10 +85,6 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // LLM 接口中的 tool content 是字符串，因此需要把 ToolExecutionResult 转成 JSON 文本。
     private static final JsonMapper JSON_MAPPER = new JsonMapper();
 
-    // 最多允许模型连续进行五轮工具调用，防止模型反复调用工具形成死循环并持续消耗费用。
-    // 这里限制的是工具轮数；模型在第五轮工具执行后仍有一次机会生成最终文本。
-    private static final int MAX_TOOL_ROUNDS = 5;
-
     // 字段类型使用 LlmClient 接口，而不是 AliyunLlmClient 具体类。
     // 这样 Harness 不会和阿里云绑定，测试时也能传入不访问网络的假客户端。
     private final LlmClient llmClient;
@@ -142,6 +139,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     private final GoalIntentRecognitionService goalIntentRecognitionService;
     // 与 load_skill 工具共用本轮激活集合，正文只在主模型上下文中按需出现。
     private final SkillRunContext skillRunContext;
+    // 工具轮数由配置控制；审批恢复继续使用同一个逻辑任务预算。
+    private final HarnessToolLoopProperties toolLoopProperties;
 
     // 读取长期学习计划的步骤进度；本轮只读一次，不让模型直接修改数据库。
     @org.springframework.beans.factory.annotation.Autowired
@@ -168,7 +167,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                                    FocusPlanPlanner focusPlanPlanner,
                                    SessionGoalContext sessionGoalContext,
                                    GoalIntentRecognitionService goalIntentRecognitionService,
-                                   SkillRunContext skillRunContext) {
+                                   SkillRunContext skillRunContext,
+                                   HarnessToolLoopProperties toolLoopProperties) {
         // 生产构造器集中接收所有协作者，循环内部只负责编排调用顺序。
         this.llmClient = llmClient;
         // 工具注册表负责把模型返回的工具名映射到 Java 工具。
@@ -200,6 +200,35 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         this.focusPlanPlanner = focusPlanPlanner;
         this.goalIntentRecognitionService = goalIntentRecognitionService;
         this.skillRunContext = skillRunContext;
+        this.toolLoopProperties = toolLoopProperties;
+    }
+
+    // 测试和旧调用方使用默认八轮预算，生产环境由 Spring 注入配置。
+    public AgentHarnessServiceImpl(LlmClient llmClient,
+                                   ToolRegistry toolRegistry,
+                                   List<AgentHook> hooks,
+                                   ConversationMemoryService conversationMemoryService,
+                                   LearningSessionRepository learningSessionRepository,
+                                   ContextManager contextManager,
+                                   OriginalToolResultStore originalToolResultStore,
+                                   ContextSummarizer contextSummarizer,
+                                   LlmRetryExecutor llmRetryExecutor,
+                                   StructuredMemoryService structuredMemoryService,
+                                   MemoryReferenceRegistry memoryReferenceRegistry,
+                                   MemoryExtractionService memoryExtractionService,
+                                   MemoryApprovalService memoryApprovalService,
+                                   AgentApprovalService agentApprovalService,
+                                   SessionGoalService sessionGoalService,
+                                   FocusPlanPlanner focusPlanPlanner,
+                                   SessionGoalContext sessionGoalContext,
+                                   GoalIntentRecognitionService goalIntentRecognitionService,
+                                   SkillRunContext skillRunContext) {
+        this(llmClient, toolRegistry, hooks, conversationMemoryService, learningSessionRepository,
+                contextManager, originalToolResultStore, contextSummarizer, llmRetryExecutor,
+                structuredMemoryService, memoryReferenceRegistry, memoryExtractionService,
+                memoryApprovalService, agentApprovalService, sessionGoalService, focusPlanPlanner,
+                sessionGoalContext, goalIntentRecognitionService, skillRunContext,
+                new HarnessToolLoopProperties());
     }
 
     @Override
@@ -611,8 +640,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
             // 是工具调用？
             if (response instanceof ToolCallLlmResponse toolCallResponse) {
-                if (completedToolRounds >= MAX_TOOL_ROUNDS) {
-                    throw new IllegalStateException("Harness 超过最多 5 轮工具调用，已停止继续执行");
+                int maxToolRounds = Math.max(1, toolLoopProperties.getMaxRounds());
+                if (completedToolRounds >= maxToolRounds) {
+                    log.warn("工具轮数达到上限，runId={}，completedRounds={}，maxRounds={}",
+                            context.getRunId(), completedToolRounds, maxToolRounds);
+                    throw new IllegalStateException("Harness 超过最多 " + maxToolRounds
+                            + " 轮工具调用，已停止继续执行");
                 }
 
                 // 获取LLM想要调用的工具列表

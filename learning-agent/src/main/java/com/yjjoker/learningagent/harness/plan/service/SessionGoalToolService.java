@@ -110,7 +110,9 @@ public class SessionGoalToolService {
                     throw new IllegalArgumentException("同名目标已存在，请改用 switch_session_goal");
                 }
                 if (!execute) return ToolExecutionResult.success("新增目标参数已校验，尚未保存");
-                updated = goals.create(expected, request);
+                // 批准恢复时沿用检查点中的长期计划快照，保存阶段归属和版本快照。
+                updated = goals.create(expected, request, context.getLearningPlan(),
+                        context.getLearningPlanProgress());
             } else if ("SWITCH".equals(operation)) {
                 JsonNode root = object(input);
                 if (!root.propertyNames().equals(Set.of("goalRef")) || !root.path("goalRef").isTextual()
