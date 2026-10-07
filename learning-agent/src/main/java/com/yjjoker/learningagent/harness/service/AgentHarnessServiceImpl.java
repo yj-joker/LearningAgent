@@ -601,7 +601,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                 // 最终回答 Hook 在落库前检查结构化动作是否真的执行。
                 AnswerReviewRequest reviewRequest = new AnswerReviewRequest(userMessage, answer, messages,
                         context.getMode() == AgentMode.FOCUS
-                                ? SessionGoalProgress.from(sessionGoalContext.require()) : null);
+                                ? SessionGoalProgress.from(sessionGoalContext.require()) : null,
+                        context.getMode() == AgentMode.FOCUS
+                                ? sessionGoalContext.getLearningPlanProgress() : null,
+                        context.getMode() == AgentMode.FOCUS
+                                ? sessionGoalContext.require().getCurrentPlan().getLearningPlanStageRef() : null);
                 FinalAnswerHookResult finalAnswerCheck = correctionFailed
                         ? FinalAnswerHookResult.replaceAnswer(FinalAnswerConsistencyHook.SAFE_ANSWER)
                         : notifyBeforeFinalAnswer(context, reviewRequest);
@@ -1060,7 +1064,9 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             }
         }
         prompt.append("\n进度状态来自数据库，只能作为教学参考；讲解、练习和点评不等于步骤已确认。")
-                .append("达到完成条件时只能提出建议并说明证据，长期状态必须经过用户审批后由后端更新。");
+                .append("达到完成条件时只能提出建议并说明证据，长期状态必须经过用户审批后由后端更新。")
+                // 只提示 Skill 的适用场景；具体教学步骤仍由 Skill 正文提供，避免主提示词变长。
+                .append("\n本轮围绕长期计划教学或回答阶段练习时，先从可用 Skill 索引加载适用的学习教学流程，再继续回答。");
     }
 
     // 临时反馈包含被拒绝的草稿；它是待修改数据，不是另一条用户授权，也不会进入聊天历史。

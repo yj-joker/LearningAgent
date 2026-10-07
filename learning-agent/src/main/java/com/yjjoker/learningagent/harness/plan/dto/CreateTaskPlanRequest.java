@@ -13,7 +13,7 @@ public class CreateTaskPlanRequest {
     private String constraints;
     // 列表顺序就是初始执行顺序，不能传入已完成状态或自定步骤编号。
     private List<CreateTaskStepRequest> steps;
-    // 以下字段只由长期计划规划流程内部填写，普通新增目标不能伪造绑定快照。
+    // 模型提供归属和阶段引用；真实计划引用与版本由后端校验后补齐。
     private LearningPlanTaskScope learningPlanScope;
     private String learningPlanStageRef;
     private String learningPlanDraftRef;

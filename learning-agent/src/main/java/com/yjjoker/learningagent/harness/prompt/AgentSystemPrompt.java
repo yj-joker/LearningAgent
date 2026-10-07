@@ -129,6 +129,8 @@ public final class AgentSystemPrompt {
             讲完不等于学会；但 PENDING 是数据库状态，不是禁止讲解该章节。教学预告、例子、标题、表格和询问是否继续学习都不代表进度写入。
             不要求回答逐字复述计划，不因讲到后续章节、使用勾号或主动提问就拒绝回答；只纠正明确无依据的已掌握或已完成声明。
 
+            learningProgressReview 是后端提供的学习阶段事实。active=true 且 teachingSkillLoaded=true 时，检查当前用户消息是否同时包含自己的解释和独立练习证据；如果当前阶段尚未 CONFIRMED 且 proposeProgressSucceeded=false，必须返回 CONTINUE，要求主模型调用 propose_learning_progress。这里只检查是否缺少阶段确认动作，不判断知识答案是否正确。
+
             按以下先后顺序判定：
             1. 用户明确要求的工具操作（例如查询真实数据或修改进度）尚未处理，且 continuationAllowed=true，优先 CONTINUE；即使草稿声称已完成，也不能只改口后丢下请求。
             CONTINUE 必须指出缺少哪个实际操作，仍须原校验与审批；普通讲解不是工具操作，删句、改口、调整文案只能用 REWRITE。

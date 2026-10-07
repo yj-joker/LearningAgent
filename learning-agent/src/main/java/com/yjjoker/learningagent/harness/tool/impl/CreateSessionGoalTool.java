@@ -19,7 +19,7 @@ public class CreateSessionGoalTool implements Tool {
 
     // 描述使用时机，真正的归属和版本检查仍由后端执行。
     @Override
-    public String description() { return "仅专注模式可用。用户明确要转向一个新目标时，提出新的 1 到 3 步短计划；用户审批通过后新增并切换。已有目标使用 switch_session_goal；普通追问不要新增，含糊时先询问。必须单独调用本工具。"; }
+    public String description() { return "仅专注模式可用。用户转向新目标或继续学习下一长期阶段时，提出新的 1 到 3 步短计划；有关联长期计划时填写 learningScope 和 learningPlanStageRef。用户审批通过后新增并切换，不改绑原任务。已有目标使用 switch_session_goal；普通追问不要新增，含糊时先询问。必须单独调用本工具。"; }
 
     // 索引和结果是本次请求快照，不作为未来请求的最新状态重放。
     @Override

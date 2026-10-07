@@ -72,24 +72,27 @@ aliyun:
     # OpenAI 兼容的聊天完成接口完整地址，测试时也可以通过环境变量替换成本地地址。
     base-url: ${ALIYUN_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
     # 默认模型使用稳定别名；更换模型只需要修改环境变量，不需要重新修改 Java 客户端。
-    model: ${ALIYUN_LLM_MODEL:qwen3.8-flash}
+    model: ${ALIYUN_LLM_MODEL:qwen3.7-flash-2026-07-15}
     # 分别限制建立连接和等待模型生成结果的最长时间，避免请求线程无限期阻塞。
+    # 主模型先给 90 秒，优先减少复杂教学回答已经等待较久却因读取超时失败的情况。
     connect-timeout-seconds: ${ALIYUN_LLM_CONNECT_TIMEOUT_SECONDS:5}
-    read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:60}
+    read-timeout-seconds: ${ALIYUN_LLM_READ_TIMEOUT_SECONDS:90}
 
 harness:
   answer-review:
     # 审查模型格式错误时最多再请求一次，只修复 JSON，不重复执行业务工具。
     max-attempts: ${HARNESS_ANSWER_REVIEW_MAX_ATTEMPTS:2}
   tool-loop:
-    # 单次逻辑任务最多连续请求八批工具；审批恢复继续消耗同一预算。
-    max-rounds: ${HARNESS_TOOL_LOOP_MAX_ROUNDS:8}
+    # 单次逻辑任务最多连续请求十五批工具；审批恢复继续消耗同一预算。
+    # 提高上限只能减少复杂学习任务被过早截断，不能代替工具幂等、状态校验和超时控制。
+    max-rounds: ${HARNESS_TOOL_LOOP_MAX_ROUNDS:15}
   skills:
     # 控制单次任务激活的技能规模；重复读取不增加数量，暂停恢复沿用同一集合。
     max-active-skills: ${HARNESS_SKILL_MAX_ACTIVE_SKILLS:3}
     # 只统计活跃正文字符，整个请求仍要经过 context 的安全水位检查。
     max-active-characters: ${HARNESS_SKILL_MAX_ACTIVE_CHARACTERS:12000}
   llm:
+    # TODO 后续按真实运行数据增加 Agent Run 总截止时间；现在只限制单次模型 HTTP 读取。
     retry:
       # 最大尝试次数包含第一次请求；3 表示首次请求失败后最多再重试两次。
       max-attempts: ${HARNESS_LLM_MAX_ATTEMPTS:3}

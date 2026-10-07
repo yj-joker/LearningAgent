@@ -35,5 +35,5 @@ public class AliyunLlmProperties {
 
     // 连接成功后最多等待模型返回多少秒；模型生成文本通常比普通数据库请求更慢。
     @Min(1)
-    private int readTimeoutSeconds = 60;
+    private int readTimeoutSeconds = 90;
 }

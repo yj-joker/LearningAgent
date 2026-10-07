@@ -244,6 +244,13 @@ public class SessionGoalService {
         return snapshot(state);
     }
 
+    // 审批前校验新任务的阶段归属，只规范请求参数，不改数据库或当前任务。
+    public void validateCreateBinding(SessionGoalSnapshot expected, CreateTaskPlanRequest request,
+                                      LearningPlanDraft learningPlan, LearningPlanProgressVO progress) {
+        requireSnapshot(expected);
+        normalizeLearningBinding(expected.getState(), request, learningPlan, progress);
+    }
+
     // 校验阶段归属和版本，防止模型把任意短任务写成长期计划任务。
     private void normalizeLearningBinding(SessionFocusState state, CreateTaskPlanRequest request,
                                           LearningPlanDraft learningPlan,

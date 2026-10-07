@@ -117,6 +117,7 @@ public class LlmAnswerReviewService implements AnswerReviewService {
         root.put("toolHistoryComplete", context.hasCompleteToolHistory());
         // 后端决定是否允许补调用；审查只能建议动作，不能覆盖真实拒绝。
         root.put("continuationAllowed", !context.hasBlockingToolOutcome());
+        appendLearningReviewFacts(root, context, request);
         var approvals = root.putArray("userApprovalEvents");
         var tools = root.putArray("toolExecutions");
         for (ToolExecutionRecord record : context.getToolExecutions()) {
@@ -154,6 +155,49 @@ public class LlmAnswerReviewService implements AnswerReviewService {
         appendDialogue(root, request.getDialogue());
         root.put("draftAnswer", request.getDraftAnswer());
         return root.toString();
+    }
+
+    // 把学习阶段的后端事实单独交给审查模型，避免它把短期任务步骤当成长阶段状态。
+    private void appendLearningReviewFacts(ObjectNode root, AgentRunContext context,
+                                           AnswerReviewRequest request) {
+        var progress = request.getLearningPlanProgress();
+        boolean active = progress != null && request.getLearningPlanStageRef() != null;
+        ObjectNode learning = root.putObject("learningProgressReview");
+        learning.put("active", active);
+        if (!active) {
+            return;
+        }
+        learning.put("draftRef", progress.getDraftRef());
+        learning.put("planVersion", progress.getPlanVersion());
+        learning.put("semanticVersion", progress.getSemanticVersion());
+        learning.put("currentStageRef", request.getLearningPlanStageRef());
+        var currentStage = progress.getSteps().stream()
+                .filter(step -> request.getLearningPlanStageRef().equals(step.getStepRef()))
+                .findFirst().orElse(null);
+        if (currentStage == null) {
+            learning.put("stageResolved", false);
+            return;
+        }
+        learning.put("stageResolved", true);
+        learning.put("stageStatus", currentStage.getStatus().name());
+        learning.put("completionCriteria", currentStage.getCompletionCriteria());
+        learning.put("evidenceType", currentStage.getEvidenceType() == null
+                ? "" : currentStage.getEvidenceType().name());
+        boolean skillLoaded = hasSuccessfulTool(context, "load_skill");
+        boolean proposalSucceeded = hasSuccessfulTool(context, "propose_learning_progress");
+        learning.put("teachingSkillLoaded", skillLoaded);
+        learning.put("proposeProgressSucceeded", proposalSucceeded);
+        // 日志只记录布尔事实和状态，不记录用户答案或计划正文。
+        log.info("学习进度审查事实已组装，runId={}，stageStatus={}，skillLoaded={}，proposalSucceeded={}，stageResolved={}",
+                context.getRunId(), currentStage.getStatus(), skillLoaded, proposalSucceeded, true);
+    }
+
+    // 只把成功执行的工具视为已完成动作，参数失败和用户拒绝都不能让回答直接通过。
+    private boolean hasSuccessfulTool(AgentRunContext context, String toolName) {
+        return context.getToolExecutions().stream().anyMatch(record ->
+                toolName.equals(record.getToolName())
+                        && record.getStatus() == ToolExecutionRecord.Status.SUCCEEDED
+                        && record.getResult() != null && record.getResult().isSuccess());
     }
 
     // 审查只需要执行事实，不把规划模型写的教学约束和完成条件变成回答格式要求。

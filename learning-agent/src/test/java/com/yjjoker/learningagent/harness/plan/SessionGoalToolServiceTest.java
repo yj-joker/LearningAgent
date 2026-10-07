@@ -3,6 +3,12 @@ package com.yjjoker.learningagent.harness.plan;
 import com.yjjoker.learningagent.harness.plan.model.*;
 import com.yjjoker.learningagent.harness.plan.service.*;
 import com.yjjoker.learningagent.utils.BaseContext;
+import com.yjjoker.learningagent.entity.LearningPlanDraft;
+import com.yjjoker.learningagent.entity.LearningPlanDraftStep;
+import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
+import com.yjjoker.learningagent.projectenum.LearningPlanStepProgressStatus;
+import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
+import com.yjjoker.learningagent.vo.LearningPlanStepProgressVO;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -40,7 +46,7 @@ class SessionGoalToolServiceTest {
     @Test
     void validatesCreateWithoutWriting() {
         assertTrue(tools.create(CREATE, false).isSuccess());
-        verify(goals, never()).create(any(), any());
+        verify(goals, never()).create(any(), any(), any(), any());
         assertSame(initial, context.require());
     }
 
@@ -48,7 +54,7 @@ class SessionGoalToolServiceTest {
     @Test
     void bindsCommittedGoalAfterCreate() {
         SessionGoalSnapshot changed = snapshot(2, "学习数据库锁");
-        when(goals.create(same(initial), any())).thenReturn(changed);
+        when(goals.create(same(initial), any(), isNull(), isNull())).thenReturn(changed);
         var result = tools.create(CREATE, true);
         assertTrue(result.isSuccess());
         assertSame(changed, context.require());
@@ -58,7 +64,7 @@ class SessionGoalToolServiceTest {
     // 存储异常必须向外传播，不能提前绑定没提交的新目标。
     @Test
     void keepsOldContextWhenPersistenceFails() {
-        when(goals.create(any(), any())).thenThrow(new IllegalStateException("模拟存储故障"));
+        when(goals.create(any(), any(), any(), any())).thenThrow(new IllegalStateException("模拟存储故障"));
         assertThrows(IllegalStateException.class, () -> tools.create(CREATE, true));
         assertSame(initial, context.require());
     }
@@ -135,6 +141,59 @@ class SessionGoalToolServiceTest {
         assertTrue(result.getContent().contains("理解行锁"));
         assertFalse(result.getContent().contains(initial.getCurrentPlan().getPlanId()));
         assertSame(initial, context.require());
+    }
+
+    // 工具目录必须公开阶段参数，模型才有能力创建第二阶段任务。
+    @Test
+    void exposesLearningStageBindingInToolSchema() {
+        var properties = (java.util.Map<?, ?>) tools.createSchema().get("properties");
+        assertTrue(properties.containsKey("learningScope"));
+        assertTrue(properties.containsKey("learningPlanStageRef"));
+    }
+
+    // 第一阶段已确认时，新任务必须绑定第二阶段；错误引用在审批前拒绝。
+    @Test
+    void validatesNextStageBeforeApprovalWithoutChangingCurrentTask() {
+        LearningPlanDraft draft = new LearningPlanDraft();
+        draft.setDraftRef("test-draft");
+        draft.setVersion(2);
+        draft.setSemanticVersion(1);
+        LearningPlanDraftStep first = stage("stage-one", 1);
+        LearningPlanDraftStep second = stage("stage-two", 2);
+        draft.setSteps(List.of(first, second));
+        initial.getState().setLearningPlanDraftRef(draft.getDraftRef());
+        context.bindLearningPlan(draft);
+        context.bindLearningPlanProgress(new LearningPlanProgressVO(draft.getDraftRef(), "测试计划", 2, 1,
+                List.of(progress(first, LearningPlanStepProgressStatus.CONFIRMED),
+                        progress(second, LearningPlanStepProgressStatus.NOT_STARTED))));
+        // 只调用真实的纯参数校验，数据库服务仍是替身。
+        doCallRealMethod().when(goals).validateCreateBinding(any(), any(), any(), any());
+        String request = """
+                {"goal":"学习第二阶段","steps":[{"description":"教学和练习","completionCriteria":"解释并正确作答"}],
+                 "learningScope":"CURRENT_STAGE","learningPlanStageRef":"stage-two"}
+                """;
+        assertTrue(tools.create(request, false).isSuccess());
+        assertFalse(tools.create(request.replace("stage-two", "stage-one"), false).isSuccess());
+        assertFalse(tools.create(request.replace("stage-two", "foreign-stage"), false).isSuccess());
+        assertFalse(tools.create(CREATE, false).isSuccess());
+        assertSame(initial, context.require());
+        verify(goals, never()).create(any(), any(), any(), any());
+    }
+
+    // 构造两个稳定阶段引用，便于检查前后阶段归属。
+    private LearningPlanDraftStep stage(String ref, int position) {
+        LearningPlanDraftStep step = new LearningPlanDraftStep();
+        step.setStepRef(ref);
+        step.setPosition(position);
+        step.setDescription(ref);
+        step.setCompletionCriteria("解释并正确作答");
+        return step;
+    }
+
+    // 固定数据库进度快照，不让测试依赖模型自然语言判断。
+    private LearningPlanStepProgressVO progress(LearningPlanDraftStep step, LearningPlanStepProgressStatus status) {
+        return new LearningPlanStepProgressVO(step.getStepRef(), step.getPosition(), step.getDescription(),
+                step.getCompletionCriteria(), status, null, null, null, 2, 1, 1);
     }
 
     // 简短样例只保留工具测试需要的字段，不在生产类增加测试构造器。

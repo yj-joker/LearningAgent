@@ -165,6 +165,7 @@ class MemoryToolsHttpTest {
         return answer;
     }
 
+    // 当前辅助方法只覆盖一个审批批次；生产代码支持同一 runId 后续再暂停，本文不验证多批恢复。
     // 真实 HTTP 测试完成审批后必须 resume；只批准还不能宣称记忆工具已执行。
     private String approveReturnedBatch(JsonNode response, long sessionId, String expectedTool) throws Exception {
         assertEquals("WAITING_APPROVAL", response.get("status").asString());

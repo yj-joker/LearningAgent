@@ -36,6 +36,10 @@ public class SessionGoalToolService {
         return Map.of("type", "object", "properties", Map.of(
                 "goal", text("本轮用户希望新增的目标；已有目标应切换而不是重复创建", 500),
                 "constraints", Map.of("type", "string", "maxLength", 500),
+                "learningScope", Map.of("type", "string", "enum", List.of("CURRENT_STAGE", "OTHER_STAGE", "OUT_OF_PLAN"),
+                        "description", "有关联长期计划时必填：当前未确认阶段、其他阶段或计划外任务"),
+                "learningPlanStageRef", Map.of("type", List.of("string", "null"), "maxLength", 64,
+                        "description", "计划内任务复制最新计划中的 stageRef；计划外任务传 null"),
                 "steps", Map.of("type", "array", "minItems", 1, "maxItems", 3, "items", step)),
                 "required", List.of("goal", "steps"), "additionalProperties", false);
     }
@@ -109,6 +113,9 @@ public class SessionGoalToolService {
                 if (expected.getGoals().stream().anyMatch(goal -> goal.getGoal().equals(request.getGoal()))) {
                     throw new IllegalArgumentException("同名目标已存在，请改用 switch_session_goal");
                 }
+                // 审批前就核对阶段归属；缺少或伪造阶段时不创建一个注定失败的审批。
+                goals.validateCreateBinding(expected, request, context.getLearningPlan(),
+                        context.getLearningPlanProgress());
                 if (!execute) return ToolExecutionResult.success("新增目标参数已校验，尚未保存");
                 // 批准恢复时沿用检查点中的长期计划快照，保存阶段归属和版本快照。
                 updated = goals.create(expected, request, context.getLearningPlan(),
@@ -137,7 +144,8 @@ public class SessionGoalToolService {
             return ToolExecutionResult.failure("GOAL_ACCESS_DENIED", "目标工具仅供当前用户的有效专注会话使用", false);
         } catch (ClientDataErrorException exception) {
             log.warn("目标工具拒绝旧版本或无效目标，operation={}", operation);
-            return ToolExecutionResult.failure("GOAL_CHANGED", "目标已变化或无法切换，请重新读取并确认后申请审批", true);
+            // 将可修正的后端原因交给模型，不让模型反复猜测缺失的阶段字段。
+            return ToolExecutionResult.failure("GOAL_CHANGED", exception.getMessage(), true);
         } catch (HarnessException | JacksonException | IllegalArgumentException exception) {
             log.warn("目标工具参数校验失败，operation={}，errorType={}", operation, exception.getClass().getSimpleName());
             return ToolExecutionResult.failure("INVALID_GOAL_ARGUMENT", "请按工具结构填写短计划，或复制当前索引中非当前目标的 goalRef", true);
