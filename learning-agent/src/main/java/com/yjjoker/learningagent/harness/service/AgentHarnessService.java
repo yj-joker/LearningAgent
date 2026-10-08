@@ -11,11 +11,12 @@ public interface AgentHarnessService {
     // 返回回答或等待审批状态，不能再只用一个字符串表示所有结果。
     AgentRunResult run(Long sessionId, String userMessage);
 
-    // mode 决定是否在进入主循环前创建短计划。
+    // mode 保留旧调用兼容；实际模式由会话固定，不能通过本轮请求切换。
     AgentRunResult run(Long sessionId, String userMessage, AgentMode mode);
 
     // 通过原 runId 继续已审批任务，不把批准当成新的用户问题。
     AgentRunResult resume(String runId);
 
+    // 只标记会话已删除，保留消息与任务记录供审计。
     void deleteSession(Long sessionId);
 }

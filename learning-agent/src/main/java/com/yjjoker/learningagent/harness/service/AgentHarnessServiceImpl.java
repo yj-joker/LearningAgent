@@ -241,24 +241,28 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
     @Override
     public AgentRunResult run(Long sessionId, String userMessage) {
-        // 旧接口默认问答模式，避免已有客户端必须立刻增加字段。
-        return run(sessionId, userMessage, AgentMode.CHAT);
+        // 不传模式也读取会话创建时保存的模式，不再默认把课程或专注会话当成问答。
+        return run(sessionId, userMessage, null);
     }
 
     @Override
-    // 校验会话后按模式准备计划，再进入共用的工具循环。
+    // 先读取会话固定模式，再准备课程或专注上下文，客户端字段不能改变执行模式。
     public AgentRunResult run(Long sessionId, String userMessage, AgentMode requestedMode) {
         // 每次 HTTP 请求都会得到独立上下文，用于保存本次任务的工具轨迹和完成状态。
         AgentRunContext context = new AgentRunContext();
-        AgentMode mode = requestedMode == null ? AgentMode.CHAT : requestedMode;
-        context.bindMode(mode);
-
         try {
             // 验证用户输入
             validateUserMessage(userMessage);
-            // 验证会话访问权限
-            validateSessionAccess(sessionId, mode);
+            // 归属和状态校验通过后，模式以数据库中的会话配置为准。
+            LearningSession session = requireAccessibleSession(sessionId);
+            AgentMode mode = resolveSessionMode(session);
+            context.bindMode(mode);
             context.bindSession(BaseContext.getCurrentId(), sessionId);
+            if (requestedMode != null && requestedMode != mode) {
+                // 兼容仍传 mode 的旧前端，只记录偏差，不修改会话或重选历史范围。
+                log.info("忽略请求中的会话模式，sessionId={}，requestedMode={}，sessionMode={}",
+                        sessionId, requestedMode, mode);
+            }
             // 同一会话的暂停任务必须先恢复，不能另开聊天把原工具请求遗忘。
             agentApprovalService.requireSessionAvailable(sessionId);
             // 用户先显式初始化课程进度；聊天只读取，不偷偷写入新的课程范围。
@@ -320,8 +324,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             skillRunContext.restore(checkpoint.getLoadedSkills());
             AgentMode mode = checkpoint.getMode() == null ? AgentMode.CHAT : checkpoint.getMode();
             context.bindMode(mode);
-            // 恢复也核对独立会话固定模式，不能用旧检查点把另一模式内容写入此会话。
-            validateSessionAccess(run.getSessionId(), mode);
+            // 恢复沿用检查点原模式，旧课程的 CHAT/FOCUS 任务不能改成 COURSE 后重放工具。
+            validateCheckpointSessionMode(requireAccessibleSession(run.getSessionId()), mode);
             // 恢复原课程快照前重新校验当前访问权限，不能借审批绕过会话归属。
             if (mode == AgentMode.COURSE) {
                 var snapshot = checkpoint.getCourseProgress();
@@ -1133,7 +1137,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
     // 把当前目标完整步骤和其他目标的索引放入请求；搁置目标不是本轮执行指令。
     private void appendFocusPlan(StringBuilder prompt, AgentMode mode, AgentTaskPlan taskPlan) {
-        // TODO 有关联学习计划时按需加载；其他会话在下次请求或继续执行前检查版本，不假定已发请求实时更新。
+        // 普通请求已读取会话关联计划，审批恢复沿用原快照，提示词只使用当前请求绑定的数据。
         if (mode != AgentMode.FOCUS) {
             return;
         }
@@ -1303,7 +1307,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 会话必须存在、属于当前登录用户，并且仍处于进行中状态。
-    private void validateSessionAccess(Long sessionId, AgentMode mode) {
+    private LearningSession requireAccessibleSession(Long sessionId) {
         if (sessionId == null || sessionId <= 0) {
             throw new LearningSessionStatusException("学习会话 ID 不合法");
         }
@@ -1320,12 +1324,30 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
             throw new LearningSessionStatusException("学习会话已结束");
         }
-        // 新独立会话固定模式，切换必须使用新编号，防止消息与专注计划串到另一模式。
-        // 旧课程会话继续允许以前的问答或专注请求，兼容已有调用与历史。
-        if (session.getCourseId() == null && session.getMode() != null && session.getMode() != mode) {
-            log.warn("独立会话模式不匹配，sessionId={}，storedMode={}，requestedMode={}",
-                    sessionId, session.getMode(), mode);
+        return session;
+    }
+
+    // 正常请求只使用保存的模式；缺少字段的旧记录按是否绑定课程推导，不依赖客户端。
+    private AgentMode resolveSessionMode(LearningSession session) {
+        if (session.getMode() != null) {
+            return session.getMode();
+        }
+        AgentMode legacyMode = session.getCourseId() == null ? AgentMode.CHAT : AgentMode.COURSE;
+        log.info("旧会话缺少模式，按课程绑定推导，sessionId={}，mode={}", session.getId(), legacyMode);
+        return legacyMode;
+    }
+
+    // 新独立会话必须恢复自己的模式；旧课程的历史检查点保留原模式完成原任务。
+    private void validateCheckpointSessionMode(LearningSession session, AgentMode checkpointMode) {
+        AgentMode sessionMode = resolveSessionMode(session);
+        if (session.getCourseId() == null && sessionMode != checkpointMode) {
+            log.warn("独立会话检查点模式不匹配，sessionId={}，sessionMode={}，checkpointMode={}",
+                    session.getId(), sessionMode, checkpointMode);
             throw new LearningSessionStatusException("切换模式后请创建新的独立会话");
+        }
+        if (session.getCourseId() != null && sessionMode != checkpointMode) {
+            log.info("恢复旧课程任务的原模式，sessionId={}，sessionMode={}，checkpointMode={}",
+                    session.getId(), sessionMode, checkpointMode);
         }
     }
 

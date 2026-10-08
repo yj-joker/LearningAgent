@@ -22,7 +22,7 @@ interface ChatMessage {
   createdAt: string
 }
 
-interface ActiveSession {
+interface ModeSession {
   id: string
   title: string
   course: string
@@ -49,6 +49,7 @@ const sending = ref(false)
 // 页面路由决定模式，课程、问答和专注不会共用同一个聊天页面状态。
 const agentMode = computed(() => props.mode)
 const pageTitle = computed(() => ({ COURSE: '课程学习', CHAT: '独立问答', FOCUS: '专注学习' }[props.mode]))
+const historyTitle = computed(() => ({ COURSE: '课程学习会话', CHAT: '问答历史会话', FOCUS: '专注历史会话' }[props.mode]))
 const sessions = ref<LearningSessionVO[]>([])
 const loadingSessions = ref(false)
 const historyLoading = ref(false)
@@ -69,16 +70,15 @@ const loadingRun = ref(false)
 const messageList = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 
-const activeSessions = computed<ActiveSession[]>(() => {
-  return sessions.value.filter(item => props.standalone
-    ? !item.courseId && item.mode === props.mode
-    : Boolean(item.courseId)).map(item => ({
-      id: String(item.id), title: item.sessionTitle, course: item.courseName ?? '',
+// 每个页面只接收已保存的同模式会话，课程关联不能代替会话模式。
+const modeSessions = computed<ModeSession[]>(() => {
+  return sessions.value.filter(item => item.mode === props.mode).map(item => ({
+      id: String(item.id), title: item.sessionTitle || '未命名会话', course: item.courseName ?? '',
       createdAt: item.createdAt ?? item.createAt ?? '', status: item.sessionStatus ?? 'ACTIVE',
     }))
 })
 
-const selectedSession = computed(() => activeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
+const selectedSession = computed(() => modeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
 const remainingCharacters = computed(() => MAX_MESSAGE_LENGTH - draft.value.length)
 const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !learningPlanBindingSaving.value && !activeRun.value && remainingCharacters.value >= 0))
 const runStatusText = computed(() => activeRun.value ? ({ WAITING_APPROVAL: '等待审批', APPROVAL_RESOLVED: '等待继续执行', RUNNING: '任务正在执行', COMPLETED: '任务已完成', FAILED: '任务失败' }[activeRun.value.status]) : sending.value ? '正在思考' : loadingRun.value ? '同步任务中' : '可以开始学习')
@@ -145,7 +145,25 @@ async function scrollToLatest() {
 
 async function selectSession(sessionId: string) {
   if (sending.value || approvalBusy.value || sessionId === selectedSessionId.value) return
+  if (!sessionId && props.standalone) {
+    await newConversation()
+    return
+  }
+  // 移动选择器和历史侧栏使用同一列表，禁止把其他模式的 ID 带入页面。
+  if (!modeSessions.value.some(item => item.id === sessionId)) return
   await router.replace({ name: route.name as string, query: { session: sessionId } })
+}
+
+function sessionStatusLabel(status: string) {
+  const labels: Record<string, string> = { ACTIVE: '进行中', COMPLETED: '已完成', CANCELED: '已取消' }
+  return labels[status] ?? '未知状态'
+}
+
+function sessionSubtitle(session: ModeSession) {
+  const date = new Date(session.createdAt)
+  const dateLabel = session.createdAt && !Number.isNaN(date.getTime())
+    ? date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : ''
+  return [props.mode === 'COURSE' ? session.course || '课程学习' : dateLabel, sessionStatusLabel(session.status)].filter(Boolean).join(' · ')
 }
 
 // 新会话只清除页面选择，首条消息才创建数据库记录；旧对话仍在会话列表。
@@ -401,12 +419,12 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  [() => route.query.session, activeSessions],
+  [() => route.query.session, modeSessions],
   ([querySession]) => {
     const requestedId = typeof querySession === 'string' ? querySession : ''
-    const nextId = activeSessions.value.some((item) => item.id === requestedId)
+    const nextId = modeSessions.value.some((item) => item.id === requestedId)
       ? requestedId
-      : props.standalone ? '' : activeSessions.value.find(item => item.status === 'ACTIVE')?.id ?? activeSessions.value[0]?.id ?? ''
+      : props.standalone ? '' : modeSessions.value.find(item => item.status === 'ACTIVE')?.id ?? modeSessions.value[0]?.id ?? ''
     if (nextId !== selectedSessionId.value) {
       runRefreshVersion++
       loadingRun.value = false
@@ -452,31 +470,34 @@ onMounted(async () => {
 
     <p v-if="loadError" class="agent-load-error" role="alert">{{ loadError }} <button class="button button-secondary" type="button" @click="retryLoad">重试</button></p>
     <div v-if="loadingSessions" class="agent-loading">正在读取会话…</div>
-    <div v-else-if="activeSessions.length || standalone" class="agent-chat-layout" :class="{ 'is-standalone': standalone }">
-      <aside v-if="!standalone" class="agent-session-panel" aria-label="课程学习会话">
+    <div v-else-if="modeSessions.length || standalone" class="agent-chat-layout">
+      <aside class="agent-session-panel" :aria-label="historyTitle">
         <header>
-          <span class="section-kicker">课程学习会话</span>
-          <strong>{{ activeSessions.length }}</strong>
+          <span class="section-kicker">{{ historyTitle }}</span>
+          <strong>{{ modeSessions.length }}</strong>
         </header>
         <div class="agent-session-select-wrap">
-          <label for="agent-session-select">当前学习会话</label>
-          <select id="agent-session-select" :value="selectedSessionId" :disabled="sending" @change="selectSession(($event.target as HTMLSelectElement).value)">
-            <option v-for="session in activeSessions" :key="session.id" :value="session.id">{{ session.title }}</option>
+          <label for="agent-session-select">{{ historyTitle }}</label>
+          <select id="agent-session-select" :value="selectedSessionId" :disabled="sending || approvalBusy" @change="selectSession(($event.target as HTMLSelectElement).value)">
+            <option v-if="standalone" value="">新对话 · 从这里开始</option>
+            <option v-for="session in modeSessions" :key="session.id" :value="session.id">{{ session.title }} · {{ sessionStatusLabel(session.status) }}</option>
           </select>
         </div>
-        <nav class="agent-session-list">
+        <nav class="agent-session-list" :aria-label="historyTitle">
+          <p v-if="!modeSessions.length" class="agent-history-empty">还没有{{ mode === 'FOCUS' ? '专注' : '问答' }}会话记录。<span>开始对话后，可在这里再次打开。</span></p>
           <button
-            v-for="session in activeSessions"
+            v-for="session in modeSessions"
             :key="session.id"
             type="button"
             :class="{ active: session.id === selectedSessionId }"
-            :disabled="sending"
+            :aria-current="session.id === selectedSessionId ? 'true' : undefined"
+            :disabled="sending || approvalBusy"
             @click="selectSession(session.id)"
           >
             <span><MessageSquareText :size="17" /></span>
             <span>
               <strong>{{ session.title }}</strong>
-              <small>{{ session.course || '课程学习' }}{{ session.status === 'COMPLETED' ? ' · 已完成' : '' }}</small>
+              <small>{{ sessionSubtitle(session) }}</small>
             </span>
             <ArrowRight :size="15" />
           </button>
@@ -488,7 +509,7 @@ onMounted(async () => {
           <span class="agent-avatar"><Bot :size="21" /></span>
           <div>
             <strong>{{ selectedSession?.title ?? (mode === 'FOCUS' ? '一个目标，分步完成' : '从一个问题开始') }}</strong>
-            <small><i /> {{ selectedSession?.status === 'COMPLETED' ? '已完成 · 查看历史' : runStatusText }}</small>
+            <small><i /> {{ selectedSession?.status === 'COMPLETED' ? '已完成 · 查看历史' : standalone && !selectedSessionId ? '新对话 · 输入后开始' : runStatusText }}</small>
           </div>
           <div v-if="standalone" class="agent-mode-switch" role="group" aria-label="学习页面"><button v-for="target in (['CHAT', 'FOCUS'] as const)" :key="target" type="button" :aria-pressed="mode === target" :class="{ active: mode === target }" :disabled="sending || approvalBusy" @click="switchPage(target)">{{ target === 'CHAT' ? '问答' : '专注' }}</button></div>
         </header>
@@ -507,9 +528,9 @@ onMounted(async () => {
           <div v-if="historyLoading" class="agent-loading">正在读取历史消息…</div>
           <div v-else-if="!messages.length" class="agent-welcome">
             <span><Sparkles :size="23" /></span>
-            <h3>{{ mode === 'FOCUS' ? '把一个目标拆成可完成的步骤' : mode === 'COURSE' ? '围绕课程继续学习' : '从一个具体问题开始' }}</h3>
-            <p>{{ mode === 'FOCUS' ? '说清你想完成什么，助教会先规划，再逐步推进。' : mode === 'COURSE' ? `当前课程：${selectedSession?.course ?? ''}` : '可以直接提问，无需选择课程。' }}</p>
-            <div class="agent-prompt-suggestions">
+            <h3>{{ selectedSession?.status === 'COMPLETED' ? '这份会话还没有可展示的消息' : mode === 'FOCUS' ? '把一个目标拆成可完成的步骤' : mode === 'COURSE' ? '围绕课程继续学习' : '从一个具体问题开始' }}</h3>
+            <p>{{ selectedSession?.status === 'COMPLETED' ? '会话已完成，仅供查看历史记录。' : mode === 'FOCUS' ? '说清你想完成什么，助教会先规划，再逐步推进。' : mode === 'COURSE' ? `当前课程：${selectedSession?.course ?? ''}` : '可以直接提问，无需选择课程。' }}</p>
+            <div v-if="selectedSession?.status !== 'COMPLETED'" class="agent-prompt-suggestions">
               <button type="button" @click="draft = '请帮我梳理这个学习目标涉及的核心知识点。'; composer?.focus()">梳理核心知识点</button>
               <button type="button" @click="draft = '请用一个简单的例子帮我理解当前学习内容。'; composer?.focus()">用例子解释</button>
               <button type="button" @click="draft = '请出一道题检查我是否真正理解了。'; composer?.focus()">检查我的理解</button>
@@ -580,7 +601,6 @@ onMounted(async () => {
 
 <style scoped>
 .agent-chat-layout { height: min(850px, calc(100dvh - 245px)); min-height: 570px; grid-template-columns: 230px minmax(0, 1fr); }
-.agent-chat-layout.is-standalone { grid-template-columns: minmax(0, 1fr); max-width: 1080px; margin-inline: auto; }
 .agent-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .agent-load-error { color: #b34747; font-size: 13px; }
 .agent-loading { padding: 24px; color: #71857c; font-size: 13px; }
@@ -600,6 +620,8 @@ onMounted(async () => {
 .agent-message.is-assistant .chat-content { padding: 14px 16px; background: #fff; border: 1px solid #e1e8e4; border-radius: 6px; }
 .agent-session-list strong { font-size: 12px; }
 .agent-session-list small { font-size: 11px; }
+.agent-history-empty { margin: 0; padding: 20px 12px; color: #657b71; font-size: 12px; line-height: 1.8; }
+.agent-history-empty span { display: block; margin-top: 6px; color: #87928e; font-size: 11px; }
 .agent-composer { flex: 0 0 auto; }
 .agent-approval-panel { max-width: 760px; margin: 18px auto; padding: 18px; border: 1px solid #e3d6ad; background: #fffefa; border-radius: 6px; }
 .agent-approval-panel > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #8c6b24; font-size: 13px; }

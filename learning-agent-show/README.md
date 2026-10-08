@@ -1,6 +1,6 @@
 # Learning Agent Show
 
-基于 `learning-agent` Spring Boot 项目现有接口实现的 Vue 3 前端。该目录完全独立，不需要修改后端源码。
+基于 `learning-agent` Spring Boot 接口实现的 Vue 3 前端，前后端在独立目录中开发。学习会话列表、历史消息与固定模式需要配套新版后端。
 
 ## 技术栈
 
@@ -20,6 +20,8 @@ npm run dev
 ```
 
 浏览器访问 `http://localhost:5173`。开发环境会把 `/learning-agent` 和后端当前使用的章节根路径请求代理到 8080 端口。
+
+已有数据库需要先执行 [学习会话增量迁移](../learning-agent/src/main/resources/db/migration/20261008_standalone_learning_sessions.sql)，再启动新版后端；新建数据库使用更新后的 `learningAgentSql.sql`。本次代码验证尚未对正在运行的数据库执行迁移或重启后端，真实数据库联调仍待完成。
 
 ## 生产构建
 
@@ -57,13 +59,17 @@ npm run preview
 | 上传知识库文档 | POST | `/document/upload/{kbId}` |
 | 下载知识库文档 | GET | `/document/download/{documentId}` |
 | 创建学习会话 | POST | `/learning-agent/learning/session` |
+| 创建独立问答或专注会话 | POST | `/learning-agent/learning/standalone-session` |
+| 当前用户全部未删除会话 | GET | `/learning-agent/learning/sessions` |
+| 学习会话历史消息 | GET | `/learning-agent/learning/session/{learningSessionId}/messages`，可选 `mode` 参数 |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
+| 开始课程学习 | POST | `/learning-agent/learning/course-progress/{sessionId}` |
 | AI 助教对话 | POST | `/agent/chat` |
 
 ## 当前后端接口限制
 
-1. 没有课程列表、课程详情和学习会话列表接口，因此页面不能读取数据库中的完整课程列表，也不能通过课程 ID 查询课程状态。
-2. AI 对话接口可以保存和使用会话上下文，但没有提供读取历史消息的接口；前端只能恢复当前浏览器已展示的对话内容。
+1. 没有课程列表和课程详情接口，因此页面不能读取数据库中的完整课程列表，也不能通过课程 ID 查询课程状态；课程选择仍依赖当前浏览器记录的课程。
+2. 学习会话列表与历史消息已通过后端接口读取，包含当前用户的课程、问答、专注会话及已完成会话；已删除会话不返回，浏览器操作记录不再作为会话列表或聊天历史来源。
 3. 登录响应和 JWT 均包含角色信息；前端据此分流界面，后端仍通过管理员切面执行最终权限校验。
 4. 页面上的“操作记录”只保存在当前浏览器的 `localStorage`，用于反馈已成功完成的接口调用，不等同于数据库数据。
 5. 章节查询会返回排序后的章节，但不返回课程状态。前端只有在本地课程记录可以确认状态为 `PRIVATE` 时才启用拖拽。
@@ -120,7 +126,10 @@ npm run preview
 
 ## AI 助教
 
-- 用户从进行中的学习会话进入 AI 助教，不需要查看或手动填写学习会话 ID。
-- 对话请求携带当前学习会话 ID，后端据此校验归属和状态，并维护同一会话的多轮上下文。
-- 前端按用户和学习会话在当前浏览器保存最近 60 条已展示消息；这些记录只用于恢复页面显示，真实对话记忆仍以后端为准。
+- 课程学习位于 `/ai-assistant`，独立问答位于 `/ai-assistant/chat`，专注学习位于 `/ai-assistant/focus`。每个页面只列出服务器保存的同模式会话。
+- 课程学习保留选择课程和填写目标的入口；独立问答与专注无需课程，在首条消息发送时创建数据库会话。
+- 会话模式在创建时保存，后端按照该模式执行。聊天请求仍可携带 `mode` 以兼容已有客户端，但该字段不能改变会话的模式。
+- 问答与专注切换后显示空白对话；再次发送会创建新会话编号。历史记录保留在数据库，用户可从对应页面的历史列表或“全部会话”明确选择并恢复。
+- 刷新页面或更换浏览器后，仍可读取服务器保存的同一会话历史。独立会话按模式读取；课程页保留旧课程会话的完整展示历史，新消息按 `COURSE` 执行，模型上下文仍按模式隔离。
+- 课程发送前显式初始化课程进度；重复初始化不会重置已有进度。等待审批的任务从后端读取并恢复，旧课程任务沿用审批时保存的模式完成。
 - 已完成的学习会话不能继续对话，管理员端不展示 AI 助教入口。

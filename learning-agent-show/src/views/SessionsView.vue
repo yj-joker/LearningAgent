@@ -120,18 +120,19 @@ onBeforeUnmount(() => {
 })
 
 function sessionMode(item: LearningSessionVO) {
-  return item.mode ?? (item.courseId ? 'COURSE' : 'CHAT')
+  // 只使用服务器保存的模式；缺失模式不能猜成问答或课程学习。
+  return item.mode === 'COURSE' || item.mode === 'CHAT' || item.mode === 'FOCUS' ? item.mode : 'UNKNOWN'
 }
 
 function modeLabel(item: LearningSessionVO) {
   const mode = sessionMode(item)
-  return mode === 'COURSE' ? '课程学习' : mode === 'FOCUS' ? '专注学习' : '自由问答'
+  return mode === 'COURSE' ? '课程学习' : mode === 'FOCUS' ? '专注学习' : mode === 'CHAT' ? '自由问答' : '类型待更新'
 }
 
 function conversationRoute(item: LearningSessionVO) {
   const mode = sessionMode(item)
   return {
-    name: mode === 'COURSE' ? 'agent-chat' : mode === 'FOCUS' ? 'agent-focus' : 'agent-chat-standalone',
+    name: mode === 'COURSE' ? 'agent-chat' : mode === 'FOCUS' ? 'agent-focus' : mode === 'CHAT' ? 'agent-chat-standalone' : 'sessions',
     query: { session: String(item.id) },
   }
 }
@@ -232,7 +233,7 @@ async function confirmDeleteSession() {
       <div v-if="focusedSessionId" class="session-focus-banner" role="status"><span>正在查看通知对应的会话</span><button type="button" class="button button-secondary" @click="clearSessionFocus">清除定位，查看全部会话</button></div>
       <div class="session-tools">
         <div class="session-filter" role="group" aria-label="会话状态"><button v-for="filter in [{ value: 'ALL', label: '全部状态' }, { value: 'ACTIVE', label: '进行中' }, { value: 'COMPLETED', label: '已完成' }]" :key="filter.value" type="button" :disabled="Boolean(focusedSessionId)" :class="{ active: statusFilter === filter.value }" :aria-pressed="statusFilter === filter.value" @click="statusFilter = filter.value">{{ filter.label }}</button></div>
-        <label class="session-mode-filter"><span class="visually-hidden">会话类型</span><select v-model="modeFilter" :disabled="Boolean(focusedSessionId)" aria-label="会话类型"><option value="ALL">全部类型</option><option value="COURSE">课程学习</option><option value="CHAT">自由问答</option><option value="FOCUS">专注学习</option></select></label>
+        <label class="session-mode-filter"><span class="visually-hidden">会话类型</span><select v-model="modeFilter" :disabled="Boolean(focusedSessionId)" aria-label="会话类型"><option value="ALL">全部类型</option><option value="COURSE">课程学习</option><option value="CHAT">自由问答</option><option value="FOCUS">专注学习</option><option value="UNKNOWN">类型待更新</option></select></label>
         <label class="session-search"><Search :size="16" /><input v-model="search" :disabled="Boolean(focusedSessionId)" placeholder="搜索会话或课程" aria-label="搜索会话或课程" /></label>
       </div>
       <div v-if="loadError" class="session-load-error" role="alert"><EmptyState title="会话暂时无法加载" :description="loadError" /><button class="button button-secondary" :disabled="loading" @click="loadSessions"><RefreshCw :size="16" /> 重新加载</button></div>
@@ -243,10 +244,11 @@ async function confirmDeleteSession() {
           <div class="session-record-copy">
             <div><h4>{{ item.sessionTitle || '未命名会话' }}</h4><StatusBadge :status="item.sessionStatus" /><span class="session-mode-tag">{{ modeLabel(item) }}</span></div>
             <p v-if="sessionMode(item) === 'COURSE'">课程：{{ item.courseName || '未命名课程' }}</p>
-            <p v-else>{{ sessionMode(item) === 'FOCUS' ? '围绕一个目标逐步学习' : '随时提问，讨论你感兴趣的问题' }}</p>
+            <p v-else>{{ sessionMode(item) === 'FOCUS' ? '围绕一个目标逐步学习' : sessionMode(item) === 'CHAT' ? '随时提问，讨论你感兴趣的问题' : '会话类型尚未更新，暂时无法打开对话。' }}</p>
             <time>{{ formatTime(item) }}</time>
             <div class="session-record-actions">
-              <RouterLink class="button button-primary session-chat-button" :to="conversationRoute(item)"><Bot :size="14" /> {{ item.sessionStatus === 'ACTIVE' ? '继续对话' : '查看对话' }}</RouterLink>
+              <RouterLink v-if="sessionMode(item) !== 'UNKNOWN'" class="button button-primary session-chat-button" :to="conversationRoute(item)"><Bot :size="14" /> {{ item.sessionStatus === 'ACTIVE' ? '继续对话' : '查看对话' }}</RouterLink>
+              <button v-else class="button button-secondary session-chat-button" disabled><Bot :size="14" /> 类型待更新</button>
               <button v-if="item.sessionStatus === 'ACTIVE'" class="button button-secondary session-complete-button" :disabled="mutationPending" @click="finishSession(item)"><CheckCircle2 :size="14" />{{ completingId === String(item.id) ? '完成中…' : '完成会话' }}</button>
               <button class="icon-button session-delete-button" title="删除会话" aria-label="删除会话" :disabled="mutationPending" @click="deleteTarget = { id: String(item.id), title: item.sessionTitle || '未命名会话' }"><Trash2 :size="15" /></button>
             </div>

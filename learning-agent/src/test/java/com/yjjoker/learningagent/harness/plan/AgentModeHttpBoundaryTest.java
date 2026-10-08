@@ -20,12 +20,12 @@ class AgentModeHttpBoundaryTest {
     private final AgentHarnessService harness = mock(AgentHarnessService.class);
     private final MockMvc mvc = MockMvcBuilders.standaloneSetup(new AgentController(harness)).build();
 
-    // 未传模式的旧客户端仍使用 CHAT。
+    // 未传模式保留为空，服务必须读取会话模式，不能被 DTO 默认值误导。
     @Test
-    void defaultsMissingModeToChat() throws Exception {
+    void keepsMissingModeNullForSessionLookup() throws Exception {
         mvc.perform(post("/agent/chat").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"sessionId\":9,\"userMessage\":\"学习\"}")).andExpect(status().isOk());
-        verify(harness).run(9L, "学习", AgentMode.CHAT);
+        verify(harness).run(9L, "学习", null);
     }
 
     // 显式模式从请求进入服务层，不丢弃新字段。

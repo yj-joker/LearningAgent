@@ -2,8 +2,8 @@ package com.yjjoker.learningagent.harness.plan;
 
 import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
-import com.yjjoker.learningagent.exception.LearningSessionStatusException;
 import com.yjjoker.learningagent.harness.approval.AgentApprovalService;
+import com.yjjoker.learningagent.harness.course.CourseLearningRunContext;
 import com.yjjoker.learningagent.harness.context.*;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
 import com.yjjoker.learningagent.harness.error.HarnessException;
@@ -21,11 +21,14 @@ import com.yjjoker.learningagent.harness.service.AgentHarnessServiceImpl;
 import com.yjjoker.learningagent.harness.tool.*;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
+import com.yjjoker.learningagent.service.CourseLearningProgressService;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import com.yjjoker.learningagent.vo.CourseLearningProgressVO;
 import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.*;
 
@@ -55,6 +58,7 @@ class AgentHarnessModeTest {
         LearningSession session = new LearningSession();
         session.setId(9L);
         session.setUserId(7L);
+        session.setMode(AgentMode.FOCUS);
         session.setStatus(LearningSessionStatusEnum.ACTIVE);
         when(sessions.findSessionById(9L)).thenReturn(Optional.of(session));
         when(history.loadHistory(9L, AgentMode.CHAT)).thenReturn(List.of());
@@ -87,6 +91,7 @@ class AgentHarnessModeTest {
     // 旧方法和显式 CHAT 都不查询计划、不增加规划调用。
     @Test
     void keepsChatCompatible() {
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.CHAT);
         harness.run(9L, "解释事务");
         harness.run(9L, "解释事务", AgentMode.CHAT);
         verifyNoInteractions(plans);
@@ -94,16 +99,38 @@ class AgentHarnessModeTest {
         verify(client, times(2)).generate(any());
     }
 
-    // 独立 FOCUS 会话不能被作为 CHAT 使用，拒绝发生在调用模型或加载历史之前。
+    // 独立 FOCUS 会话忽略客户端的 CHAT，仍读取专注历史和已有计划。
     @Test
-    void rejectsDifferentModeForStandaloneSession() {
+    void ignoresDifferentRequestModeForStandaloneSession() {
         LearningSession session = sessions.findSessionById(9L).orElseThrow();
         session.setMode(AgentMode.FOCUS);
-        assertThrows(LearningSessionStatusException.class,
-                () -> harness.run(9L, "解释事务", AgentMode.CHAT));
-        verify(client, never()).generate(any());
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        assertEquals(AgentRunStatus.COMPLETED, harness.run(9L, "解释事务", AgentMode.CHAT).getStatus());
+        verify(client).generate(any());
         verify(client, never()).generateWithoutTools(any());
-        verify(history, never()).loadHistory(anyLong(), any(AgentMode.class));
+        verify(history).loadHistory(9L, AgentMode.FOCUS);
+        verify(history, never()).loadHistory(9L, AgentMode.CHAT);
+    }
+
+    // 旧无参入口不能把已保存的 FOCUS 当作 CHAT，历史和结果仍绑定专注模式。
+    @Test
+    void loadsStoredFocusModeWhenRequestModeIsMissing() {
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        assertEquals(AgentRunStatus.COMPLETED, harness.run(9L, "解释事务").getStatus());
+        verify(history).loadHistory(9L, AgentMode.FOCUS);
+        verify(history).appendMessages(eq(9L), eq(AgentMode.FOCUS), any());
+        verify(history, never()).loadHistory(9L, AgentMode.CHAT);
+    }
+
+    // 已保存 CHAT 的会话即使收到 FOCUS 字段也不额外规划或读取专注目标。
+    @Test
+    void keepsStoredChatModeWhenClientRequestsFocus() {
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.CHAT);
+        assertEquals(AgentRunStatus.COMPLETED, harness.run(9L, "解释事务", AgentMode.FOCUS).getStatus());
+        verifyNoInteractions(plans);
+        verify(client, never()).generateWithoutTools(any());
+        verify(history).loadHistory(9L, AgentMode.CHAT);
+        verify(history, never()).loadHistory(9L, AgentMode.FOCUS);
     }
 
     // 没有课程的独立 FOCUS 会话仍能加载自己的计划并生成回答，不调用课程流程。
@@ -119,14 +146,36 @@ class AgentHarnessModeTest {
         verify(history).loadHistory(9L, AgentMode.FOCUS);
     }
 
-    // 课程入口的旧 CHAT 调用继续兼容，不因为新增会话模式字段被错误拒绝。
+    // 保存 COURSE 的会话无论客户端传 CHAT 还是省略 mode，都加载课程进度与课程历史。
     @Test
-    void keepsLegacyCourseChatCompatible() {
+    void keepsStoredCourseModeForWrongAndMissingRequestMode() {
         LearningSession session = sessions.findSessionById(9L).orElseThrow();
         session.setCourseId(3L);
         session.setMode(AgentMode.COURSE);
+        CourseLearningProgressService courseProgress = mock(CourseLearningProgressService.class);
+        CourseLearningProgressVO snapshot = new CourseLearningProgressVO();
+        snapshot.setSessionId(9L);
+        snapshot.setCourseId(3L);
+        snapshot.setPoints(List.of());
+        when(courseProgress.load(9L)).thenReturn(snapshot);
+        when(history.loadHistory(9L, AgentMode.COURSE)).thenReturn(List.of());
+        ReflectionTestUtils.setField(harness, "courseLearningProgressService", courseProgress);
+        ReflectionTestUtils.setField(harness, "courseLearningRunContext", new CourseLearningRunContext());
         harness.run(9L, "解释事务", AgentMode.CHAT);
-        verify(client).generate(any());
+        harness.run(9L, "继续学习");
+        verify(client, times(2)).generate(any());
+        verify(courseProgress, times(2)).load(9L);
+        verify(history, times(2)).loadHistory(9L, AgentMode.COURSE);
+        verify(history, never()).loadHistory(9L, AgentMode.CHAT);
+        verifyNoInteractions(plans);
+    }
+
+    // 没有模式元数据的旧无课程记录按 CHAT 兼容，客户端字段不能借此切成 FOCUS。
+    @Test
+    void resolvesLegacySessionWithoutModeFromCourseBinding() {
+        sessions.findSessionById(9L).orElseThrow().setMode(null);
+        harness.run(9L, "解释事务", AgentMode.FOCUS);
+        verify(history).loadHistory(9L, AgentMode.CHAT);
         verifyNoInteractions(plans);
     }
 

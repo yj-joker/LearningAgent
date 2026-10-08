@@ -189,6 +189,48 @@ class AgentApprovalFlowTest {
         verify(history).appendMessages(eq(9L), eq(AgentMode.CHAT), any());
     }
 
+    // 迁移前已暂停的课程 CHAT 任务保留原检查点，不能改成 COURSE 后执行原工具。
+    @Test
+    void resumesLegacyCourseChatCheckpointWithoutChangingMode() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.CHAT);
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        when(llm.generate(any())).thenReturn(response("legacy-course-chat", "change_setting"), new TextLlmResponse("已完成"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.CHAT);
+        approveAll(paused);
+        // 模拟已有课程会话迁移后标记 COURSE，暂停任务仍属于先前的 CHAT。
+        session.setCourseId(3L);
+        session.setMode(AgentMode.COURSE);
+        assertEquals(AgentMode.CHAT, approvals.restore(runs.get(paused.getRunId())).getMode());
+        assertEquals(AgentRunStatus.COMPLETED, harness.resume(paused.getRunId()).getStatus());
+        assertEquals(1, calls.get());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.CHAT), any());
+        verify(history, never()).appendMessages(eq(9L), eq(AgentMode.COURSE), any());
+        verifyNoInteractions(plans);
+    }
+
+    // 课程旧 FOCUS 检查点也保留专注目标快照，迁移后不替换成课程教学快照。
+    @Test
+    void resumesLegacyCourseFocusCheckpointWithoutChangingMode() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.FOCUS);
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        when(plans.load(9L)).thenReturn(focusSnapshot());
+        when(llm.generate(any())).thenReturn(response("legacy-course-focus", "change_setting"), new TextLlmResponse("设置已调整"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.FOCUS);
+        approveAll(paused);
+        session.setCourseId(3L);
+        session.setMode(AgentMode.COURSE);
+        assertEquals(AgentMode.FOCUS, approvals.restore(runs.get(paused.getRunId())).getMode());
+        assertEquals(AgentRunStatus.COMPLETED, harness.resume(paused.getRunId()).getStatus());
+        assertEquals(1, calls.get());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.FOCUS), any());
+        verify(history, never()).appendMessages(eq(9L), eq(AgentMode.COURSE), any());
+        verify(plans, atLeastOnce()).requireUnchanged(any());
+    }
+
     // 检查点模式与独立会话不一致时，恢复也在执行已批准工具前停止。
     @Test
     void rejectsStandaloneModeMismatchBeforeResumingTool() {
@@ -528,6 +570,8 @@ class AgentApprovalFlowTest {
     // 专注暂停后模式随检查点恢复，先执行原工具，再继续模型；不会重复规划。
     @Test
     void focusResumePreservesModePlanAndToolProtocol() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         AtomicInteger calls = new AtomicInteger();
         build(List.of(tool("change_setting", true, calls)), List.of());
         SessionGoalSnapshot snapshot = focusSnapshot();
@@ -560,6 +604,8 @@ class AgentApprovalFlowTest {
     // 审查要求补行动后暂停审批，已用次数经 JSON 保存和恢复，不能再次纠正。
     @Test
     void reviewBudgetSurvivesApprovalAndStillReviewsApprovedOutcome() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         AnswerReviewService reviewer = mock(AnswerReviewService.class);
         AtomicInteger executions = new AtomicInteger();
         build(List.of(tool("change_setting", true, executions)), List.of(new FinalAnswerConsistencyHook(reviewer)));
@@ -602,6 +648,8 @@ class AgentApprovalFlowTest {
     // 参数失败先修正，审批恢复保留失败分类和预算；批准后只执行一次并正常回答。
     @Test
     void correctedValidationSurvivesApprovalAndPassesFinalReview() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         AtomicInteger executions = new AtomicInteger();
         AnswerReviewService reviewer = mock(AnswerReviewService.class);
         Tool validatingTool = new Tool() {
@@ -660,6 +708,8 @@ class AgentApprovalFlowTest {
     // 拒绝后模型的虚假成功声明只允许改口，审查错误建议补执行也不能产生第二次申请。
     @Test
     void rejectedApprovalCanOnlyRewriteAndNeverReapply() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         AnswerReviewService reviewer = mock(AnswerReviewService.class);
         AtomicInteger executions = new AtomicInteger();
         build(List.of(tool("change_setting", true, executions)), List.of(new FinalAnswerConsistencyHook(reviewer)));
@@ -697,6 +747,8 @@ class AgentApprovalFlowTest {
     // 恢复时计划丢失必须停止，不能先执行审批工具再发现前置条件不满足。
     @Test
     void missingFocusPlanStopsApprovedTool() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         AtomicInteger calls = new AtomicInteger();
         build(List.of(tool("change_setting", true, calls)), List.of());
         when(planner.createPlan(anyString(), anyString())).thenReturn(new CreateTaskPlanRequest());
@@ -714,6 +766,8 @@ class AgentApprovalFlowTest {
     // 真实工具、Hook、序列化检查点和 Harness 一起运行，验证切换后立即替换系统目标。
     @Test
     void createsApprovedGoalThenReturnsToOriginalWithoutReplanning() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         SessionGoalSnapshot original = focusSnapshot();
         SessionGoalSnapshot other = focusSnapshot();
         other.getCurrentPlan().setGoal("学习数据库锁");
@@ -774,6 +828,8 @@ class AgentApprovalFlowTest {
     // 用户拒绝目标变更后，旧目标仍在上下文中，不执行写入。
     @Test
     void rejectedGoalChangeKeepsCurrentPlan() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         when(plans.load(9L)).thenReturn(focusSnapshot());
         var service = new SessionGoalToolService(goalContext, plans);
         build(List.of(new com.yjjoker.learningagent.harness.tool.impl.CreateSessionGoalTool(service)), List.of());
@@ -792,6 +848,8 @@ class AgentApprovalFlowTest {
     // 改变方向的调用与其他工具混用时，整批不执行，也不创建审批申请。
     @Test
     void rejectsMixedBatchBeforeApprovalOrBusinessSideEffects() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         when(plans.load(9L)).thenReturn(focusSnapshot());
         AtomicInteger businessCalls = new AtomicInteger();
         var service = new SessionGoalToolService(goalContext, plans);
@@ -813,6 +871,8 @@ class AgentApprovalFlowTest {
     // 进度工具复用真实审批暂停和检查点；批准、恢复成功后才刷新模型状态。
     @Test
     void confirmsProgressThenRefreshesPromptAndDoesNotRepeatExecution() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         SessionGoalSnapshot before = progressSnapshot();
         SessionGoalSnapshot after = new JsonMapper().readValue(new JsonMapper().writeValueAsString(before), SessionGoalSnapshot.class);
         after.getCurrentPlan().setVersion(2);
@@ -852,6 +912,8 @@ class AgentApprovalFlowTest {
     // 用户拒绝后保留原进度，并把拒绝结果交回模型，而不是伪造成功。
     @Test
     void rejectedProgressKeepsOriginalStepState() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         when(plans.load(9L)).thenReturn(progressSnapshot());
         var tool = new com.yjjoker.learningagent.harness.tool.impl.UpdateTaskProgressTool(new TaskProgressToolService(goalContext, plans));
         build(List.of(tool), List.of());
@@ -871,6 +933,8 @@ class AgentApprovalFlowTest {
     // 审批等待期间版本已变化，恢复必须在执行进度工具之前停止。
     @Test
     void changedPlanStopsApprovedProgressBeforeExecution() {
+        // 会话创建时固定为专注，测试请求不负责切换后端模式。
+        sessions.findSessionById(9L).orElseThrow().setMode(AgentMode.FOCUS);
         when(plans.load(9L)).thenReturn(progressSnapshot());
         var tool = new com.yjjoker.learningagent.harness.tool.impl.UpdateTaskProgressTool(new TaskProgressToolService(goalContext, plans));
         build(List.of(tool), List.of());

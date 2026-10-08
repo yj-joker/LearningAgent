@@ -28,7 +28,7 @@ public class AgentController {
     @Operation(summary = "智能体聊天")
     // 正常回答和等待审批共用一个接口，前端通过 status 区分，不需要再问一次模型。
     public Result<AgentRunResult> chat(@Valid @RequestBody AgentChatRequest request) {
-        // 模式从本次请求传入；审批恢复不走这里，不会被新的选择覆盖。
+        // 请求模式仅兼容旧客户端，服务从会话读取实际模式；审批恢复沿用原检查点。
         return Result.success(agentHarnessService.run(
                 request.getSessionId(), request.getUserMessage(), request.getMode()));
     }
