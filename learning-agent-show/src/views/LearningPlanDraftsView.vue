@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { ArrowDown, ArrowUp, Check, Plus, RefreshCw, Save, Search, Trash2 } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
 import { activateLearningPlanDraft, createLearningPlanDraft, listLearningPlanDrafts, updateLearningPlanDraft } from '@/api/learningPlans'
@@ -28,6 +29,8 @@ const search = ref('')
 const statusFilter = ref('ALL')
 const savedSnapshot = ref('')
 const pendingSelection = ref<LearningPlanDraft | 'NEW' | null>(null)
+const leaveOpen = ref(false)
+let resolvePendingLeave: ((leave: boolean) => void) | null = null
 const activationOpen = ref(false)
 const form = reactive({
   title: '',
@@ -50,17 +53,47 @@ const dirty = computed(() => savedSnapshot.value !== JSON.stringify(form))
 
 // 切换前保留编辑机会，防止选中另一份计划时静默丢失输入。
 function requestSelection(target: LearningPlanDraft | 'NEW') {
-  if (saving.value) return
+  if (saving.value || leaveOpen.value || pendingSelection.value) return
+  if (target !== 'NEW' && target.draftRef === selectedRef.value) return
   if (dirty.value) pendingSelection.value = target
   else if (target === 'NEW') resetForm()
   else openDraft(target)
 }
 function discardAndSwitch() {
+  if (saving.value || leaveOpen.value) return
   const target = pendingSelection.value
   pendingSelection.value = null
   if (target === 'NEW') resetForm()
   else if (target) openDraft(target)
 }
+
+// 路由确认与切换草案分开保存，取消只终止这次导航，不会误切另一份草案。
+function finishLeave(leave: boolean) {
+  const resolve = resolvePendingLeave
+  resolvePendingLeave = null
+  leaveOpen.value = false
+  resolve?.(leave)
+}
+
+// 浏览器刷新或关闭只能使用浏览器原生提醒，保存请求未结束时也保留离开提醒。
+function warnBeforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value && !saving.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(() => {
+  if (saving.value) {
+    showToast('info', '正在保存学习计划', '保存完成后再离开页面')
+    return false
+  }
+  // 已有确认待处理时拒绝新的导航，避免多个导航共用一个弹窗决定。
+  if (pendingSelection.value || resolvePendingLeave) return false
+  if (!dirty.value) return true
+  activationOpen.value = false
+  leaveOpen.value = true
+  return new Promise<boolean>((resolve) => { resolvePendingLeave = resolve })
+})
 function moveStep(index: number, direction: number) {
   const next = index + direction
   if (next < 0 || next >= form.steps.length) return
@@ -144,7 +177,7 @@ function validate() {
 
 // 手动创建或更新草案；版本冲突时提示重新读取，避免覆盖 Agent 的修改。
 async function saveDraft() {
-  if (!validate() || saving.value || isArchived.value) return
+  if (saving.value || isArchived.value || leaveOpen.value || pendingSelection.value || !validate()) return
   saving.value = true
   const steps = form.steps.map((step) => ({
     ...(step.stepRef ? { stepRef: step.stepRef } : {}),
@@ -205,9 +238,19 @@ async function activateDraft() {
   }
 }
 
+// 在首次渲染前建立空表单基线，避免初始加载期间误报未保存修改。
+resetForm()
+
 onMounted(() => {
-  resetForm()
+  window.addEventListener('beforeunload', warnBeforeUnload)
   void loadDrafts()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', warnBeforeUnload)
+  // 意外卸载也终止尚未决定的导航，不把悬空确认留到下一个页面。
+  resolvePendingLeave?.(false)
+  resolvePendingLeave = null
 })
 </script>
 
@@ -255,7 +298,7 @@ onMounted(() => {
           <div><span class="section-kicker">学习计划编辑器</span><h3>{{ isActive ? '正式学习计划' : (isEditing ? '编辑当前草案' : '创建新草案') }}</h3></div>
           <span class="draft-formal-badge" :class="{ 'is-active': isActive }">{{ isArchived ? '已归档' : isActive ? '已正式生效' : '未正式生效' }}</span>
         </div>
-        <form class="form-layout" @submit.prevent="saveDraft">
+        <form id="learning-plan-draft-form" class="form-layout" @submit.prevent="saveDraft">
           <fieldset :disabled="saving || isArchived" class="draft-fields">
           <h4 class="editor-section-title">目标与安排</h4>
           <div class="form-section">
@@ -282,20 +325,27 @@ onMounted(() => {
           </div>
           </fieldset>
           <p v-if="formError" class="field-error">{{ formError }}</p>
-          <footer class="form-actions">
-            <span class="learning-plan-version">{{ dirty ? '有未保存的修改' : isEditing ? `已保存 · v${form.expectedVersion}` : '新草案' }}</span>
-            <button v-if="selectedRef && !isActive && !isArchived" class="button button-secondary" type="button" :disabled="saving || dirty" :title="dirty ? '请先保存修改' : '确认正式生效'" @click="activationOpen = true"><Check :size="16" /> 确认生效</button>
-            <button v-if="!isArchived" class="button button-primary" type="submit" :disabled="saving || !dirty"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存计划' : '保存草案') }}</button>
-          </footer>
         </form>
       </section>
     </div>
+    <Teleport to="body">
+      <footer class="draft-save-bar" aria-label="学习计划保存操作">
+        <span class="learning-plan-version" role="status">{{ isArchived ? '已归档 · 只读' : dirty ? '有未保存的修改' : isEditing ? `已保存 · v${form.expectedVersion}` : '新草案' }}</span>
+        <button v-if="selectedRef && !isActive && !isArchived" class="button button-secondary" type="button" :disabled="saving || dirty || leaveOpen || Boolean(pendingSelection)" :title="dirty ? '请先保存修改' : '确认正式生效'" @click="activationOpen = true"><Check :size="16" /> 确认生效</button>
+        <button v-if="!isArchived" class="button button-primary" type="submit" form="learning-plan-draft-form" :disabled="saving || !dirty || leaveOpen || Boolean(pendingSelection)"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存计划' : '保存草案') }}</button>
+      </footer>
+    </Teleport>
     <ModalDialog :open="Boolean(pendingSelection)" title="有未保存的修改" description="离开当前计划会丢失本次编辑。" @close="pendingSelection = null"><footer class="form-actions"><button class="button button-secondary" @click="pendingSelection = null">继续编辑</button><button class="button button-primary" @click="discardAndSwitch">放弃修改并切换</button></footer></ModalDialog>
+    <ModalDialog :open="leaveOpen" title="有未保存的修改" description="离开页面会丢失本次编辑，请确认是否放弃。" @close="finishLeave(false)"><footer class="form-actions"><button class="button button-secondary" type="button" @click="finishLeave(false)">继续编辑</button><button class="button button-primary" type="button" @click="finishLeave(true)">放弃修改并离开</button></footer></ModalDialog>
     <ModalDialog :open="activationOpen" title="确认学习计划生效" :description="selectedDraft?.title ?? ''" @close="activationOpen = false"><p>确认后，这份计划可以关联到学习会话。</p><footer class="form-actions"><button class="button button-secondary" @click="activationOpen = false">取消</button><button class="button button-primary" @click="activateDraft">确认生效</button></footer></ModalDialog>
   </div>
 </template>
 
 <style scoped>
+.learning-plan-drafts-view { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+.draft-save-bar { position: fixed; z-index: 35; left: 244px; right: 0; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 14px 32px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid #cee0df; background: rgba(255, 255, 255, .98); box-shadow: 0 -8px 24px rgba(27, 88, 105, .08); }
+.draft-save-bar:global(body:has(.app-shell.sidebar-collapsed) .draft-save-bar) { left: 84px; }
+.draft-save-bar .button { flex-shrink: 0; }
 .learning-plan-draft-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
 .learning-plan-drafts-view :deep(.panel) { border-radius: 0; border: 0; box-shadow: none; background: transparent; }
 .learning-plan-draft-list { padding-right: 20px; border-right: 1px solid #cee0df !important; }
@@ -331,5 +381,6 @@ onMounted(() => {
 .form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid #e2e8e6; }
 .learning-plan-version { margin-right: auto; }
 @media (max-width: 1000px) { .learning-plan-draft-layout { grid-template-columns: 1fr; } .learning-plan-draft-list { border: 0 !important; padding: 0; } .learning-plan-items { max-height: 290px; } }
-@media (max-width: 620px) { .learning-plan-grid-fields { grid-template-columns: 1fr; } .learning-plan-editor { padding: 16px; } .form-actions .learning-plan-version { width: 100%; } }
+@media (max-width: 1024px) { .draft-save-bar, .draft-save-bar:global(body:has(.app-shell.sidebar-collapsed) .draft-save-bar) { left: 0; padding-inline: 20px; } }
+@media (max-width: 620px) { .learning-plan-grid-fields { grid-template-columns: 1fr; } .learning-plan-editor { padding: 16px; } .form-actions .learning-plan-version, .draft-save-bar .learning-plan-version { width: 100%; } .draft-save-bar { gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); } .learning-plan-drafts-view { padding-bottom: calc(136px + env(safe-area-inset-bottom, 0px)); } }
 </style>

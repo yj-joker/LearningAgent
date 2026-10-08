@@ -64,6 +64,8 @@ npm run preview
 | 学习会话历史消息 | GET | `/learning-agent/learning/session/{learningSessionId}/messages`，可选 `mode` 参数 |
 | 完成学习会话 | PUT | `/learning-agent/learning/session/completed/{learningSessionId}` |
 | 开始课程学习 | POST | `/learning-agent/learning/course-progress/{sessionId}` |
+| 读取已保存的课程进度 | GET | `/learning-agent/learning/course-progress/{sessionId}` |
+| 读取已保存的专注目标与步骤 | GET | `/agent/sessions/{sessionId}/progress` |
 | AI 助教对话 | POST | `/agent/chat` |
 
 ## 当前后端接口限制
@@ -133,3 +135,10 @@ npm run preview
 - 刷新页面或更换浏览器后，仍可读取服务器保存的同一会话历史。独立会话按模式读取；课程页保留旧课程会话的完整展示历史，新消息按 `COURSE` 执行，模型上下文仍按模式隔离。
 - 课程发送前显式初始化课程进度；重复初始化不会重置已有进度。等待审批的任务从后端读取并恢复，旧课程任务沿用审批时保存的模式完成。
 - 已完成的学习会话不能继续对话，管理员端不展示 AI 助教入口。
+- 专注和课程页面展示可折叠的已保存进度；完成数量只根据后端状态计算，取消步骤或移除知识点不进入总数。查看历史不会初始化进度，已完成会话也能查看快照；课程内容变化时显示提示。
+- 专注进度查询只允许访问当前用户的专注会话，尚未创建目标时返回空结果。新增查询入口需要更新并重启后端。
+
+## 计划编辑与审批展示
+
+- 学习计划的保存操作固定在页面底部，长计划滚动时仍可使用。切换草案或离开页面前，未保存修改会提示确认；刷新或关闭标签页由浏览器提醒。
+- 审批优先展示拟修改内容、完成条件及依据，引用与版本收进“技术详情”，完整参数仍可查看。“记忆变更”数量只统计待确认的记忆申请，会话工具审批从会话页面查看。

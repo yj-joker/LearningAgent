@@ -1,9 +1,13 @@
 package com.yjjoker.learningagent.harness.plan.service;
 
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
+import com.yjjoker.learningagent.exception.LearningSessionStatusException;
+import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.entity.LearningPlanDraft;
 import com.yjjoker.learningagent.harness.plan.dto.CreateTaskPlanRequest;
+import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.plan.dto.UpdateTaskPlanRequest;
+import com.yjjoker.learningagent.harness.model.AgentMode;
 import com.yjjoker.learningagent.harness.plan.model.AgentTaskPlan;
 import com.yjjoker.learningagent.harness.plan.model.SessionFocusState;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
@@ -59,6 +63,34 @@ public class SessionGoalService {
         Long userId = requireAccess(sessionId);
         SessionFocusState state = repository.findFocus(userId, sessionId).orElse(null);
         return state == null || state.getActivePlanId() == null ? null : snapshot(state);
+    }
+
+    // 页面恢复已保存的专注进度；已完成会话仍可查看，查询不会初始化目标或修改步骤。
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public SessionGoalProgress getProgress(Long sessionId) {
+        Long userId = BaseContext.getCurrentId();
+        if (userId == null || sessionId == null || sessionId <= 0) {
+            throw new LearningSessionStatusException("缺少有效的学习会话");
+        }
+        // 先验证归属和固定模式，再读取目标表，不能借进度查询访问其他用户或其他模式。
+        LearningSession session = sessions.findSessionById(sessionId)
+                .orElseThrow(() -> new LearningSessionStatusException("学习会话不可访问"));
+        if (!Objects.equals(userId, session.getUserId())
+                || (session.getStatus() != LearningSessionStatusEnum.ACTIVE
+                && session.getStatus() != LearningSessionStatusEnum.COMPLETED)
+                || session.getMode() != AgentMode.FOCUS) {
+            throw new LearningSessionStatusException("专注学习会话不可访问");
+        }
+        SessionFocusState state = repository.findFocus(userId, sessionId).orElse(null);
+        if (state == null || state.getActivePlanId() == null) {
+            // 尚未发起专注学习时返回空，不调用规划器，也不伪造零进度目标。
+            log.info("专注进度尚未初始化，userId={}，sessionId={}", userId, sessionId);
+            return null;
+        }
+        SessionGoalProgress progress = SessionGoalProgress.from(snapshot(state));
+        log.info("专注进度读取完成，userId={}，sessionId={}，goalNumber={}，version={}，stepCount={}",
+                userId, sessionId, progress.getGoalNumber(), progress.getPlanVersion(), progress.getSteps().size());
+        return progress;
     }
 
     // 首次专注请求沿用已有行为：规划器生成短计划后，原子保存首个目标和当前指针。

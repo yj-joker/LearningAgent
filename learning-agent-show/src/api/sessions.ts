@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { AgentMode, ApiId, LearningSessionVO, SessionCreatePayload, SessionDisplayMessage } from '@/types/api'
+import type { AgentMode, ApiId, CourseLearningProgress, LearningSessionVO, SessionCreatePayload, SessionDisplayMessage, SessionGoalProgress } from '@/types/api'
 
 const SESSION_BASE = '/learning-agent/learning'
 
@@ -20,9 +20,19 @@ export function getSessionMessages(sessionId: ApiId, mode?: AgentMode) {
   return request<SessionDisplayMessage[]>(`${SESSION_BASE}/session/${encodeURIComponent(String(sessionId))}/messages${query}`)
 }
 
-// 用户进入课程页后初始化课程快照；重复开始不会重置已有进度。
+// 用户发送课程学习问题时显式初始化快照；重复开始不会重置已有进度。
 export function startCourseLearning(sessionId: ApiId) {
-  return request<unknown>(`${SESSION_BASE}/course-progress/${encodeURIComponent(String(sessionId))}`, { method: 'POST' })
+  return request<CourseLearningProgress>(`${SESSION_BASE}/course-progress/${encodeURIComponent(String(sessionId))}`, { method: 'POST' })
+}
+
+// 查看已有进度只发 GET，尚未初始化时也不会创建课程快照。
+export function getCourseLearningProgress(sessionId: ApiId) {
+  return request<CourseLearningProgress>(`${SESSION_BASE}/course-progress/${encodeURIComponent(String(sessionId))}`)
+}
+
+// 专注历史同样只读取数据库目标，未制定目标时返回 null。
+export function getFocusProgress(sessionId: ApiId) {
+  return request<SessionGoalProgress | null>(`/agent/sessions/${encodeURIComponent(String(sessionId))}/progress`)
 }
 
 export function createSession(payload: SessionCreatePayload) {

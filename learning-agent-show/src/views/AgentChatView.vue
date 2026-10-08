@@ -4,11 +4,12 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Bot, BookOpenText, Check, MessageSquareText, RefreshCw, Send, ShieldCheck, Sparkles, UserRound, X } from 'lucide-vue-next'
 import ProposalDetails from '@/components/ProposalDetails.vue'
 import ChatContent from '@/components/ChatContent.vue'
+import LearningProgressCard from '@/components/LearningProgressCard.vue'
 import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeAgentRun } from '@/api/agent'
 import { getSessionLearningPlanBinding, listLearningPlanDrafts, updateSessionLearningPlanBinding } from '@/api/learningPlans'
-import type { AgentMode, AgentRunResult, LearningPlanDraft, LearningSessionVO, ToolApprovalRequest } from '@/types/api'
+import type { AgentMode, AgentRunResult, CourseLearningProgress, LearningPlanDraft, LearningSessionVO, SessionGoalProgress, ToolApprovalRequest } from '@/types/api'
 import { ApiError } from '@/api/client'
-import { createStandaloneSession, getSessionMessages, listSessions, startCourseLearning } from '@/api/sessions'
+import { createStandaloneSession, getCourseLearningProgress, getFocusProgress, getSessionMessages, listSessions, startCourseLearning } from '@/api/sessions'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import { useApprovalNotifications } from '@/composables/useApprovalNotifications'
@@ -54,6 +55,11 @@ const sessions = ref<LearningSessionVO[]>([])
 const loadingSessions = ref(false)
 const historyLoading = ref(false)
 const loadError = ref('')
+const focusProgress = ref<SessionGoalProgress | null>(null)
+const courseProgress = ref<CourseLearningProgress | null>(null)
+const progressLoading = ref(false)
+const progressError = ref('')
+let progressVersion = 0
 let pageVersion = 0
 let historyVersion = 0
 let disposed = false
@@ -69,6 +75,38 @@ const approvalBusy = ref(false)
 const loadingRun = ref(false)
 const messageList = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
+const chatView = ref<HTMLElement | null>(null)
+const conversationPanel = ref<HTMLElement | null>(null)
+const conversationHeight = ref(0)
+let layoutObserver: ResizeObserver | undefined
+let layoutFrame = 0
+
+// 按聊天框实际起点计算剩余屏幕高度，避免顶部通知和课程工具栏把输入框挤出首屏。
+function measureConversationHeight() {
+  layoutFrame = 0
+  const panel = conversationPanel.value
+  if (disposed || !panel) return
+  const viewport = window.visualViewport
+  const top = panel.getBoundingClientRect().top + window.scrollY
+  const viewportBottom = (viewport?.height ?? window.innerHeight) + (viewport?.offsetTop ?? 0)
+  const fixedContentHeight = Array.from(panel.children).reduce((height, child) => {
+    return child.classList.contains('agent-message-list') ? height : height + child.getBoundingClientRect().height
+  }, 0)
+  // 很小的屏幕仍保留可读消息空间，此时允许页面滚动。
+  const minimum = Math.max(300, fixedContentHeight + 100)
+  const nextHeight = Math.round(Math.max(minimum, Math.min(850, viewportBottom - top - 12)))
+  if (Math.abs(nextHeight - conversationHeight.value) > 1) conversationHeight.value = nextHeight
+}
+
+function scheduleConversationMeasure() {
+  if (disposed || layoutFrame) return
+  layoutFrame = window.requestAnimationFrame(measureConversationHeight)
+}
+
+watch(conversationPanel, panel => {
+  if (panel) layoutObserver?.observe(panel)
+  scheduleConversationMeasure()
+}, { flush: 'post' })
 
 // 每个页面只接收已保存的同模式会话，课程关联不能代替会话模式。
 const modeSessions = computed<ModeSession[]>(() => {
@@ -97,6 +135,9 @@ async function loadConversation(sessionId: string) {
       content: item.content ?? '', createdAt: item.createdAt,
     }))
     loadError.value = ''
+    // 辅助进度单独读取，失败或慢响应不能挡住已加载的历史和待审批任务。
+    if (props.mode !== 'CHAT') void loadSavedProgress(sessionId)
+    if (disposed || version !== historyVersion || sessionId !== selectedSessionId.value || token !== currentUser.value?.token) return
     if (selectedSession.value?.status === 'ACTIVE') await restorePendingRun(sessionId)
     await scrollToLatest()
   } catch (error) {
@@ -104,6 +145,76 @@ async function loadConversation(sessionId: string) {
   } finally {
     if (version === historyVersion) historyLoading.value = false
   }
+}
+
+// 查看历史仅加载已保存快照；GET 失败也不能通过初始化接口补造进度。
+async function loadSavedProgress(sessionId: string) {
+  if (props.mode === 'CHAT' || !sessionId) return
+  const version = ++progressVersion
+  const token = currentUser.value?.token
+  progressLoading.value = true
+  progressError.value = ''
+  try {
+    if (props.mode === 'COURSE') {
+      const result = await getCourseLearningProgress(sessionId)
+      if (disposed || version !== progressVersion || sessionId !== selectedSessionId.value || token !== currentUser.value?.token) return
+      if (String(result.sessionId) !== sessionId) {
+        progressError.value = '返回的课程进度与当前会话不一致，请重试'
+        return
+      }
+      courseProgress.value = result
+    } else {
+      const result = await getFocusProgress(sessionId)
+      if (disposed || version !== progressVersion || sessionId !== selectedSessionId.value || token !== currentUser.value?.token) return
+      focusProgress.value = result
+    }
+  } catch (error) {
+    if (disposed || version !== progressVersion || sessionId !== selectedSessionId.value || token !== currentUser.value?.token) return
+    // 课程查询的明确未初始化响应是正常空态，其他权限或服务错误仍保留失败提示。
+    if (props.mode === 'COURSE' && error instanceof ApiError
+        && error.message === '尚未开始课程学习，请先初始化课程进度') {
+      courseProgress.value = null
+      return
+    }
+    progressError.value = error instanceof ApiError ? error.message : '已保存的学习进度暂时无法读取'
+  } finally {
+    if (version === progressVersion && token === currentUser.value?.token) progressLoading.value = false
+  }
+}
+
+// 新会话、账号切换和模式切换都清除旧进度，旧请求不能再次填回卡片。
+function clearProgress() {
+  progressVersion++
+  focusProgress.value = null
+  courseProgress.value = null
+  progressLoading.value = false
+  progressError.value = ''
+}
+
+function updateProgress(result: AgentRunResult) {
+  // 等待、执行中和失败结果可能携带暂停时的旧快照，只让最终结果临时更新卡片。
+  if (result.status !== 'COMPLETED') return
+  if (props.mode === 'FOCUS' && result.progress) {
+    progressVersion++
+    progressLoading.value = false
+    focusProgress.value = result.progress
+    progressError.value = ''
+  } else if (props.mode === 'COURSE' && result.courseProgress
+      && String(result.courseProgress.sessionId) === selectedSessionId.value) {
+    progressVersion++
+    progressLoading.value = false
+    courseProgress.value = result.courseProgress
+    progressError.value = ''
+  }
+}
+
+// 通知查询当前数据库进度，任务返回的更新会使更早的进度查询失效。
+async function refreshSessionState(sessionId: string) {
+  if (!sessionId) return
+  await Promise.all([
+    loadSavedProgress(sessionId),
+    selectedSession.value?.status === 'ACTIVE' ? restorePendingRun(sessionId) : Promise.resolve(),
+  ])
 }
 
 // 服务器列表也是会话归属依据；读取失败时不使用旧账号或本地记录替代。
@@ -174,6 +285,7 @@ async function newConversation() {
   selectedSessionId.value = ''
   messages.value = []
   activeRun.value = null
+  clearProgress()
   draft.value = ''
   historyLoading.value = false
   loadingRun.value = false
@@ -240,6 +352,8 @@ async function sendMessage() {
   sending.value = true
   // 正在发送时作废旧查询，不能让旧审批状态覆盖这次响应。
   runRefreshVersion++
+  progressVersion++
+  progressLoading.value = false
   let pendingMessage: ChatMessage | undefined
   try {
     // 问答/专注的空页面首次发送时创建新会话，而不是绑定一门虚构的课程。
@@ -253,7 +367,14 @@ async function sendMessage() {
     }
     if (!session) return
     // 课程快照初始化幂等；课程页的发送是用户明确开始本次课程学习的动作。
-    if (props.mode === 'COURSE') await startCourseLearning(session.id)
+    if (props.mode === 'COURSE') {
+      const initialized = await startCourseLearning(session.id)
+      if (disposed || ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
+      progressVersion++
+      progressLoading.value = false
+      if (String(initialized.sessionId) === session.id) courseProgress.value = initialized
+      progressError.value = ''
+    }
     if (disposed || ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     pendingMessage = createMessage('user', userMessage)
     messages.value.push(pendingMessage)
@@ -282,6 +403,9 @@ async function sendMessage() {
 
 // 同一任务的最终回答使用稳定编号，重复恢复响应不会重复显示答案。
 function acceptRunResult(result: AgentRunResult) {
+  updateProgress(result)
+  // 审批快照用于恢复原任务；页面进度另外查询当前数据库，避免覆盖后续已保存的结果。
+  if (selectedSessionId.value) void loadSavedProgress(selectedSessionId.value)
   activeRun.value = result.status === 'COMPLETED' || result.status === 'FAILED' ? null : result
   const id = result.status === 'COMPLETED' ? 'run-' + result.runId + '-completed' : 'run-' + result.runId + '-' + result.batchNumber
   const message = { ...createMessage('assistant', result.answer), id }
@@ -318,10 +442,16 @@ async function decideTool(request: ToolApprovalRequest, approved: boolean) {
   const sessionId = selectedSessionId.value
   approvalBusy.value = true
   runRefreshVersion++
+  progressVersion++
+  progressLoading.value = false
   loadingRun.value = false
   try {
     const result = await decideAgentTool(request.runId, request.batchNumber, request.toolCallId, approved)
-    if (ownerToken === currentUser.value?.token && sessionId === selectedSessionId.value) activeRun.value = result
+    if (ownerToken === currentUser.value?.token && sessionId === selectedSessionId.value) {
+      updateProgress(result)
+      activeRun.value = result
+      void loadSavedProgress(sessionId)
+    }
   } catch (error) {
     if (ownerToken !== currentUser.value?.token) return
     showToast('error', '审批未完成', error instanceof Error ? error.message : '请刷新后重试')
@@ -338,6 +468,8 @@ async function continueRun() {
   const sessionId = selectedSessionId.value
   approvalBusy.value = true
   runRefreshVersion++
+  progressVersion++
+  progressLoading.value = false
   loadingRun.value = false
   try {
     const result = await resumeAgentRun(runId)
@@ -364,6 +496,8 @@ async function refreshRun() {
   const sessionId = selectedSessionId.value
   approvalBusy.value = true
   runRefreshVersion++
+  progressVersion++
+  progressLoading.value = false
   loadingRun.value = false
   try {
     const result = await getAgentRun(activeRun.value.runId)
@@ -386,6 +520,7 @@ watch(() => currentUser.value?.token, () => {
   runRefreshVersion++
   messages.value = []
   activeRun.value = null
+  clearProgress()
   sending.value = false
   approvalBusy.value = false
   loadingRun.value = false
@@ -404,8 +539,8 @@ watch(() => currentUser.value?.token, () => {
 // 通知只安排查询，不自动提交决定或恢复任务。
 watch([approvalRevision, sending, approvalBusy], () => {
   clearTimeout(runRefreshTimer)
-  if (currentUser.value?.token && !sending.value && !approvalBusy.value && !historyLoading.value && selectedSession.value?.status === 'ACTIVE') {
-    runRefreshTimer = setTimeout(() => void restorePendingRun(selectedSessionId.value), 120)
+  if (currentUser.value?.token && !sending.value && !approvalBusy.value && !historyLoading.value && selectedSessionId.value) {
+    runRefreshTimer = setTimeout(() => void refreshSessionState(selectedSessionId.value), 120)
   }
 })
 
@@ -415,7 +550,13 @@ onBeforeUnmount(() => {
   pageVersion++
   historyVersion++
   runRefreshVersion++
+  progressVersion++
   clearTimeout(runRefreshTimer)
+  layoutObserver?.disconnect()
+  window.cancelAnimationFrame(layoutFrame)
+  window.removeEventListener('resize', scheduleConversationMeasure)
+  window.visualViewport?.removeEventListener('resize', scheduleConversationMeasure)
+  window.visualViewport?.removeEventListener('scroll', scheduleConversationMeasure)
 })
 
 watch(
@@ -433,6 +574,7 @@ watch(
       historyLoading.value = false
       messages.value = []
       activeRun.value = null
+      clearProgress()
       draft.value = ''
       learningPlanDraftRef.value = ''
       bindingLoading.value = false
@@ -448,6 +590,14 @@ watch(
 )
 
 onMounted(async () => {
+  layoutObserver = new ResizeObserver(scheduleConversationMeasure)
+  if (chatView.value) layoutObserver.observe(chatView.value)
+  if (conversationPanel.value) layoutObserver.observe(conversationPanel.value)
+  if (chatView.value?.parentElement?.parentElement) layoutObserver.observe(chatView.value.parentElement.parentElement)
+  window.addEventListener('resize', scheduleConversationMeasure)
+  window.visualViewport?.addEventListener('resize', scheduleConversationMeasure)
+  window.visualViewport?.addEventListener('scroll', scheduleConversationMeasure)
+  scheduleConversationMeasure()
   composer.value?.focus()
   void loadSessionList()
   try {
@@ -459,7 +609,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="agent-chat-view">
+  <div ref="chatView" class="agent-chat-view" :style="conversationHeight ? { '--conversation-height': `${conversationHeight}px` } : undefined">
     <section class="agent-chat-heading">
       <div>
         <span class="section-kicker"><Sparkles :size="13" /> 智能学习</span>
@@ -504,7 +654,7 @@ onMounted(async () => {
         </nav>
       </aside>
 
-      <section class="agent-conversation-panel">
+      <section ref="conversationPanel" class="agent-conversation-panel">
         <header class="agent-conversation-header">
           <span class="agent-avatar"><Bot :size="21" /></span>
           <div>
@@ -524,6 +674,17 @@ onMounted(async () => {
           <RouterLink :to="{ name: 'learning-plans' }">管理计划 <ArrowRight :size="13" /></RouterLink>
         </div>
 
+        <LearningProgressCard
+          v-if="mode !== 'CHAT' && selectedSessionId"
+          :key="selectedSessionId"
+          :mode="mode"
+          :focus="focusProgress"
+          :course="courseProgress"
+          :loading="progressLoading || sending || approvalBusy"
+          :error="progressError"
+          :read-only="selectedSession?.status === 'COMPLETED'"
+          @retry="loadSavedProgress(selectedSessionId)"
+        />
         <div ref="messageList" class="agent-message-list" aria-live="polite">
           <div v-if="historyLoading" class="agent-loading">正在读取历史消息…</div>
           <div v-else-if="!messages.length" class="agent-welcome">
@@ -600,11 +761,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.agent-chat-layout { height: min(850px, calc(100dvh - 245px)); min-height: 570px; grid-template-columns: 230px minmax(0, 1fr); }
+.agent-chat-layout { height: var(--conversation-height, min(850px, calc(100dvh - 300px))); min-height: 0; grid-template-columns: 230px minmax(0, 1fr); }
 .agent-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .agent-load-error { color: #b34747; font-size: 13px; }
 .agent-loading { padding: 24px; color: #71857c; font-size: 13px; }
-.agent-conversation-panel { display: flex; flex-direction: column; }
+.agent-conversation-panel { display: flex; flex-direction: column; height: var(--conversation-height, min(850px, calc(100dvh - 300px))); min-height: 0; }
 .agent-conversation-header { flex: 0 0 auto; padding: 14px 18px; }
 .agent-conversation-header > div:first-of-type { flex: 1; }
 .agent-conversation-header strong { white-space: normal; overflow-wrap: anywhere; }
@@ -633,6 +794,29 @@ onMounted(async () => {
 .tool-raw { margin-top: 12px; color: #7a8885; font-size: 11px; } .tool-raw summary { cursor: pointer; }
 .tool-approval-actions, .agent-approval-panel footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 14px; }
 .agent-approval-panel pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 1000px) { .agent-chat-layout { grid-template-columns: 1fr; height: auto; min-height: 0; } .agent-session-list, .agent-session-panel > header { display: none; } .agent-session-select-wrap { display: grid; gap: 6px; padding: 12px; } .agent-session-select-wrap select { min-width: 0; width: 100%; padding: 10px; border: 1px solid #dce3df; border-radius: 6px; } .agent-conversation-panel { height: 720px; min-height: 560px; } }
-@media (max-width: 620px) { .agent-conversation-header { flex-wrap: wrap; padding: 12px; } .agent-mode-switch { margin-left: auto; } .agent-plan-toolbar { padding: 10px 12px; } .agent-plan-toolbar select { flex-basis: calc(100% - 80px); } .agent-approval-panel { padding: 12px; } }
+@media (max-width: 1000px) { .agent-chat-layout { grid-template-columns: 1fr; height: auto; min-height: 0; } .agent-session-list, .agent-session-panel > header { display: none; } .agent-session-select-wrap { display: grid; gap: 6px; padding: 12px; } .agent-session-select-wrap select { min-width: 0; width: 100%; padding: 10px; border: 1px solid #dce3df; border-radius: 6px; } .agent-conversation-panel { height: var(--conversation-height, calc(100dvh - 330px)); min-height: 0; } }
+@media (max-width: 620px) {
+  .agent-chat-heading { flex-direction: row; align-items: center; min-height: 0; padding-bottom: 0; gap: 8px; margin-bottom: 10px; }
+  .agent-chat-heading h2 { margin-block: 4px 0; font-size: 21px; }
+  .agent-chat-heading .section-kicker { font-size: 10px; }
+  .agent-heading-actions { gap: 5px; flex-wrap: nowrap; }
+  .agent-heading-actions .button { width: auto; min-height: 34px; padding: 7px 9px; gap: 5px; font-size: 11px; white-space: nowrap; }
+  .agent-heading-actions svg { width: 13px; height: 13px; }
+  .agent-chat-layout { gap: 8px; }
+  .agent-session-select-wrap { padding: 6px 10px; gap: 3px; }
+  .agent-session-select-wrap select { min-height: 34px; padding: 6px 8px; font-size: 12px; }
+  .agent-conversation-panel { height: var(--conversation-height, calc(100dvh - 330px)); min-height: 0; }
+  .agent-conversation-header { min-height: 58px; flex-wrap: wrap; padding: 9px 10px; gap: 7px; }
+  .agent-conversation-header .agent-avatar { width: 30px; height: 30px; }
+  .agent-conversation-header strong { font-size: 12px; }
+  .agent-conversation-header small { font-size: 10px; }
+  .agent-mode-switch { margin-left: auto; }
+  .agent-mode-switch button { padding: 6px 9px; font-size: 11px; }
+  .agent-plan-toolbar { gap: 7px; padding: 7px 10px; font-size: 11px; }
+  .agent-plan-toolbar select { flex-basis: calc(100% - 80px); padding: 5px; }
+  .agent-message-list { padding: 14px 12px; }
+  .agent-composer { gap: 8px; padding: 10px; }
+  .agent-composer textarea { min-height: 82px; font-size: 13px; }
+  .agent-approval-panel { padding: 12px; }
+}
 </style>

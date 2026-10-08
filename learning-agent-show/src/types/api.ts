@@ -235,8 +235,59 @@ export interface SessionDisplayMessage {
 export interface AgentChatPayload {
   sessionId: ApiId
   userMessage: string
-  // 省略时后端仍按问答处理，旧调用方无需同时升级。
+  // 省略时后端使用会话已保存的模式；传入模式必须与该会话一致。
   mode?: AgentMode
+}
+
+export type GoalStepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'BLOCKED' | 'CANCELED'
+export type CoursePointStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'CONFIRMED' | 'REVIEW_REQUIRED' | 'REMOVED'
+export type LearningEvidenceType = 'EXPLANATION' | 'EXERCISE' | 'BOTH'
+
+export interface SessionGoalStepProgress {
+  stepRef: string
+  position: number
+  description: string
+  completionCriteria: string | null
+  status: GoalStepStatus
+  resultSummary: string | null
+}
+
+// 目标和步骤状态来自后端快照，完成步骤不直接代表知识已经掌握。
+export interface SessionGoalProgress {
+  goalRef: string
+  goalNumber: number | null
+  goal: string
+  constraints: string | null
+  planVersion: number
+  steps: SessionGoalStepProgress[]
+}
+
+export interface CourseLearningPointProgress {
+  chapterId: ApiId
+  knowledgePointId: ApiId
+  chapterSortOrder: number
+  knowledgePointSortOrder: number
+  status: CoursePointStatus
+  evidenceType: LearningEvidenceType | null
+  evidenceSummary: string | null
+  assessmentReason: string | null
+  chapterTitle: string
+  knowledgePointName: string
+  knowledgePointDescription: string | null
+  version: number
+}
+
+export interface CourseLearningProgress {
+  sessionId: ApiId
+  courseId: ApiId
+  courseName: string
+  courseUpdatedAt: string | null
+  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'
+  currentChapterId: ApiId | null
+  currentKnowledgePointId: ApiId | null
+  completed: boolean
+  courseContentChanged: boolean
+  points: CourseLearningPointProgress[]
 }
 
 // 同一 runId 的申请来自一次模型响应；内容只是提案，尚未写入记忆。
@@ -259,6 +310,8 @@ export interface AgentRunResult {
   status: 'COMPLETED' | 'WAITING_APPROVAL' | 'APPROVAL_RESOLVED' | 'RUNNING' | 'FAILED'
   answer: string
   approvals: ToolApprovalRequest[]
+  progress?: SessionGoalProgress | null
+  courseProgress?: CourseLearningProgress | null
 }
 
 // 通用工具审批；工具原参数只展示，用户只能提交决定，不能修改它。
