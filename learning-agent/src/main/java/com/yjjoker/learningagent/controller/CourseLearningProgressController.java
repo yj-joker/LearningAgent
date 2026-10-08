@@ -1,6 +1,9 @@
 package com.yjjoker.learningagent.controller;
 
 import com.yjjoker.learningagent.entity.Result;
+import com.yjjoker.learningagent.dto.CourseContentSyncDTO;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.RequestBody;
 import com.yjjoker.learningagent.service.CourseLearningProgressService;
 import com.yjjoker.learningagent.vo.CourseLearningProgressVO;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,5 +38,13 @@ public class CourseLearningProgressController {
     @Operation(summary = "查看课程学习进度")
     public Result<CourseLearningProgressVO> get(@Positive @PathVariable Long sessionId) {
         return Result.success(service.load(sessionId));
+    }
+
+    // 用户确认变化后同步课程快照，读取接口和模型回答不会自行修改进度。
+    @PostMapping("/{sessionId}/sync")
+    @Operation(summary = "确认同步课程内容变化")
+    public Result<CourseLearningProgressVO> sync(@Positive @PathVariable Long sessionId,
+                                                @Valid @RequestBody CourseContentSyncDTO request) {
+        return Result.success(service.sync(sessionId, request.getExpectedSyncToken()));
     }
 }

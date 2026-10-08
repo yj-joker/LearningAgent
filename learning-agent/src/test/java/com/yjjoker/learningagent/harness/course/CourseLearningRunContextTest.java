@@ -42,4 +42,34 @@ class CourseLearningRunContextTest {
         context.clear();
         assertThrows(SecurityException.class, context::require);
     }
+
+    // 移除项不进入索引，其他知识点不发送正文，当前待复核项带新正文和旧证据。
+    @Test
+    void excludesRemovedAndOnlyIncludesCurrentBody() {
+        BaseContext.setCurrentId(7L);
+        CourseLearningPointProgressVO current = new CourseLearningPointProgressVO();
+        current.setKnowledgePointId(10L); current.setKnowledgePointName("GET");
+        current.setKnowledgePointDescription("新正文"); current.setEvidenceSummary("旧证据");
+        current.setStatus(CourseLearningPointStatus.REVIEW_REQUIRED); current.setVersion(4L);
+        CourseLearningPointProgressVO next = new CourseLearningPointProgressVO();
+        next.setKnowledgePointId(11L); next.setKnowledgePointName("POST");
+        next.setKnowledgePointDescription("不应提前发送的正文"); next.setStatus(CourseLearningPointStatus.NOT_STARTED);
+        CourseLearningPointProgressVO removed = new CourseLearningPointProgressVO();
+        removed.setKnowledgePointId(12L); removed.setStatus(CourseLearningPointStatus.REMOVED);
+        CourseLearningProgressVO progress = new CourseLearningProgressVO(3L, 8L, "HTTP", null,
+                CourseLearningStatus.IN_PROGRESS, 2L, 10L, false, false, List.of(current, next, removed));
+        CourseLearningRunContext context = new CourseLearningRunContext();
+        context.bind(progress);
+        try {
+            String view = context.modelView();
+            assertTrue(view.contains("新正文"));
+            assertTrue(view.contains("旧证据"));
+            assertTrue(view.contains("REVIEW_REQUIRED"));
+            assertTrue(view.contains("point-11"));
+            assertFalse(view.contains("不应提前发送的正文"));
+            assertFalse(view.contains("point-12"));
+        } finally {
+            context.clear();
+        }
+    }
 }

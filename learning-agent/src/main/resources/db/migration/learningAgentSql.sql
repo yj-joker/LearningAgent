@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS course_learning_point_progress (
     knowledge_point_id BIGINT UNSIGNED NOT NULL COMMENT '知识点 ID，逻辑外键',
     chapter_sort_order_snapshot INT UNSIGNED NOT NULL COMMENT '初始化时的章节顺序快照',
     knowledge_point_sort_order_snapshot INT UNSIGNED NOT NULL COMMENT '初始化时的知识点顺序快照',
-    status VARCHAR(20) NOT NULL DEFAULT 'NOT_STARTED' COMMENT '知识点状态',
+    status VARCHAR(20) NOT NULL DEFAULT 'NOT_STARTED' COMMENT '未开始、学习中、已确认、待复核或已移除',
     evidence_type VARCHAR(20) NULL COMMENT 'EXPLANATION、EXERCISE 或 BOTH',
     evidence_summary VARCHAR(2000) NULL COMMENT '已记录的学习证据摘要',
     assessment_reason VARCHAR(2000) NULL COMMENT '掌握判断理由，仅作为审批说明',
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS course_learning_point_progress (
     KEY idx_course_learning_progress_session_order (session_id, chapter_id, knowledge_point_id),
     KEY idx_course_learning_progress_course (course_id, knowledge_point_id),
     CONSTRAINT chk_course_learning_progress_status
-        CHECK (status IN ('NOT_STARTED', 'IN_PROGRESS', 'CONFIRMED')),
+        CHECK (status IN ('NOT_STARTED', 'IN_PROGRESS', 'CONFIRMED', 'REVIEW_REQUIRED', 'REMOVED')),
     CONSTRAINT chk_course_learning_progress_evidence
         CHECK (evidence_type IS NULL OR evidence_type IN ('EXPLANATION', 'EXERCISE', 'BOTH')),
     CONSTRAINT chk_course_learning_progress_version CHECK (version >= 1)

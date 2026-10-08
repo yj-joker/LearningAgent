@@ -22,6 +22,7 @@ import com.yjjoker.learningagent.harness.tool.ToolExecutionResult;
 import com.yjjoker.learningagent.projectenum.LearningEvidenceType;
 import com.yjjoker.learningagent.vo.CourseLearningPointProgressVO;
 import com.yjjoker.learningagent.vo.CourseLearningProgressVO;
+import com.yjjoker.learningagent.vo.CourseContentChangeVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -35,9 +36,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import tools.jackson.databind.json.JsonMapper;
 
-// 课程模式的进度基础；初始化保存内容和顺序快照，查询不改变学习状态。
+// 管理课程快照和学习进度；读取只检测变化，用户确认后才同步。
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -61,6 +66,7 @@ public class CourseLearningProgressService {
         if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
             throw new ClientDataErrorException("只有进行中的会话可以开始课程学习");
         }
+        lockSource(session.getCourseId());
         Courses course = requireCourse(session.getCourseId(), userId);
         List<CourseLearningPointProgress> stored = progressRepository.findBySessionId(sessionId);
         if (stored.isEmpty()) {
@@ -98,6 +104,75 @@ public class CourseLearningProgressService {
         return buildView(sessionId, course, stored);
     }
 
+    // 用户确认后在短事务内同步；新增、移除、重排和正文修改一起提交或一起回滚。
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    public CourseLearningProgressVO sync(Long sessionId, String expectedSyncToken) {
+        requireSessionId(sessionId);
+        Long userId = requireUser();
+        LearningSession session = sessionRepository.findSessionForUpdate(sessionId)
+                .orElseThrow(() -> new NotFountException("学习会话不存在"));
+        validateSession(session, userId);
+        if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
+            throw new ClientDataErrorException("会话已结束，不能同步课程内容");
+        }
+        // 先锁源内容和进度，再读取快照；数据库锁只覆盖校验和写入，不占用模型调用时间。
+        lockSource(session.getCourseId());
+        Courses course = requireCourse(session.getCourseId(), userId);
+        List<CourseLearningPointProgress> stored = progressRepository.findAllForUpdate(sessionId);
+        if (stored.isEmpty()) throw new ClientDataErrorException("请先初始化课程学习进度");
+        List<CourseLearningPointProgress> latest = buildStructure(sessionId, course, false);
+        if (!Objects.equals(expectedSyncToken, syncToken(stored, latest))) {
+            log.warn("课程同步被拒绝，sessionId={}，courseId={}，原因=内容或进度版本已变化", sessionId, course.getId());
+            throw new ClientDataErrorException("课程内容或进度已变化，请重新查看变化后确认同步");
+        }
+        List<CourseContentChangeVO> changes = detectChanges(stored, latest);
+        if (changes.isEmpty()) return buildView(sessionId, course, stored);
+        Map<Long, CourseLearningPointProgress> previous = new HashMap<>();
+        for (CourseLearningPointProgress point : stored) previous.put(point.getKnowledgePointId(), point);
+        for (CourseLearningPointProgress point : latest) {
+            CourseLearningPointProgress old = previous.remove(point.getKnowledgePointId());
+            if (old == null) {
+                // 新内容不能继承其他知识点或原课程的已完成状态。
+                progressRepository.insertIfAbsent(point);
+                continue;
+            }
+            point.setVersion(old.getVersion());
+            // 已学习的正文或归属变了，保留证据但要求复核；未开始的仍是未开始。
+            boolean requiresReview = old.getStatus() == CourseLearningPointStatus.REMOVED
+                    || (contentDiffers(old, point) && old.getStatus() != CourseLearningPointStatus.NOT_STARTED);
+            point.setStatus(requiresReview ? CourseLearningPointStatus.REVIEW_REQUIRED : old.getStatus());
+            requireSnapshotUpdated(point);
+        }
+        for (CourseLearningPointProgress removed : previous.values()) {
+            // 移除不是物理删除，旧正文和旧学习证据仍可供查看。
+            if (removed.getStatus() != CourseLearningPointStatus.REMOVED) {
+                removed.setStatus(CourseLearningPointStatus.REMOVED);
+                requireSnapshotUpdated(removed);
+            }
+        }
+        CourseLearningProgressVO updated = buildView(sessionId, course, progressRepository.findBySessionId(sessionId));
+        // 只记录类型和数量，不在日志中输出课程正文或用户学习答案。
+        Map<String, Long> counts = changes.stream().collect(java.util.stream.Collectors.groupingBy(
+                CourseContentChangeVO::getType, java.util.stream.Collectors.counting()));
+        log.info("课程内容同步完成，等待事务提交，sessionId={}，courseId={}，changes={}，currentPointId={}",
+                sessionId, course.getId(), counts, updated.getCurrentKnowledgePointId());
+        return updated;
+    }
+
+    // 按固定顺序锁源表，保护检查到写入之间的课程内容和新增范围。
+    private void lockSource(Long courseId) {
+        if (progressRepository.lockCourse(courseId) == null) throw new NotFountException("课程不存在");
+        progressRepository.lockChapters(courseId);
+        progressRepository.lockKnowledgePoints(courseId);
+    }
+
+    // 更新失败就回滚整个同步，不留下只更新了一部分的课程。
+    private void requireSnapshotUpdated(CourseLearningPointProgress point) {
+        if (progressRepository.updateSnapshot(point) != 1) {
+            throw new ClientDataErrorException("课程进度版本已变化，请重新读取");
+        }
+    }
+
     // 审批前只读最新数据；参数或版本失效时返回可修正结果，不创建无效审批。
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ToolExecutionResult validateProposal(Long sessionId, CourseLearningProgressVO snapshot,
@@ -115,7 +190,7 @@ public class CourseLearningProgressService {
     }
 
     // 用户批准后锁住会话和全部进度；版本校验、证据保存和状态更新在同一短事务内完成。
-    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public ToolExecutionResult applyApprovedProposal(Long sessionId, CourseLearningProgressVO snapshot,
                                                      CourseProgressProposal proposal, String userMessage) {
         requireSessionId(sessionId);
@@ -127,6 +202,7 @@ public class CourseLearningProgressService {
         if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
             throw new ClientDataErrorException("会话已结束，不能修改课程进度");
         }
+        lockSource(session.getCourseId());
         Courses course = requireCourse(session.getCourseId(), userId);
         List<CourseLearningPointProgress> stored = progressRepository.findAllForUpdate(sessionId);
         CourseLearningProgressVO latest = buildView(sessionId, course, stored);
@@ -159,6 +235,10 @@ public class CourseLearningProgressService {
                 || !Objects.equals(snapshot.getCourseId(), latest.getCourseId())) {
             throw new ClientDataErrorException("课程进度申请范围已失效");
         }
+        // 源课程发生变化时先由用户确认同步，不能凭旧正文申请新课程的掌握进度。
+        if (latest.isCourseContentChanged()) {
+            throw new ClientDataErrorException("课程内容已变化，请先查看变化并确认同步");
+        }
         // 引用必须逐字匹配索引，不解析或修正模型猜测的雪花编号。
         CourseLearningPointProgressVO point = latest.getPoints().stream()
                 .filter(item -> ("point-" + item.getKnowledgePointId()).equals(proposal.getPointRef()))
@@ -176,8 +256,9 @@ public class CourseLearningProgressService {
         }
         // 只允许前进，不允许旧申请覆盖已经确认的状态。
         if (proposal.getTargetStatus() == CourseLearningPointStatus.IN_PROGRESS) {
-            if (point.getStatus() != CourseLearningPointStatus.NOT_STARTED) {
-                throw new ClientDataErrorException("只有未开始的知识点才能申请开始学习");
+            if (point.getStatus() != CourseLearningPointStatus.NOT_STARTED
+                    && point.getStatus() != CourseLearningPointStatus.REVIEW_REQUIRED) {
+                throw new ClientDataErrorException("只有未开始或待复核的知识点才能申请开始学习");
             }
         } else if (proposal.getTargetStatus() == CourseLearningPointStatus.CONFIRMED) {
             if (point.getStatus() != CourseLearningPointStatus.IN_PROGRESS) {
@@ -200,7 +281,7 @@ public class CourseLearningProgressService {
         return point.getKnowledgePointId();
     }
 
-    // 从保存的顺序推导当前游标，删除和重排源知识点也不会让未确认记录悄悄消失。
+    // 从已确认同步的顺序推导当前知识点，已移除记录不参与推进。
     private CourseLearningProgressVO buildView(Long sessionId, Courses course,
                                                List<CourseLearningPointProgress> stored) {
         List<CourseLearningPointProgress> ordered = new ArrayList<>(stored);
@@ -215,23 +296,32 @@ public class CourseLearningProgressService {
                 throw new IllegalStateException("课程进度记录归属不一致");
             }
         }
-        CourseLearningPointProgress current = ordered.stream()
+        List<CourseLearningPointProgress> active = ordered.stream()
+                .filter(point -> point.getStatus() != CourseLearningPointStatus.REMOVED).toList();
+        CourseLearningPointProgress current = active.stream()
                 .filter(point -> point.getStatus() != CourseLearningPointStatus.CONFIRMED)
                 .findFirst().orElse(null);
-        boolean completed = !ordered.isEmpty() && current == null;
-        boolean changed = contentChanged(ordered, buildStructure(sessionId, course, false));
+        boolean completed = !active.isEmpty() && current == null;
+        List<CourseLearningPointProgress> latest = buildStructure(sessionId, course, false);
+        List<CourseContentChangeVO> changes = detectChanges(ordered, latest);
+        boolean changed = !changes.isEmpty();
+        // 旧快照完成不等于新版课程完成；等待同步时不宣称整门课程已完成。
+        completed = completed && !changed;
         CourseLearningStatus status = completed ? CourseLearningStatus.COMPLETED
-                : ordered.stream().allMatch(point -> point.getStatus() == CourseLearningPointStatus.NOT_STARTED)
+                : active.stream().allMatch(point -> point.getStatus() == CourseLearningPointStatus.NOT_STARTED)
                 ? CourseLearningStatus.NOT_STARTED : CourseLearningStatus.IN_PROGRESS;
         List<CourseLearningPointProgressVO> points = ordered.stream()
                 .map(CourseLearningPointProgressVO::new).toList();
         log.info("读取课程学习进度，sessionId={}，courseId={}，pointCount={}，currentPointId={}，completed={}，contentChanged={}",
                 sessionId, course.getId(), points.size(), current == null ? null : current.getKnowledgePointId(),
                 completed, changed);
-        // completed 表示初始化时选定的课程快照完成，不宣称后来新增的课程内容也已掌握。
-        return new CourseLearningProgressVO(sessionId, course.getId(), course.getCourseName(),
+        // 课程仍有未同步变化时不宣称完成，所有进度来自数据库而不是模型回答。
+        CourseLearningProgressVO view = new CourseLearningProgressVO(sessionId, course.getId(), course.getCourseName(),
                 course.getUpdatedAt(), status, current == null ? null : current.getChapterId(),
                 current == null ? null : current.getKnowledgePointId(), completed, changed, points);
+        view.setContentChanges(changes);
+        view.setSyncToken(syncToken(ordered, latest));
+        return view;
     }
 
     // 按章节和知识点展示顺序生成快照，完整保存描述，不截断课程正文。
@@ -275,26 +365,63 @@ public class CourseLearningProgressService {
     }
 
     // 比较真实内容和顺序；章节或知识点编辑不一定更新课程表时间，不能只看时间戳。
-    private boolean contentChanged(List<CourseLearningPointProgress> stored,
-                                   List<CourseLearningPointProgress> latest) {
-        if (stored.size() != latest.size()) return true;
+    private List<CourseContentChangeVO> detectChanges(List<CourseLearningPointProgress> stored,
+                                                    List<CourseLearningPointProgress> latest) {
+        List<CourseContentChangeVO> changes = new ArrayList<>();
         Map<Long, CourseLearningPointProgress> latestById = new HashMap<>();
         for (CourseLearningPointProgress point : latest) {
             latestById.put(point.getKnowledgePointId(), point);
         }
         for (CourseLearningPointProgress point : stored) {
-            CourseLearningPointProgress now = latestById.get(point.getKnowledgePointId());
-            if (now == null || !Objects.equals(point.getChapterId(), now.getChapterId())
-                    || !Objects.equals(point.getCourseUpdatedAtSnapshot(), now.getCourseUpdatedAtSnapshot())
-                    || !Objects.equals(point.getChapterSortOrderSnapshot(), now.getChapterSortOrderSnapshot())
-                    || !Objects.equals(point.getKnowledgePointSortOrderSnapshot(), now.getKnowledgePointSortOrderSnapshot())
-                    || !Objects.equals(point.getChapterTitleSnapshot(), now.getChapterTitleSnapshot())
-                    || !Objects.equals(point.getKnowledgePointNameSnapshot(), now.getKnowledgePointNameSnapshot())
-                    || !Objects.equals(point.getKnowledgePointDescriptionSnapshot(), now.getKnowledgePointDescriptionSnapshot())) {
-                return true;
+            CourseLearningPointProgress now = latestById.remove(point.getKnowledgePointId());
+            if (now == null) {
+                if (point.getStatus() != CourseLearningPointStatus.REMOVED) {
+                    changes.add(new CourseContentChangeVO("REMOVED", point.getKnowledgePointId(), point.getKnowledgePointNameSnapshot()));
+                }
+                continue;
+            }
+            if (point.getStatus() == CourseLearningPointStatus.REMOVED) {
+                changes.add(new CourseContentChangeVO("ADDED", now.getKnowledgePointId(), now.getKnowledgePointNameSnapshot()));
+                continue;
+            }
+            if (contentDiffers(point, now)) {
+                changes.add(new CourseContentChangeVO("CONTENT_CHANGED", now.getKnowledgePointId(), now.getKnowledgePointNameSnapshot()));
+            }
+            if (!Objects.equals(point.getChapterSortOrderSnapshot(), now.getChapterSortOrderSnapshot())
+                    || !Objects.equals(point.getKnowledgePointSortOrderSnapshot(), now.getKnowledgePointSortOrderSnapshot())) {
+                changes.add(new CourseContentChangeVO("REORDERED", now.getKnowledgePointId(), now.getKnowledgePointNameSnapshot()));
             }
         }
-        return false;
+        for (CourseLearningPointProgress added : latestById.values()) {
+            changes.add(new CourseContentChangeVO("ADDED", added.getKnowledgePointId(), added.getKnowledgePointNameSnapshot()));
+        }
+        changes.sort(Comparator.comparing(CourseContentChangeVO::getKnowledgePointId).thenComparing(CourseContentChangeVO::getType));
+        return List.copyOf(changes);
+    }
+
+    // 比较教学内容与归属，不把更新时间的变化误认为知识发生变化。
+    private boolean contentDiffers(CourseLearningPointProgress old, CourseLearningPointProgress latest) {
+        return !Objects.equals(old.getChapterId(), latest.getChapterId())
+                || !Objects.equals(old.getChapterTitleSnapshot(), latest.getChapterTitleSnapshot())
+                || !Objects.equals(old.getKnowledgePointNameSnapshot(), latest.getKnowledgePointNameSnapshot())
+                || !Objects.equals(old.getKnowledgePointDescriptionSnapshot(), latest.getKnowledgePointDescriptionSnapshot());
+    }
+
+    // 对确定顺序的两份快照计算摘要，绑定用户看到的源内容和所有进度版本。
+    private String syncToken(List<CourseLearningPointProgress> stored, List<CourseLearningPointProgress> latest) {
+        Comparator<CourseLearningPointProgress> order = Comparator.comparing(CourseLearningPointProgress::getKnowledgePointId);
+        // 源结构生成时间不是课程版本，不参与凭据；也不修改调用方的快照对象。
+        List<List<Object>> source = latest.stream().sorted(order).map(point -> java.util.Arrays.<Object>asList(
+                point.getCourseId(), point.getChapterId(), point.getKnowledgePointId(),
+                point.getChapterSortOrderSnapshot(), point.getKnowledgePointSortOrderSnapshot(),
+                point.getCourseUpdatedAtSnapshot(), point.getChapterTitleSnapshot(),
+                point.getKnowledgePointNameSnapshot(), point.getKnowledgePointDescriptionSnapshot())).toList();
+        String content = JSON.writeValueAsString(List.of(stored.stream().sorted(order).toList(), source));
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("无法计算课程同步凭据", exception);
+        }
     }
 
     // 验证会话归属和假删除状态，防止猜测会话编号读取其他用户的进度。

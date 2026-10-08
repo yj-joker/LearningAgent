@@ -13,6 +13,33 @@ import java.util.List;
 // 读写课程学习进度；课程内容读取和进度写入分开，便于后续审批事务复用。
 @Mapper
 public interface CourseLearningProgressRepository {
+    // 锁住源课程，再按主键锁章节和知识点，避免校验后源内容又被改写。
+    @Select("SELECT id FROM courses WHERE id = #{courseId} FOR UPDATE")
+    Long lockCourse(@Param("courseId") Long courseId);
+
+    // 可重复读事务中的范围锁也保护当前课程新增章节的间隙。
+    @Select("SELECT id FROM chapters WHERE course_id = #{courseId} ORDER BY id FOR UPDATE")
+    List<Long> lockChapters(@Param("courseId") Long courseId);
+
+    // 锁住整门课程知识点，包括新增项所在范围，不仅仅锁旧进度里的知识点。
+    @Select("SELECT id FROM knowledge_points WHERE course_id = #{courseId} ORDER BY id FOR UPDATE")
+    List<Long> lockKnowledgePoints(@Param("courseId") Long courseId);
+
+    // 同步课程快照时保留已有证据，版本一起增加，使等待中的旧审批失效。
+    @Update("""
+            UPDATE course_learning_point_progress
+            SET chapter_id = #{chapterId}, chapter_sort_order_snapshot = #{chapterSortOrderSnapshot},
+                knowledge_point_sort_order_snapshot = #{knowledgePointSortOrderSnapshot},
+                course_updated_at_snapshot = #{courseUpdatedAtSnapshot},
+                chapter_title_snapshot = #{chapterTitleSnapshot},
+                knowledge_point_name_snapshot = #{knowledgePointNameSnapshot},
+                knowledge_point_description_snapshot = #{knowledgePointDescriptionSnapshot},
+                status = #{status}, version = version + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE session_id = #{sessionId} AND knowledge_point_id = #{knowledgePointId}
+                AND version = #{version}
+            """)
+    int updateSnapshot(CourseLearningPointProgress progress);
+
     // 读取一个会话的全部知识点进度，并按初始化时的课程顺序返回。
     @Select("""
             SELECT session_id AS sessionId, course_id AS courseId, chapter_id AS chapterId,

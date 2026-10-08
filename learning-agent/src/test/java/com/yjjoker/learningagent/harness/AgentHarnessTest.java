@@ -766,6 +766,12 @@ class AgentHarnessTest {
         public int updateSession(LearningSession learningSession) {
             throw new UnsupportedOperationException("测试不需要更新会话");
         }
+
+        // 测试仓库没有真实锁，返回同一归属数据；数据库并发由集成测试验证。
+        @Override
+        public Optional<LearningSession> findSessionForUpdate(Long sessionId) {
+            return findSessionById(sessionId);
+        }
     }
 
     // 这个假工具记录执行次数和输入参数，并返回固定数据，便于验证 Harness 是否真的调用了它。

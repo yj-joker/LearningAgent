@@ -44,7 +44,8 @@ public class ProposeCourseLearningProgressTool implements Tool {
     @Override
     public String description() {
         return "为当前课程知识点提交学习进度建议。targetStatus 只能是 IN_PROGRESS 或 CONFIRMED；"
-                + "CONFIRMED 必须同时有解释和独立练习证据，需要用户审批，不能把提议说成已经完成。";
+                + "NOT_STARTED 或 REVIEW_REQUIRED 可以申请 IN_PROGRESS；CONFIRMED 必须同时有解释和独立练习证据，"
+                + "旧正文证据不能证明修改后的正文已掌握。需要用户审批，不能把提议说成已经完成。";
     }
 
     // 课程状态是用户数据，任何写入都需要用户确认。

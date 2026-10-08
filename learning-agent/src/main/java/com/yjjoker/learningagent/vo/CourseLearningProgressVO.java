@@ -21,6 +21,9 @@ public class CourseLearningProgressVO {
     private Long currentKnowledgePointId;
     private boolean completed;
     private boolean courseContentChanged;
+    // 同步前展示具体变化；凭据同时绑定源课程内容和已有进度版本。
+    private List<CourseContentChangeVO> contentChanges = List.of();
+    private String syncToken;
     private List<CourseLearningPointProgressVO> points;
 
     // 组装课程学习进度查询结果。
