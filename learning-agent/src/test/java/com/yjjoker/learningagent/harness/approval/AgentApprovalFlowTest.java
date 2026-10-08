@@ -174,6 +174,39 @@ class AgentApprovalFlowTest {
         verify(notifier, times(4)).changedAfterCommit(7L);
     }
 
+    // 独立 CHAT 暂停后仍恢复检查点里的同一模式，历史保存到原会话范围。
+    @Test
+    void resumesFixedStandaloneChatMode() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.CHAT);
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        when(llm.generate(any())).thenReturn(response("standalone-id", "change_setting"), new TextLlmResponse("已完成"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.CHAT);
+        approveAll(paused);
+        assertEquals(AgentRunStatus.COMPLETED, harness.resume(paused.getRunId()).getStatus());
+        assertEquals(1, calls.get());
+        verify(history).appendMessages(eq(9L), eq(AgentMode.CHAT), any());
+    }
+
+    // 检查点模式与独立会话不一致时，恢复也在执行已批准工具前停止。
+    @Test
+    void rejectsStandaloneModeMismatchBeforeResumingTool() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.CHAT);
+        AtomicInteger calls = new AtomicInteger();
+        build(List.of(tool("change_setting", true, calls)), List.of());
+        when(llm.generate(any())).thenReturn(response("standalone-id", "change_setting"));
+        AgentRunResult paused = harness.run(9L, "调整设置", AgentMode.CHAT);
+        approveAll(paused);
+        // 模拟损坏的会话元数据，不能把 CHAT 检查点继续写入 FOCUS 会话。
+        session.setMode(AgentMode.FOCUS);
+        assertThrows(com.yjjoker.learningagent.exception.LearningSessionStatusException.class,
+                () -> harness.resume(paused.getRunId()));
+        assertEquals(0, calls.get());
+        verify(history, never()).appendMessages(anyLong(), any(AgentMode.class), any());
+    }
+
     // 用户拒绝也要补一条同 ID 的 tool 结果，不能让 assistant 的工具请求悬空。
     @Test
     void returnsUserRejectionToModelWithoutExecutingTool() {

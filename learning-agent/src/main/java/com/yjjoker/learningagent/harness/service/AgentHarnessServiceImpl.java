@@ -257,7 +257,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             // 验证用户输入
             validateUserMessage(userMessage);
             // 验证会话访问权限
-            validateSessionAccess(sessionId);
+            validateSessionAccess(sessionId, mode);
             context.bindSession(BaseContext.getCurrentId(), sessionId);
             // 同一会话的暂停任务必须先恢复，不能另开聊天把原工具请求遗忘。
             agentApprovalService.requireSessionAvailable(sessionId);
@@ -320,6 +320,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             skillRunContext.restore(checkpoint.getLoadedSkills());
             AgentMode mode = checkpoint.getMode() == null ? AgentMode.CHAT : checkpoint.getMode();
             context.bindMode(mode);
+            // 恢复也核对独立会话固定模式，不能用旧检查点把另一模式内容写入此会话。
+            validateSessionAccess(run.getSessionId(), mode);
             // 恢复原课程快照前重新校验当前访问权限，不能借审批绕过会话归属。
             if (mode == AgentMode.COURSE) {
                 var snapshot = checkpoint.getCourseProgress();
@@ -1301,7 +1303,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     }
 
     // 会话必须存在、属于当前登录用户，并且仍处于进行中状态。
-    private void validateSessionAccess(Long sessionId) {
+    private void validateSessionAccess(Long sessionId, AgentMode mode) {
         if (sessionId == null || sessionId <= 0) {
             throw new LearningSessionStatusException("学习会话 ID 不合法");
         }
@@ -1317,6 +1319,13 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
         }
         if (session.getStatus() != LearningSessionStatusEnum.ACTIVE) {
             throw new LearningSessionStatusException("学习会话已结束");
+        }
+        // 新独立会话固定模式，切换必须使用新编号，防止消息与专注计划串到另一模式。
+        // 旧课程会话继续允许以前的问答或专注请求，兼容已有调用与历史。
+        if (session.getCourseId() == null && session.getMode() != null && session.getMode() != mode) {
+            log.warn("独立会话模式不匹配，sessionId={}，storedMode={}，requestedMode={}",
+                    sessionId, session.getMode(), mode);
+            throw new LearningSessionStatusException("切换模式后请创建新的独立会话");
         }
     }
 

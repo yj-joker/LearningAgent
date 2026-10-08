@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, ScrollText, X } from 'lucide-vue-next'
+import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, ScrollText, Target, X } from 'lucide-vue-next'
 import { useAuth } from '@/composables/useAuth'
 
 defineProps<{ open: boolean; collapsed: boolean }>()
@@ -134,6 +134,9 @@ function openCreateCourse() {
           <ChevronDown v-if="!collapsed" class="sidebar-nav-chevron" :class="{ 'is-flipped': openGroup === 'assistant' }" :size="15" />
         </RouterLink>
         <div v-if="!collapsed && openGroup === 'assistant'" class="sidebar-subnav">
+          <RouterLink :to="{ name: 'agent-chat' }" @click="closeNavigation"><BookOpenText :size="17" /><span>课程学习</span></RouterLink>
+          <RouterLink :to="{ name: 'agent-chat-standalone' }" @click="closeNavigation"><Bot :size="17" /><span>独立问答</span></RouterLink>
+          <RouterLink :to="{ name: 'agent-focus' }" @click="closeNavigation"><Target :size="17" /><span>专注学习</span></RouterLink>
           <RouterLink :to="{ path: '/sessions', query: { from: 'sidebar' } }" @click="closeNavigation">
             <MessageSquareText :size="17" />
             <span>学习会话</span>

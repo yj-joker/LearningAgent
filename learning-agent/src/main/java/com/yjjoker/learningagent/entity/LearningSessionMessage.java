@@ -1,6 +1,5 @@
 package com.yjjoker.learningagent.entity;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.yjjoker.learningagent.projectenum.LearningSessionMessageRoleEnum;
 import lombok.Getter;
 import lombok.Setter;
@@ -16,8 +15,7 @@ public class LearningSessionMessage {
     private Long sessionId;
     private LearningSessionMessageRoleEnum role;
 
-    // 区分问答与专注消息；旧记录为空时不会被猜测归入任一模式。
-    @JsonIgnore
+    // 前端可辨认课程、问答与专注历史；旧记录为空时不猜测其模式。
     private String agentMode;
 
     // ASSISTANT 请求工具时 content 可以为空，此时调用信息保存在 toolCallsJson。

@@ -2,6 +2,7 @@ package com.yjjoker.learningagent.harness.plan;
 
 import com.yjjoker.learningagent.entity.LearningSession;
 import com.yjjoker.learningagent.exception.ClientDataErrorException;
+import com.yjjoker.learningagent.exception.LearningSessionStatusException;
 import com.yjjoker.learningagent.harness.approval.AgentApprovalService;
 import com.yjjoker.learningagent.harness.context.*;
 import com.yjjoker.learningagent.harness.context.impl.InMemoryOriginalToolResultStoreImpl;
@@ -91,6 +92,42 @@ class AgentHarnessModeTest {
         verifyNoInteractions(plans);
         verify(client, never()).generateWithoutTools(any());
         verify(client, times(2)).generate(any());
+    }
+
+    // 独立 FOCUS 会话不能被作为 CHAT 使用，拒绝发生在调用模型或加载历史之前。
+    @Test
+    void rejectsDifferentModeForStandaloneSession() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.FOCUS);
+        assertThrows(LearningSessionStatusException.class,
+                () -> harness.run(9L, "解释事务", AgentMode.CHAT));
+        verify(client, never()).generate(any());
+        verify(client, never()).generateWithoutTools(any());
+        verify(history, never()).loadHistory(anyLong(), any(AgentMode.class));
+    }
+
+    // 没有课程的独立 FOCUS 会话仍能加载自己的计划并生成回答，不调用课程流程。
+    @Test
+    void runsMatchingStandaloneFocusModeWithoutCourse() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setMode(AgentMode.FOCUS);
+        when(plans.load(9L)).thenReturn(storedSnapshot(null));
+        AgentRunResult result = harness.run(9L, "解释事务", AgentMode.FOCUS);
+        assertEquals(AgentRunStatus.COMPLETED, result.getStatus());
+        assertNull(session.getCourseId());
+        verify(client).generate(any());
+        verify(history).loadHistory(9L, AgentMode.FOCUS);
+    }
+
+    // 课程入口的旧 CHAT 调用继续兼容，不因为新增会话模式字段被错误拒绝。
+    @Test
+    void keepsLegacyCourseChatCompatible() {
+        LearningSession session = sessions.findSessionById(9L).orElseThrow();
+        session.setCourseId(3L);
+        session.setMode(AgentMode.COURSE);
+        harness.run(9L, "解释事务", AgentMode.CHAT);
+        verify(client).generate(any());
+        verifyNoInteractions(plans);
     }
 
     // 没有结构化记忆也必须带上计划，规划规则不会混入主提示词。

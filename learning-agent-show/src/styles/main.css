@@ -4063,3 +4063,8 @@ body::before {
   .page-heading-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .page-heading-actions .button { width: 100%; }
 }
+
+/* 减少动画不能取消移动端导航的隐藏位置。 */
+@media (max-width: 1024px) and (prefers-reduced-motion: reduce) {
+  .app-shell > .sidebar:not(.is-open) { transform: translateX(-100%) !important; }
+}

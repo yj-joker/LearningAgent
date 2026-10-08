@@ -52,9 +52,10 @@ ALTER TABLE courses
 -- 学习会话表
 CREATE TABLE IF NOT EXISTS learning_sessions (
                                                  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '学习会话主键',
-                                                 course_id BIGINT UNSIGNED NOT NULL COMMENT '课程 ID，逻辑外键',
+                                                 course_id BIGINT UNSIGNED NULL COMMENT '课程 ID；独立问答或专注会话为空',
                                                  user_id BIGINT UNSIGNED NOT NULL COMMENT '学习用户 ID，逻辑外键',
                                                  session_title VARCHAR(255) NOT NULL COMMENT '会话标题',
+                                                 session_mode VARCHAR(20) NOT NULL DEFAULT 'COURSE' COMMENT '课程、问答或专注模式',
                                                  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '会话状态',
                                                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
                                                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -65,7 +66,12 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
                                                  KEY idx_learning_sessions_user_id (user_id),
 
                                                  CONSTRAINT chk_learning_sessions_status
-                                                     CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELED'))
+                                                     CHECK (status IN ('ACTIVE', 'COMPLETED', 'CANCELED')),
+                                                 CONSTRAINT chk_learning_sessions_mode
+                                                     CHECK (session_mode IN ('CHAT', 'FOCUS', 'COURSE')),
+                                                 CONSTRAINT chk_learning_sessions_course_mode
+                                                     CHECK ((course_id IS NULL AND session_mode IN ('CHAT', 'FOCUS'))
+                                                         OR (course_id IS NOT NULL AND session_mode = 'COURSE'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci

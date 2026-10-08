@@ -44,7 +44,22 @@ const router = createRouter({
       path: '/ai-assistant',
       name: 'agent-chat',
       component: () => import('@/views/AgentChatView.vue'),
-      meta: { title: 'AI 助教', requiresUser: true },
+      props: { mode: 'COURSE', standalone: false },
+      meta: { title: '课程学习', requiresUser: true },
+    },
+    {
+      path: '/ai-assistant/chat',
+      name: 'agent-chat-standalone',
+      component: () => import('@/views/AgentChatView.vue'),
+      props: { mode: 'CHAT', standalone: true },
+      meta: { title: '独立问答', requiresUser: true },
+    },
+    {
+      path: '/ai-assistant/focus',
+      name: 'agent-focus',
+      component: () => import('@/views/AgentChatView.vue'),
+      props: { mode: 'FOCUS', standalone: true },
+      meta: { title: '专注学习', requiresUser: true },
     },
     {
       path: '/learning-plans',

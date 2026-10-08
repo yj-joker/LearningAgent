@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Bot, BookOpenText, MessageSquareText, Send, Sparkles, UserRound } from 'lucide-vue-next'
+import { ArrowRight, Bot, BookOpenText, Check, MessageSquareText, RefreshCw, Send, ShieldCheck, Sparkles, UserRound, X } from 'lucide-vue-next'
+import ProposalDetails from '@/components/ProposalDetails.vue'
+import ChatContent from '@/components/ChatContent.vue'
 import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeAgentRun } from '@/api/agent'
 import { getSessionLearningPlanBinding, listLearningPlanDrafts, updateSessionLearningPlanBinding } from '@/api/learningPlans'
-import type { AgentRunResult, LearningPlanDraft, ToolApprovalRequest } from '@/types/api'
+import type { AgentMode, AgentRunResult, LearningPlanDraft, LearningSessionVO, ToolApprovalRequest } from '@/types/api'
 import { ApiError } from '@/api/client'
-import { useActivity } from '@/composables/useActivity'
+import { createStandaloneSession, getSessionMessages, listSessions, startCourseLearning } from '@/api/sessions'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import { useApprovalNotifications } from '@/composables/useApprovalNotifications'
@@ -25,14 +27,15 @@ interface ActiveSession {
   title: string
   course: string
   createdAt: string
+  status: string
 }
 
+const props = defineProps<{ mode: AgentMode; standalone: boolean }>()
+
 const MAX_MESSAGE_LENGTH = 10_000
-const STORAGE_PREFIX = 'learning-agent.agent-chat.v1'
 
 const route = useRoute()
 const router = useRouter()
-const { activities } = useActivity()
 const { currentUser } = useAuth()
 const { showToast } = useToast()
 const { approvalRevision } = useApprovalNotifications()
@@ -43,13 +46,22 @@ const selectedSessionId = ref('')
 const draft = ref('')
 const messages = ref<ChatMessage[]>([])
 const sending = ref(false)
-// 当前发送模式只影响新请求，审批恢复仍由后端检查点决定。
-const agentMode = ref<'CHAT' | 'FOCUS'>('CHAT')
+// 页面路由决定模式，课程、问答和专注不会共用同一个聊天页面状态。
+const agentMode = computed(() => props.mode)
+const pageTitle = computed(() => ({ COURSE: '课程学习', CHAT: '独立问答', FOCUS: '专注学习' }[props.mode]))
+const sessions = ref<LearningSessionVO[]>([])
+const loadingSessions = ref(false)
+const historyLoading = ref(false)
+const loadError = ref('')
+let pageVersion = 0
+let historyVersion = 0
+let disposed = false
 // 当前专注请求可选择一个 ACTIVE 学习计划；空值表示沿用会话绑定。
 const learningPlanDraftRef = ref('')
 const learningPlans = ref<LearningPlanDraft[]>([])
 const learningPlanBindingVersion = ref(0)
 const learningPlanBindingSaving = ref(false)
+const bindingLoading = ref(false)
 // 审批状态来自后端，等待期间没有挂起中的聊天请求。
 const activeRun = ref<AgentRunResult | null>(null)
 const approvalBusy = ref(false)
@@ -58,51 +70,63 @@ const messageList = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 
 const activeSessions = computed<ActiveSession[]>(() => {
-  const completedIds = new Set(
-    activities.value
-      .filter((item) => item.kind === 'session-completed' && item.resourceId)
-      .map((item) => String(item.resourceId)),
-  )
-  const sessions = new Map<string, ActiveSession>()
-  for (const item of activities.value) {
-    if (item.kind !== 'session-created' || !item.resourceId) continue
-    const id = String(item.resourceId)
-    if (completedIds.has(id) || sessions.has(id)) continue
-    sessions.set(id, {
-      id,
-      title: item.title,
-      course: item.description.replace(/^课程[：:]\s*/, ''),
-      createdAt: item.createdAt,
-    })
-  }
-  return [...sessions.values()]
+  return sessions.value.filter(item => props.standalone
+    ? !item.courseId && item.mode === props.mode
+    : Boolean(item.courseId)).map(item => ({
+      id: String(item.id), title: item.sessionTitle, course: item.courseName ?? '',
+      createdAt: item.createdAt ?? item.createAt ?? '', status: item.sessionStatus ?? 'ACTIVE',
+    }))
 })
 
 const selectedSession = computed(() => activeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
 const remainingCharacters = computed(() => MAX_MESSAGE_LENGTH - draft.value.length)
-const canSend = computed(() => Boolean(selectedSession.value && draft.value.trim() && !sending.value && !approvalBusy.value && !loadingRun.value && !activeRun.value && remainingCharacters.value >= 0))
+const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !learningPlanBindingSaving.value && !activeRun.value && remainingCharacters.value >= 0))
+const runStatusText = computed(() => activeRun.value ? ({ WAITING_APPROVAL: '等待审批', APPROVAL_RESOLVED: '等待继续执行', RUNNING: '任务正在执行', COMPLETED: '任务已完成', FAILED: '任务失败' }[activeRun.value.status]) : sending.value ? '正在思考' : loadingRun.value ? '同步任务中' : '可以开始学习')
+const toolNames: Record<string, string> = { create_memory: '新增记忆', update_memory: '修改记忆', delete_memory: '删除记忆', create_learning_plan_draft: '创建学习计划草案', update_learning_plan_draft: '修改学习计划', activate_learning_plan_draft: '确认学习计划生效', create_session_goal: '创建学习目标', update_task_plan: '更新任务计划', update_task_progress: '更新任务进度', propose_learning_progress: '记录学习进度', propose_course_learning_progress: '记录课程进度', switch_session_goal: '切换学习目标' }
 
-function conversationStorageKey(sessionId: string) {
-  const owner = encodeURIComponent(currentUser.value?.username || 'guest')
-  return `${STORAGE_PREFIX}.${owner}.${encodeURIComponent(sessionId)}`
-}
-
-function loadConversation(sessionId: string) {
+// 独立会话按模式展示；课程旧会话保留已有问答历史，新的请求仍按 COURSE 执行。
+async function loadConversation(sessionId: string) {
+  const version = ++historyVersion
+  const token = currentUser.value?.token
+  historyLoading.value = true
   try {
-    const stored = localStorage.getItem(conversationStorageKey(sessionId))
-    messages.value = stored ? JSON.parse(stored) as ChatMessage[] : []
-  } catch {
-    messages.value = []
+    const result = await getSessionMessages(sessionId, props.standalone ? props.mode : undefined)
+    if (version !== historyVersion || sessionId !== selectedSessionId.value || token !== currentUser.value?.token) return
+    messages.value = result.filter(item => item.content && (item.role === 'USER' || item.role === 'ASSISTANT')).map(item => ({
+      id: 'history-' + item.id, role: item.role === 'USER' ? 'user' : 'assistant',
+      content: item.content ?? '', createdAt: item.createdAt,
+    }))
+    loadError.value = ''
+    if (selectedSession.value?.status === 'ACTIVE') await restorePendingRun(sessionId)
+    await scrollToLatest()
+  } catch (error) {
+    if (version === historyVersion && token === currentUser.value?.token) loadError.value = error instanceof Error ? error.message : '历史消息读取失败'
+  } finally {
+    if (version === historyVersion) historyLoading.value = false
   }
 }
 
-function persistConversation() {
-  if (!selectedSessionId.value) return
+// 服务器列表也是会话归属依据；读取失败时不使用旧账号或本地记录替代。
+async function loadSessionList() {
+  const version = ++pageVersion
+  const token = currentUser.value?.token
+  loadingSessions.value = true
   try {
-    localStorage.setItem(conversationStorageKey(selectedSessionId.value), JSON.stringify(messages.value.slice(-60)))
-  } catch {
-    // 浏览器存储不可用时仍允许继续当前对话。
+    const result = await listSessions()
+    if (version === pageVersion && token === currentUser.value?.token) {
+      sessions.value = result
+      loadError.value = ''
+    }
+  } catch (error) {
+    if (version === pageVersion && token === currentUser.value?.token) loadError.value = error instanceof Error ? error.message : '会话加载失败'
+  } finally {
+    if (version === pageVersion) loadingSessions.value = false
   }
+}
+
+async function retryLoad() {
+  await loadSessionList()
+  if (selectedSessionId.value) await loadConversation(selectedSessionId.value)
 }
 
 function createMessage(role: ChatRole, content: string): ChatMessage {
@@ -121,11 +145,36 @@ async function scrollToLatest() {
 
 async function selectSession(sessionId: string) {
   if (sending.value || approvalBusy.value || sessionId === selectedSessionId.value) return
-  await router.replace({ name: 'agent-chat', query: { session: sessionId } })
+  await router.replace({ name: route.name as string, query: { session: sessionId } })
+}
+
+// 新会话只清除页面选择，首条消息才创建数据库记录；旧对话仍在会话列表。
+async function newConversation() {
+  if (sending.value || approvalBusy.value) return
+  historyVersion++
+  runRefreshVersion++
+  selectedSessionId.value = ''
+  messages.value = []
+  activeRun.value = null
+  draft.value = ''
+  historyLoading.value = false
+  loadingRun.value = false
+  learningPlanDraftRef.value = ''
+  bindingLoading.value = false
+  await router.replace({ name: route.name as string })
+}
+
+async function switchPage(mode: 'CHAT' | 'FOCUS') {
+  if (sending.value || approvalBusy.value || mode === props.mode) return
+  // 切换不携带 session 参数，切回来仍是一份新对话。
+  await router.push({ name: mode === 'CHAT' ? 'agent-chat-standalone' : 'agent-focus' })
 }
 
 // 会话切换后读取当前绑定，避免把上一会话的计划误显示到新会话。
 async function loadLearningPlanBinding(sessionId: string) {
+  bindingLoading.value = true
+  learningPlanDraftRef.value = ''
+  learningPlanBindingVersion.value = 0
   try {
     const binding = await getSessionLearningPlanBinding(sessionId)
     if (sessionId === selectedSessionId.value) {
@@ -134,6 +183,8 @@ async function loadLearningPlanBinding(sessionId: string) {
     }
   } catch {
     if (sessionId === selectedSessionId.value) learningPlanDraftRef.value = ''
+  } finally {
+    if (sessionId === selectedSessionId.value) bindingLoading.value = false
   }
 }
 
@@ -159,39 +210,49 @@ async function saveLearningPlanBinding() {
 }
 
 async function sendMessage() {
-  const session = selectedSession.value
+  let session = selectedSession.value
   const ownerToken = currentUser.value?.token
   const userMessage = draft.value.trim()
-  if (!session || !userMessage || !canSend.value) return
+  if (!userMessage || !canSend.value) return
   if (userMessage.length > MAX_MESSAGE_LENGTH) {
     showToast('error', '内容过长', `每次最多输入 ${MAX_MESSAGE_LENGTH} 个字符`)
     return
   }
 
-  const pendingMessage = createMessage('user', userMessage)
-  messages.value.push(pendingMessage)
-  persistConversation()
-  draft.value = ''
   sending.value = true
   // 正在发送时作废旧查询，不能让旧审批状态覆盖这次响应。
   runRefreshVersion++
-  await scrollToLatest()
-
+  let pendingMessage: ChatMessage | undefined
   try {
+    // 问答/专注的空页面首次发送时创建新会话，而不是绑定一门虚构的课程。
+    if (!session && props.standalone) {
+      const created = await createStandaloneSession(userMessage.slice(0, 100), props.mode as 'CHAT' | 'FOCUS')
+      if (disposed || ownerToken !== currentUser.value?.token) return
+      await router.replace({ name: route.name as string, query: { session: String(created.id) } })
+      sessions.value = [created, ...sessions.value]
+      selectedSessionId.value = String(created.id)
+      session = selectedSession.value
+    }
+    if (!session) return
+    // 课程快照初始化幂等；课程页的发送是用户明确开始本次课程学习的动作。
+    if (props.mode === 'COURSE') await startCourseLearning(session.id)
+    if (disposed || ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
+    pendingMessage = createMessage('user', userMessage)
+    messages.value.push(pendingMessage)
+    draft.value = ''
+    await scrollToLatest()
     const result = await chatWithAgent({
       sessionId: session.id,
       userMessage,
       mode: agentMode.value,
     })
-    if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
+    if (disposed || ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
     // 后端直接返回暂停状态；展示原工具参数，不把它误报为执行成功。
     acceptRunResult(result)
-    persistConversation()
     await scrollToLatest()
   } catch (error) {
-    if (ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
-    messages.value = messages.value.filter((message) => message.id !== pendingMessage.id)
-    persistConversation()
+    if (disposed || ownerToken !== currentUser.value?.token || (session && selectedSessionId.value !== session.id)) return
+    if (pendingMessage) messages.value = messages.value.filter((message) => message.id !== pendingMessage!.id)
     draft.value = userMessage
     showToast('error', '消息发送失败', error instanceof ApiError ? error.message : 'AI 助教暂时无法回复，请稍后重试')
   } finally {
@@ -209,7 +270,6 @@ function acceptRunResult(result: AgentRunResult) {
   const index = messages.value.findIndex(item => item.id === id)
   if (index < 0) messages.value.push(message)
   else messages.value[index] = message
-  persistConversation()
 }
 
 // 切换或刷新页面后从数据库找回任务；旧会话的慢响应不能覆盖当前会话。
@@ -303,6 +363,8 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
 // 跨标签页退出或换号时，也不能继续展示上一个账号的消息。
 watch(() => currentUser.value?.token, () => {
+  pageVersion++
+  historyVersion++
   runRefreshVersion++
   messages.value = []
   activeRun.value = null
@@ -310,19 +372,30 @@ watch(() => currentUser.value?.token, () => {
   approvalBusy.value = false
   loadingRun.value = false
   draft.value = ''
-  if (currentUser.value?.token && selectedSessionId.value) loadConversation(selectedSessionId.value)
+  sessions.value = []
+  selectedSessionId.value = ''
+  historyLoading.value = false
+  bindingLoading.value = false
+  learningPlanBindingSaving.value = false
+  learningPlanDraftRef.value = ''
+  learningPlanBindingVersion.value = 0
+  loadError.value = ''
+  if (currentUser.value?.token) void loadSessionList()
 })
 
 // 通知只安排查询，不自动提交决定或恢复任务。
 watch([approvalRevision, sending, approvalBusy], () => {
   clearTimeout(runRefreshTimer)
-  if (currentUser.value?.token && !sending.value && !approvalBusy.value && selectedSessionId.value) {
+  if (currentUser.value?.token && !sending.value && !approvalBusy.value && !historyLoading.value && selectedSession.value?.status === 'ACTIVE') {
     runRefreshTimer = setTimeout(() => void restorePendingRun(selectedSessionId.value), 120)
   }
 })
 
 // 离开页面后取消排队的刷新，正在返回的旧响应也会失效。
 onBeforeUnmount(() => {
+  disposed = true
+  pageVersion++
+  historyVersion++
   runRefreshVersion++
   clearTimeout(runRefreshTimer)
 })
@@ -333,17 +406,22 @@ watch(
     const requestedId = typeof querySession === 'string' ? querySession : ''
     const nextId = activeSessions.value.some((item) => item.id === requestedId)
       ? requestedId
-      : activeSessions.value[0]?.id ?? ''
+      : props.standalone ? '' : activeSessions.value.find(item => item.status === 'ACTIVE')?.id ?? activeSessions.value[0]?.id ?? ''
     if (nextId !== selectedSessionId.value) {
       runRefreshVersion++
       loadingRun.value = false
       selectedSessionId.value = nextId
+      historyVersion++
+      historyLoading.value = false
       messages.value = []
       activeRun.value = null
+      draft.value = ''
+      learningPlanDraftRef.value = ''
+      bindingLoading.value = false
       if (nextId) {
-        loadConversation(nextId)
-        void loadLearningPlanBinding(nextId)
-        void restorePendingRun(nextId)
+        // 首次创建时正在发送首条消息，不让空历史的慢响应覆盖正在显示的问题。
+        if (!sending.value) void loadConversation(nextId)
+        if (props.mode === 'FOCUS' && selectedSession.value?.status === 'ACTIVE') void loadLearningPlanBinding(nextId)
       }
       void scrollToLatest()
     }
@@ -353,6 +431,7 @@ watch(
 
 onMounted(async () => {
   composer.value?.focus()
+  void loadSessionList()
   try {
     learningPlans.value = await listLearningPlanDrafts()
   } catch {
@@ -366,16 +445,17 @@ onMounted(async () => {
     <section class="agent-chat-heading">
       <div>
         <span class="section-kicker"><Sparkles :size="13" /> 智能学习</span>
-        <h2>AI 助教</h2>
-        <p>围绕当前学习会话提问，让助教结合你的学习目标继续讲解。</p>
+        <h2>{{ pageTitle }}</h2>
       </div>
-      <RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 管理学习会话</RouterLink>
+      <div class="agent-heading-actions"><button v-if="standalone" class="button button-primary" type="button" :disabled="sending || approvalBusy" @click="newConversation">新对话</button><RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 全部会话</RouterLink></div>
     </section>
 
-    <div v-if="activeSessions.length" class="agent-chat-layout">
-      <aside class="agent-session-panel" aria-label="进行中的学习会话">
+    <p v-if="loadError" class="agent-load-error" role="alert">{{ loadError }} <button class="button button-secondary" type="button" @click="retryLoad">重试</button></p>
+    <div v-if="loadingSessions" class="agent-loading">正在读取会话…</div>
+    <div v-else-if="activeSessions.length || standalone" class="agent-chat-layout" :class="{ 'is-standalone': standalone }">
+      <aside v-if="!standalone" class="agent-session-panel" aria-label="课程学习会话">
         <header>
-          <span class="section-kicker">进行中的会话</span>
+          <span class="section-kicker">课程学习会话</span>
           <strong>{{ activeSessions.length }}</strong>
         </header>
         <div class="agent-session-select-wrap">
@@ -396,7 +476,7 @@ onMounted(async () => {
             <span><MessageSquareText :size="17" /></span>
             <span>
               <strong>{{ session.title }}</strong>
-              <small>{{ session.course || '学习会话' }}</small>
+              <small>{{ session.course || '课程学习' }}{{ session.status === 'COMPLETED' ? ' · 已完成' : '' }}</small>
             </span>
             <ArrowRight :size="15" />
           </button>
@@ -407,34 +487,28 @@ onMounted(async () => {
         <header class="agent-conversation-header">
           <span class="agent-avatar"><Bot :size="21" /></span>
           <div>
-            <strong>{{ selectedSession?.title }}</strong>
-            <small><i /> AI 助教已就绪</small>
+            <strong>{{ selectedSession?.title ?? (mode === 'FOCUS' ? '一个目标，分步完成' : '从一个问题开始') }}</strong>
+            <small><i /> {{ selectedSession?.status === 'COMPLETED' ? '已完成 · 查看历史' : runStatusText }}</small>
           </div>
-          <label class="agent-mode-select" for="agent-mode-select">
-            新请求模式
-            <select id="agent-mode-select" v-model="agentMode" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun)">
-              <option value="CHAT">问答模式</option>
-              <option value="FOCUS">专注模式</option>
-            </select>
-            <small>{{ activeRun ? '审批恢复保持原任务模式' : agentMode === 'FOCUS' ? '先规划，再分步完成一个目标' : '即时答疑，按需使用工具' }}</small>
-          </label>
-          <label v-if="agentMode === 'FOCUS'" class="agent-mode-select" for="learning-plan-select">
-            关联学习计划
-            <select id="learning-plan-select" v-model="learningPlanDraftRef" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun) || learningPlanBindingSaving" @change="saveLearningPlanBinding">
+          <div v-if="standalone" class="agent-mode-switch" role="group" aria-label="学习页面"><button v-for="target in (['CHAT', 'FOCUS'] as const)" :key="target" type="button" :aria-pressed="mode === target" :class="{ active: mode === target }" :disabled="sending || approvalBusy" @click="switchPage(target)">{{ target === 'CHAT' ? '问答' : '专注' }}</button></div>
+        </header>
+        <div v-if="mode === 'FOCUS' && selectedSessionId && selectedSession?.status === 'ACTIVE'" class="agent-plan-toolbar">
+          <label for="learning-plan-select">学习计划</label>
+            <select id="learning-plan-select" v-model="learningPlanDraftRef" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun) || learningPlanBindingSaving || bindingLoading" @change="saveLearningPlanBinding">
               <option value="">不关联学习计划</option>
               <option v-for="plan in learningPlans.filter(item => item.status === 'ACTIVE')" :key="plan.draftRef" :value="plan.draftRef">
                 {{ plan.title }} · v{{ plan.version }}
               </option>
             </select>
-            <small>每轮开始读取最新内容</small>
-          </label>
-        </header>
+          <RouterLink :to="{ name: 'learning-plans' }">管理计划 <ArrowRight :size="13" /></RouterLink>
+        </div>
 
         <div ref="messageList" class="agent-message-list" aria-live="polite">
-          <div v-if="!messages.length" class="agent-welcome">
+          <div v-if="historyLoading" class="agent-loading">正在读取历史消息…</div>
+          <div v-else-if="!messages.length" class="agent-welcome">
             <span><Sparkles :size="23" /></span>
-            <h3>从一个具体问题开始</h3>
-            <p>我会围绕“{{ selectedSession?.title }}”与你讨论。你可以描述不理解的概念、要求举例，或检查自己的理解。</p>
+            <h3>{{ mode === 'FOCUS' ? '把一个目标拆成可完成的步骤' : mode === 'COURSE' ? '围绕课程继续学习' : '从一个具体问题开始' }}</h3>
+            <p>{{ mode === 'FOCUS' ? '说清你想完成什么，助教会先规划，再逐步推进。' : mode === 'COURSE' ? `当前课程：${selectedSession?.course ?? ''}` : '可以直接提问，无需选择课程。' }}</p>
             <div class="agent-prompt-suggestions">
               <button type="button" @click="draft = '请帮我梳理这个学习目标涉及的核心知识点。'; composer?.focus()">梳理核心知识点</button>
               <button type="button" @click="draft = '请用一个简单的例子帮我理解当前学习内容。'; composer?.focus()">用例子解释</button>
@@ -446,7 +520,8 @@ onMounted(async () => {
             <span class="agent-message-avatar"><UserRound v-if="message.role === 'user'" :size="16" /><Bot v-else :size="16" /></span>
             <div>
               <strong>{{ message.role === 'user' ? '我' : 'AI 助教' }}</strong>
-              <p>{{ message.content }}</p>
+              <ChatContent v-if="message.role === 'assistant'" :content="message.content" />
+              <p v-else>{{ message.content }}</p>
               <time>{{ new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</time>
             </div>
           </article>
@@ -455,24 +530,23 @@ onMounted(async () => {
             <span class="agent-message-avatar"><Bot :size="16" /></span>
             <div><strong>AI 助教</strong><p><i /><i /><i /></p></div>
           </article>
-        </div>
-
         <section v-if="activeRun" class="agent-approval-panel" aria-label="工具审批">
-          <strong>{{ activeRun.answer }}</strong>
-          <p>审批仅表示允许执行，工具的实际结果会在继续任务后显示。</p>
+          <header><ShieldCheck :size="18" /><strong>{{ runStatusText }}</strong><span>{{ activeRun.approvals.filter(item => item.status === 'PENDING').length }} 项待确认</span></header>
           <article v-for="approval in activeRun.approvals" :key="approval.batchNumber + ':' + approval.toolCallId">
-            <strong>{{ approval.toolName }} · {{ approval.status }}</strong>
+            <div class="tool-approval-heading"><strong>{{ toolNames[approval.toolName] ?? approval.toolName }}</strong><span :class="approval.status.toLowerCase()">{{ { PENDING: '待确认', APPROVED: '已同意，待执行', REJECTED: '已拒绝' }[approval.status] }}</span></div>
             <p>{{ approval.reason }}</p>
-            <pre>{{ approval.arguments }}</pre>
-            <div v-if="approval.status === 'PENDING'">
-              <button :disabled="approvalBusy" @click="decideTool(approval, true)">同意</button>
-              <button :disabled="approvalBusy" @click="decideTool(approval, false)">拒绝</button>
+            <ProposalDetails :value="approval.arguments" />
+            <details class="tool-raw"><summary>原始参数</summary><pre>{{ approval.arguments }}</pre></details>
+            <p v-if="approval.decisionReason">{{ approval.decisionReason }}</p>
+            <div v-if="approval.status === 'PENDING'" class="tool-approval-actions">
+              <button class="button button-secondary" :disabled="approvalBusy" @click="decideTool(approval, false)"><X :size="15" /> 拒绝</button>
+              <button class="button button-primary" :disabled="approvalBusy" @click="decideTool(approval, true)"><Check :size="15" /> 同意</button>
             </div>
           </article>
-          <button v-if="activeRun.status === 'APPROVAL_RESOLVED'" :disabled="approvalBusy" @click="continueRun">继续执行原任务</button>
-          <button :disabled="approvalBusy" @click="refreshRun">刷新状态</button>
+          <footer><button class="button button-secondary" :disabled="approvalBusy" @click="refreshRun"><RefreshCw :size="15" /> 刷新状态</button><button v-if="activeRun.status === 'APPROVAL_RESOLVED'" class="button button-primary" :disabled="approvalBusy" @click="continueRun">继续执行 <ArrowRight :size="15" /></button></footer>
           <span v-if="approvalBusy">正在处理，请勿重复提交…</span>
         </section>
+        </div>
 
         <form class="agent-composer" @submit.prevent="sendMessage">
           <div>
@@ -481,14 +555,14 @@ onMounted(async () => {
               v-model="draft"
               rows="3"
               :maxlength="MAX_MESSAGE_LENGTH + 1"
-              :disabled="sending"
-              placeholder="输入你想讨论的问题…"
+              :disabled="sending || Boolean(activeRun) || selectedSession?.status === 'COMPLETED'"
+              :placeholder="selectedSession?.status === 'COMPLETED' ? '已完成的会话仅供查看' : activeRun ? '当前任务等待处理审批' : mode === 'FOCUS' ? '描述本次想完成的目标…' : '输入你想讨论的问题…'"
               aria-label="发送给 AI 助教的消息"
               @keydown="handleComposerKeydown"
             />
             <span :class="{ warning: remainingCharacters < 200 }">{{ remainingCharacters }} 字</span>
           </div>
-          <button class="agent-send-button" :disabled="!canSend" aria-label="发送消息">
+          <button class="agent-send-button" :disabled="!canSend" aria-label="发送消息" title="发送消息">
             <Send :size="18" />
           </button>
         </form>
@@ -497,19 +571,46 @@ onMounted(async () => {
 
     <section v-else class="agent-no-session panel">
       <span><MessageSquareText :size="27" /></span>
-      <h3>先开始一次学习会话</h3>
-      <p>AI 助教需要依托进行中的学习会话理解你的目标和保存上下文。</p>
+      <h3>先创建一份课程学习会话</h3>
+      <p>选择课程后，助教会按课程知识点继续教学。</p>
       <RouterLink class="button button-primary" to="/sessions?create=1">开始学习 <ArrowRight :size="16" /></RouterLink>
     </section>
   </div>
 </template>
 
 <style scoped>
-.agent-mode-select { margin-left: auto; display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; }
-.agent-mode-select select { padding: .35rem .6rem; border: 1px solid #cbd5e1; border-radius: 6px; background: white; }
-.agent-mode-select small { color: #64748b; }
-.agent-approval-panel { margin: 1rem; padding: 1rem; border: 1px solid #cbd5e1; border-radius: 12px; }
-.agent-approval-panel article { margin-block: 1rem; padding-block: .75rem; border-top: 1px solid #e2e8f0; }
+.agent-chat-layout { height: min(850px, calc(100dvh - 245px)); min-height: 570px; grid-template-columns: 230px minmax(0, 1fr); }
+.agent-chat-layout.is-standalone { grid-template-columns: minmax(0, 1fr); max-width: 1080px; margin-inline: auto; }
+.agent-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.agent-load-error { color: #b34747; font-size: 13px; }
+.agent-loading { padding: 24px; color: #71857c; font-size: 13px; }
+.agent-conversation-panel { display: flex; flex-direction: column; }
+.agent-conversation-header { flex: 0 0 auto; padding: 14px 18px; }
+.agent-conversation-header > div:first-of-type { flex: 1; }
+.agent-conversation-header strong { white-space: normal; overflow-wrap: anywhere; }
+.agent-conversation-header > .agent-mode-switch { display: flex; flex: 0 0 auto; flex-direction: row; padding: 3px; gap: 3px; background: #eff4f2; border-radius: 6px; }
+.agent-mode-switch button { padding: 7px 12px; border: 0; border-radius: 4px; background: transparent; color: #71857c; font-size: 12px; cursor: pointer; }
+.agent-mode-switch button.active { background: #fff; color: #287774; box-shadow: 0 1px 4px #d8e4df; }
+.agent-plan-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 18px; border-bottom: 1px solid #e2e8e6; font-size: 12px; }
+.agent-plan-toolbar select { min-width: 0; flex: 1; width: 100%; max-width: 400px; padding: 7px; border: 1px solid #d7e3de; border-radius: 4px; background: white; }
+.agent-plan-toolbar a { display: flex; align-items: center; gap: 3px; color: #287774; }
+.agent-message-list { min-height: 0; flex: 1; }
+.agent-message > div { max-width: calc(100% - 45px); }
+.agent-message.is-assistant > div { flex: 1; }
+.agent-message.is-assistant .chat-content { padding: 14px 16px; background: #fff; border: 1px solid #e1e8e4; border-radius: 6px; }
+.agent-session-list strong { font-size: 12px; }
+.agent-session-list small { font-size: 11px; }
+.agent-composer { flex: 0 0 auto; }
+.agent-approval-panel { max-width: 760px; margin: 18px auto; padding: 18px; border: 1px solid #e3d6ad; background: #fffefa; border-radius: 6px; }
+.agent-approval-panel > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #8c6b24; font-size: 13px; }
+.agent-approval-panel > header span { margin-left: auto; font-size: 11px; }
+.agent-approval-panel article { margin-block: 16px; padding-block: 14px; border-top: 1px solid #e8e6dd; }
+.tool-approval-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; }
+.tool-approval-heading span { font-size: 11px; color: #946c20; } .tool-approval-heading .approved { color: #287774; } .tool-approval-heading .rejected { color: #b84d4d; }
+.agent-approval-panel article > p { color: #76857f; font-size: 12px; line-height: 1.6; }
+.tool-raw { margin-top: 12px; color: #7a8885; font-size: 11px; } .tool-raw summary { cursor: pointer; }
+.tool-approval-actions, .agent-approval-panel footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 14px; }
 .agent-approval-panel pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-approval-panel button { margin: .4rem .6rem .4rem 0; padding: .4rem .8rem; border: 1px solid #94a3b8; border-radius: 6px; }
+@media (max-width: 1000px) { .agent-chat-layout { grid-template-columns: 1fr; height: auto; min-height: 0; } .agent-session-list, .agent-session-panel > header { display: none; } .agent-session-select-wrap { display: grid; gap: 6px; padding: 12px; } .agent-session-select-wrap select { min-width: 0; width: 100%; padding: 10px; border: 1px solid #dce3df; border-radius: 6px; } .agent-conversation-panel { height: 720px; min-height: 560px; } }
+@media (max-width: 620px) { .agent-conversation-header { flex-wrap: wrap; padding: 12px; } .agent-mode-switch { margin-left: auto; } .agent-plan-toolbar { padding: 10px 12px; } .agent-plan-toolbar select { flex-basis: calc(100% - 80px); } .agent-approval-panel { padding: 12px; } }
 </style>

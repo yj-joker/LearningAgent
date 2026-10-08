@@ -772,6 +772,12 @@ class AgentHarnessTest {
         public Optional<LearningSession> findSessionForUpdate(Long sessionId) {
             return findSessionById(sessionId);
         }
+
+        // Harness 用例不调用会话列表；补齐接口让此测试替身继续可编译。
+        @Override
+        public List<com.yjjoker.learningagent.vo.LearningSessionVO> findVisibleSessionsByUserId(Long userId) {
+            throw new UnsupportedOperationException("测试不需要查询会话列表");
+        }
     }
 
     // 这个假工具记录执行次数和输入参数，并返回固定数据，便于验证 Harness 是否真的调用了它。

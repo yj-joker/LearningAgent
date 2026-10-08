@@ -14,7 +14,7 @@ import java.util.List;
 public interface LearningSessionMessageRepository {
 
     // 查询面向用户展示的消息，只保留用户问题和最终 assistant 回答。
-    @Select("SELECT id, session_id AS sessionId, role, content, context_content AS contextContent, " +
+    @Select("SELECT id, session_id AS sessionId, agent_mode AS agentMode, role, content, context_content AS contextContent, " +
             "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
             "context_replayable AS contextReplayable, created_at AS createdAt " +
             "FROM learning_session_messages " +
@@ -22,6 +22,16 @@ public interface LearningSessionMessageRepository {
             "AND (role = 'USER' OR (role = 'ASSISTANT' AND COALESCE(JSON_LENGTH(tool_calls), 0) = 0)) " +
             "ORDER BY id")
     List<LearningSessionMessage> findDisplayMessagesBySessionId(@Param("sessionId") Long sessionId);
+
+    // 明确指定模式时只加载该模式的展示消息；不把未知模式的旧记录猜入新对话。
+    @Select("SELECT id, session_id AS sessionId, agent_mode AS agentMode, role, content, context_content AS contextContent, " +
+            "tool_calls AS toolCallsJson, tool_call_id AS toolCallId, " +
+            "context_replayable AS contextReplayable, created_at AS createdAt " +
+            "FROM learning_session_messages WHERE session_id = #{sessionId} AND agent_mode = #{agentMode} " +
+            "AND (role = 'USER' OR (role = 'ASSISTANT' AND COALESCE(JSON_LENGTH(tool_calls), 0) = 0)) " +
+            "ORDER BY id")
+    List<LearningSessionMessage> findDisplayMessagesBySessionIdAndMode(
+            @Param("sessionId") Long sessionId, @Param("agentMode") String agentMode);
 
     // 保存一条消息；工具调用 JSON 为空时，MySQL 会保存为 NULL。
     @Insert("INSERT INTO learning_session_messages " +

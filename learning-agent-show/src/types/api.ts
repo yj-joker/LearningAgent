@@ -211,7 +211,9 @@ export interface LearningPlanDraftUpdatePayload extends LearningPlanDraftCreateP
 
 export interface LearningSessionVO {
   id: ApiId
-  courseId?: ApiId
+  courseId?: ApiId | null
+  courseName?: string | null
+  mode?: AgentMode | null
   sessionTitle: string
   sessionStatus?: SessionStatus | null
   createAt?: string | null
@@ -220,11 +222,21 @@ export interface LearningSessionVO {
   updatedAt?: string | null
 }
 
+export type AgentMode = 'CHAT' | 'FOCUS' | 'COURSE'
+
+export interface SessionDisplayMessage {
+  id: ApiId
+  role: 'USER' | 'ASSISTANT'
+  content: string | null
+  agentMode?: AgentMode | null
+  createdAt: string
+}
+
 export interface AgentChatPayload {
   sessionId: ApiId
   userMessage: string
   // 省略时后端仍按问答处理，旧调用方无需同时升级。
-  mode?: 'CHAT' | 'FOCUS'
+  mode?: AgentMode
 }
 
 // 同一 runId 的申请来自一次模型响应；内容只是提案，尚未写入记忆。

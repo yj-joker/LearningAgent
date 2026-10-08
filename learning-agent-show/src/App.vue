@@ -43,7 +43,7 @@ const isAdminPage = computed(() => route.path.startsWith('/admin'))
       <main class="page-container">
         <RouterView v-slot="{ Component }">
           <Transition name="page" mode="out-in">
-            <component :is="Component" />
+            <component :is="Component" :key="String(route.name)" />
           </Transition>
         </RouterView>
       </main>

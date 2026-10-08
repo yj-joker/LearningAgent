@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Plus, Save, Trash2 } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, Check, Plus, RefreshCw, Save, Search, Trash2 } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
 import { activateLearningPlanDraft, createLearningPlanDraft, listLearningPlanDrafts, updateLearningPlanDraft } from '@/api/learningPlans'
 import EmptyState from '@/components/EmptyState.vue'
+import ModalDialog from '@/components/ModalDialog.vue'
 import { useToast } from '@/composables/useToast'
 import type {
   LearningPlanDraft,
@@ -23,6 +24,11 @@ const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
 const formError = ref('')
+const search = ref('')
+const statusFilter = ref('ALL')
+const savedSnapshot = ref('')
+const pendingSelection = ref<LearningPlanDraft | 'NEW' | null>(null)
+const activationOpen = ref(false)
 const form = reactive({
   title: '',
   objective: '',
@@ -36,6 +42,31 @@ const form = reactive({
 const isEditing = computed(() => Boolean(selectedRef.value))
 const selectedDraft = computed(() => drafts.value.find((draft) => draft.draftRef === selectedRef.value) ?? null)
 const isActive = computed(() => selectedDraft.value?.status === 'ACTIVE')
+const isArchived = computed(() => selectedDraft.value?.status === 'ARCHIVED')
+const filteredDrafts = computed(() => drafts.value.filter(item =>
+  (statusFilter.value === 'ALL' || item.status === statusFilter.value)
+  && `${item.title} ${item.objective}`.toLowerCase().includes(search.value.trim().toLowerCase())))
+const dirty = computed(() => savedSnapshot.value !== JSON.stringify(form))
+
+// 切换前保留编辑机会，防止选中另一份计划时静默丢失输入。
+function requestSelection(target: LearningPlanDraft | 'NEW') {
+  if (saving.value) return
+  if (dirty.value) pendingSelection.value = target
+  else if (target === 'NEW') resetForm()
+  else openDraft(target)
+}
+function discardAndSwitch() {
+  const target = pendingSelection.value
+  pendingSelection.value = null
+  if (target === 'NEW') resetForm()
+  else if (target) openDraft(target)
+}
+function moveStep(index: number, direction: number) {
+  const next = index + direction
+  if (next < 0 || next >= form.steps.length) return
+  const [step] = form.steps.splice(index, 1)
+  if (step) form.steps.splice(next, 0, step)
+}
 
 // 从后端加载草案列表，重启后也能从数据库恢复页面状态。
 async function loadDrafts(selectLatest = false) {
@@ -46,8 +77,8 @@ async function loadDrafts(selectLatest = false) {
     if (selectLatest && drafts.value.length) openDraft(drafts.value[0]!)
     else if (selectedRef.value) {
       const current = drafts.value.find((draft) => draft.draftRef === selectedRef.value)
-      if (current) openDraft(current)
-      else resetForm()
+      if (current && !dirty.value) openDraft(current)
+      else if (!current && !dirty.value) resetForm()
     }
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : '草案加载失败，请稍后重试'
@@ -71,6 +102,7 @@ function openDraft(draft: LearningPlanDraft) {
     completionCriteria: step.completionCriteria,
   }))
   formError.value = ''
+  savedSnapshot.value = JSON.stringify(form)
 }
 
 // 清空表单，开始一份新的未生效草案。
@@ -84,6 +116,7 @@ function resetForm() {
   form.expectedVersion = 1
   form.steps = [{ description: '', completionCriteria: '' }]
   formError.value = ''
+  savedSnapshot.value = JSON.stringify(form)
 }
 
 // 添加一个空步骤，步骤顺序由后端按数组顺序保存。
@@ -111,7 +144,7 @@ function validate() {
 
 // 手动创建或更新草案；版本冲突时提示重新读取，避免覆盖 Agent 的修改。
 async function saveDraft() {
-  if (!validate() || saving.value) return
+  if (!validate() || saving.value || isArchived.value) return
   saving.value = true
   const steps = form.steps.map((step) => ({
     ...(step.stepRef ? { stepRef: step.stepRef } : {}),
@@ -156,7 +189,8 @@ async function saveDraft() {
 
 // 用户明确点击确认后正式生效；版本冲突时重新读取，不能覆盖新的编辑。
 async function activateDraft() {
-  if (!selectedRef.value || !selectedDraft.value || isActive.value || saving.value) return
+  if (!selectedRef.value || !selectedDraft.value || isActive.value || saving.value || dirty.value || isArchived.value) return
+  activationOpen.value = false
   saving.value = true
   try {
     const result = await activateLearningPlanDraft(selectedRef.value, selectedDraft.value.version)
@@ -183,9 +217,8 @@ onMounted(() => {
       <div>
         <span class="section-kicker">长期学习规划</span>
         <h2>学习计划草案</h2>
-        <p>手动编辑或让 AI 助教继续讨论同一份草案；确认后可正式生效。</p>
       </div>
-      <button class="button button-primary" type="button" @click="resetForm"><Plus :size="17" /> 新建草案</button>
+      <button class="button button-primary" type="button" :disabled="saving" @click="requestSelection('NEW')"><Plus :size="17" /> 新建草案</button>
     </section>
 
     <p v-if="errorMessage" class="learning-plan-error">{{ errorMessage }}</p>
@@ -194,71 +227,95 @@ onMounted(() => {
       <section class="panel learning-plan-draft-list">
         <div class="panel-header">
           <div><span class="section-kicker">已保存内容</span><h3>我的学习计划</h3></div>
-          <span class="count-pill">{{ drafts.length }} 份</span>
+          <div class="list-header-actions"><span class="count-pill">{{ drafts.length }} 份</span><button class="icon-button" type="button" title="刷新计划列表" aria-label="刷新计划列表" :disabled="loading || saving" @click="loadDrafts()"><RefreshCw :size="15" /></button></div>
         </div>
+        <div class="draft-list-tools"><label class="draft-search"><Search :size="16" /><input v-model="search" aria-label="搜索学习计划" placeholder="搜索标题或学习目标" /></label><select v-model="statusFilter" class="form-select" aria-label="筛选计划状态"><option value="ALL">全部状态</option><option value="DRAFT">未生效草案</option><option value="ACTIVE">已生效计划</option><option value="ARCHIVED">已归档</option></select></div>
         <div v-if="loading" class="learning-plan-loading">正在读取草案…</div>
-        <div v-else-if="drafts.length" class="learning-plan-items">
+        <div v-else-if="filteredDrafts.length" class="learning-plan-items">
           <button
-            v-for="draft in drafts"
+            v-for="draft in filteredDrafts"
             :key="draft.draftRef"
             type="button"
             class="learning-plan-item"
             :class="{ active: draft.draftRef === selectedRef }"
-            @click="openDraft(draft)"
+            :disabled="saving"
+            @click="requestSelection(draft)"
           >
             <strong>{{ draft.title }}</strong>
+            <p>{{ draft.objective }}</p>
             <span>{{ draft.steps.length }} 个步骤 · v{{ draft.version }}</span>
-            <small><span class="draft-status-dot">{{ draft.status }}</span> {{ draft.source === 'AGENT' ? 'Agent 创建' : '手动创建' }}</small>
+            <small><span class="draft-status-dot" :class="draft.status.toLowerCase()">{{ { DRAFT: '草案', ACTIVE: '已生效', ARCHIVED: '已归档' }[draft.status] }}</span> {{ draft.source === 'AGENT' ? 'AI 助教创建' : '手动创建' }}</small>
           </button>
         </div>
-        <EmptyState v-else title="还没有学习计划草案" description="先在右侧整理一个目标，或让 AI 助教和你一起讨论。" />
+        <EmptyState v-else :title="drafts.length ? '没有匹配的计划' : '还没有学习计划'" :description="drafts.length ? '暂无符合当前筛选条件的内容' : '暂无已保存的草案'" />
       </section>
 
       <section class="panel learning-plan-editor">
         <div class="panel-header">
           <div><span class="section-kicker">学习计划编辑器</span><h3>{{ isActive ? '正式学习计划' : (isEditing ? '编辑当前草案' : '创建新草案') }}</h3></div>
-          <span class="draft-formal-badge">{{ isActive ? 'ACTIVE · 已正式生效' : 'DRAFT · 未正式生效' }}</span>
+          <span class="draft-formal-badge" :class="{ 'is-active': isActive }">{{ isArchived ? '已归档' : isActive ? '已正式生效' : '未正式生效' }}</span>
         </div>
         <form class="form-layout" @submit.prevent="saveDraft">
+          <fieldset :disabled="saving || isArchived" class="draft-fields">
+          <h4 class="editor-section-title">目标与安排</h4>
           <div class="form-section">
             <label class="field-label" for="draft-title">标题 <b>*</b></label>
             <input id="draft-title" v-model="form.title" class="form-input" maxlength="200" placeholder="例如：Java 并发编程学习计划" />
           </div>
           <div class="form-section">
             <label class="field-label" for="draft-objective">总体目标 <b>*</b></label>
-            <textarea id="draft-objective" v-model="form.objective" class="form-textarea" maxlength="2000" rows="4" placeholder="希望最终具备什么能力？" />
+            <textarea id="draft-objective" v-model="form.objective" class="form-textarea" maxlength="2000" rows="3" placeholder="希望最终具备什么能力？" />
           </div>
           <div class="learning-plan-grid-fields">
             <div class="form-section"><label class="field-label" for="draft-profile">当前基础</label><textarea id="draft-profile" v-model="form.learnerProfile" class="form-textarea" maxlength="1000" rows="3" /></div>
-            <div class="form-section"><label class="field-label" for="draft-time">每周投入</label><textarea id="draft-time" v-model="form.weeklyCommitment" class="form-textarea" maxlength="500" rows="3" /></div>
+            <div class="form-section"><label class="field-label" for="draft-time">每周投入</label><textarea id="draft-time" v-model="form.weeklyCommitment" class="form-textarea" maxlength="500" rows="2" /></div>
           </div>
-          <div class="form-section"><label class="field-label" for="draft-constraints">限制条件</label><textarea id="draft-constraints" v-model="form.constraints" class="form-textarea" maxlength="2000" rows="3" placeholder="例如：工作日每天 30 分钟" /></div>
+          <div class="form-section"><label class="field-label" for="draft-constraints">限制条件</label><textarea id="draft-constraints" v-model="form.constraints" class="form-textarea" maxlength="2000" rows="2" placeholder="例如：工作日每天 30 分钟" /></div>
 
           <div class="form-section">
             <div class="label-row"><span class="field-label">阶段步骤 <b>*</b></span><button class="button button-secondary" type="button" :disabled="form.steps.length >= 12" @click="addStep"><Plus :size="15" /> 添加步骤</button></div>
             <div v-for="(step, index) in form.steps" :key="step.stepRef ?? `new-${index}`" class="learning-plan-step-editor">
-              <div class="learning-plan-step-title"><strong>步骤 {{ index + 1 }}</strong><button type="button" aria-label="删除步骤" :disabled="form.steps.length <= 1" @click="removeStep(index)"><Trash2 :size="15" /></button></div>
-              <input v-model="step.description" class="form-input" maxlength="1000" placeholder="这个阶段要学习什么？" />
-              <input v-model="step.completionCriteria" class="form-input" maxlength="1000" placeholder="达到什么程度算完成？" />
+              <div class="learning-plan-step-title"><strong>步骤 {{ index + 1 }}</strong><div><button class="icon-button" type="button" title="上移步骤" aria-label="上移步骤" :disabled="index === 0" @click="moveStep(index, -1)"><ArrowUp :size="15" /></button><button class="icon-button" type="button" title="下移步骤" aria-label="下移步骤" :disabled="index === form.steps.length - 1" @click="moveStep(index, 1)"><ArrowDown :size="15" /></button><button class="icon-button" type="button" title="删除步骤" aria-label="删除步骤" :disabled="form.steps.length <= 1" @click="removeStep(index)"><Trash2 :size="15" /></button></div></div>
+              <label :for="`step-content-${index}`" class="field-label">学习内容</label><textarea :id="`step-content-${index}`" v-model="step.description" class="form-textarea" maxlength="1000" rows="2" />
+              <label :for="`step-criteria-${index}`" class="field-label">完成条件</label><textarea :id="`step-criteria-${index}`" v-model="step.completionCriteria" class="form-textarea" maxlength="1000" rows="2" />
             </div>
           </div>
+          </fieldset>
           <p v-if="formError" class="field-error">{{ formError }}</p>
           <footer class="form-actions">
-            <span v-if="isEditing" class="learning-plan-version">当前版本 v{{ form.expectedVersion }}</span>
-            <button v-if="selectedRef && !isActive" class="button button-secondary" type="button" :disabled="saving" @click="activateDraft">确认正式生效</button>
-            <button class="button button-primary" type="submit" :disabled="saving"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存正式计划' : '保存草案') }}</button>
+            <span class="learning-plan-version">{{ dirty ? '有未保存的修改' : isEditing ? `已保存 · v${form.expectedVersion}` : '新草案' }}</span>
+            <button v-if="selectedRef && !isActive && !isArchived" class="button button-secondary" type="button" :disabled="saving || dirty" :title="dirty ? '请先保存修改' : '确认正式生效'" @click="activationOpen = true"><Check :size="16" /> 确认生效</button>
+            <button v-if="!isArchived" class="button button-primary" type="submit" :disabled="saving || !dirty"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存计划' : '保存草案') }}</button>
           </footer>
         </form>
       </section>
     </div>
+    <ModalDialog :open="Boolean(pendingSelection)" title="有未保存的修改" description="离开当前计划会丢失本次编辑。" @close="pendingSelection = null"><footer class="form-actions"><button class="button button-secondary" @click="pendingSelection = null">继续编辑</button><button class="button button-primary" @click="discardAndSwitch">放弃修改并切换</button></footer></ModalDialog>
+    <ModalDialog :open="activationOpen" title="确认学习计划生效" :description="selectedDraft?.title ?? ''" @close="activationOpen = false"><p>确认后，这份计划可以关联到学习会话。</p><footer class="form-actions"><button class="button button-secondary" @click="activationOpen = false">取消</button><button class="button button-primary" @click="activateDraft">确认生效</button></footer></ModalDialog>
   </div>
 </template>
 
 <style scoped>
-.learning-plan-draft-layout { display: grid; grid-template-columns: minmax(230px, .8fr) minmax(0, 1.6fr); gap: 20px; align-items: start; }
+.learning-plan-draft-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.learning-plan-drafts-view :deep(.panel) { border-radius: 0; border: 0; box-shadow: none; background: transparent; }
+.learning-plan-draft-list { padding-right: 20px; border-right: 1px solid #cee0df !important; }
+.learning-plan-editor { background: #fff !important; padding: 24px; }
+.draft-fields { display: grid; gap: 18px; padding: 0; margin: 0; min-width: 0; border: 0; }
+.draft-fields .form-textarea { min-height: 76px; font-size: 13px; line-height: 1.7; }
+.draft-fields #draft-objective { min-height: 104px; }
+.editor-section-title { margin: 0; font-size: 13px; color: #526b66; }
+.list-header-actions { display: flex; align-items: center; gap: 4px; }
+.draft-list-tools { display: grid; gap: 10px; margin-bottom: 16px; }
+.draft-search { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #dce6e3; padding: 10px; border-radius: 6px; color: #7a8885; }
+.draft-search input { width: 100%; min-width: 0; background: transparent; border: 0; outline: 0; font-size: 12px; }
 .learning-plan-draft-list, .learning-plan-editor { min-width: 0; }
-.learning-plan-items { display: grid; gap: 8px; }
-.learning-plan-item { display: grid; gap: 5px; padding: 13px; text-align: left; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; cursor: pointer; }
+.learning-plan-items { display: grid; gap: 8px; max-height: 680px; overflow: auto; padding: 3px; }
+.learning-plan-item { display: grid; gap: 8px; padding: 14px; text-align: left; border: 1px solid #e2e8e6; border-radius: 6px; background: #fff; cursor: pointer; min-width: 0; overflow-wrap: anywhere; }
+.learning-plan-item strong { font-size: 13px; line-height: 1.6; }
+.learning-plan-item p { margin: 0; color: #7a8885; font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.draft-status-dot { padding: 2px 6px; border-radius: 4px; background: #fff3cf; color: #946c20 !important; }
+.draft-status-dot.active, .draft-formal-badge.is-active { color: #287774 !important; background: #e5f4ef; }
+.draft-status-dot.archived { color: #7a8885 !important; background: #eef1f0; }
 .learning-plan-item.active { border-color: #319897; box-shadow: 0 0 0 2px rgba(49, 152, 151, .12); }
 .learning-plan-item span, .learning-plan-item small, .learning-plan-version { color: #64748b; font-size: 12px; }
 .learning-plan-item small { display: flex; align-items: center; gap: 6px; }
@@ -266,10 +323,13 @@ onMounted(() => {
 .learning-plan-error { color: #b42318; margin: 0 0 16px; }
 .draft-formal-badge { color: #9a6700; background: #fff4cc; border-radius: 999px; padding: 5px 10px; font-size: 11px; font-weight: 700; }
 .learning-plan-grid-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.learning-plan-step-editor { display: grid; gap: 8px; padding: 13px; margin-top: 10px; border: 1px solid #e2e8f0; border-radius: 10px; }
+.learning-plan-step-editor { display: grid; gap: 8px; padding: 18px 0; margin-top: 10px; border-top: 1px solid #e2e8e6; }
 .learning-plan-step-title { display: flex; justify-content: space-between; align-items: center; }
-.learning-plan-step-title button { border: 0; background: transparent; color: #b42318; cursor: pointer; }
+.learning-plan-step-title > div { display: flex; gap: 4px; }
+.learning-plan-step-title button { color: #687d76; }
 .learning-plan-step-title button:disabled { color: #cbd5e1; cursor: not-allowed; }
-.form-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
-@media (max-width: 860px) { .learning-plan-draft-layout, .learning-plan-grid-fields { grid-template-columns: 1fr; } }
+.form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid #e2e8e6; }
+.learning-plan-version { margin-right: auto; }
+@media (max-width: 1000px) { .learning-plan-draft-layout { grid-template-columns: 1fr; } .learning-plan-draft-list { border: 0 !important; padding: 0; } .learning-plan-items { max-height: 290px; } }
+@media (max-width: 620px) { .learning-plan-grid-fields { grid-template-columns: 1fr; } .learning-plan-editor { padding: 16px; } .form-actions .learning-plan-version { width: 100%; } }
 </style>
