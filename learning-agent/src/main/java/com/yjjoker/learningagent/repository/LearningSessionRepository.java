@@ -25,6 +25,12 @@ public interface LearningSessionRepository {
             "updated_at as updatedAt from learning_sessions where id = #{sessionId}")
     Optional<LearningSession> findSessionById(@Param("sessionId") Long sessionId);
 
+    // 课程进度初始化时锁住会话，防止并发请求分别写入不同的课程快照。
+    @Select("select id, course_id as courseId, user_id as userId, " +
+            "session_title as sessionTitle, status, created_at as createdAt, " +
+            "updated_at as updatedAt from learning_sessions where id = #{sessionId} FOR UPDATE")
+    Optional<LearningSession> findSessionForUpdate(@Param("sessionId") Long sessionId);
+
     // 完成学习会话
     @Update("update learning_sessions set status = #{status}, updated_at = #{updatedAt} " +
             "where id = #{id}")

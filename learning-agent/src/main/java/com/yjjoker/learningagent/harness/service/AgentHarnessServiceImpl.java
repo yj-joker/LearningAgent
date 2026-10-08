@@ -53,6 +53,8 @@ import com.yjjoker.learningagent.harness.plan.service.GoalIntentRecognitionServi
 import com.yjjoker.learningagent.vo.AgentRunResult;
 import com.yjjoker.learningagent.vo.LearningPlanProgressVO;
 import com.yjjoker.learningagent.service.LearningPlanProgressService;
+import com.yjjoker.learningagent.service.CourseLearningProgressService;
+import com.yjjoker.learningagent.harness.course.CourseLearningRunContext;
 import com.yjjoker.learningagent.harness.memory.service.MemoryApprovalService;
 import com.yjjoker.learningagent.harness.memory.service.MemoryReferenceRegistry;
 import com.yjjoker.learningagent.harness.memory.service.StructuredMemoryService;
@@ -145,6 +147,12 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
     // 读取长期学习计划的步骤进度；本轮只读一次，不让模型直接修改数据库。
     @org.springframework.beans.factory.annotation.Autowired
     private LearningPlanProgressService learningPlanProgressService;
+
+    // 课程模式读取已有进度，不调用个人计划规划器；工具共用本轮课程范围。
+    @org.springframework.beans.factory.annotation.Autowired
+    private CourseLearningProgressService courseLearningProgressService;
+    @org.springframework.beans.factory.annotation.Autowired
+    private CourseLearningRunContext courseLearningRunContext;
 
     // Spring 注入生产依赖；结构化记忆从这里进入 Agent Loop。
     @org.springframework.beans.factory.annotation.Autowired
@@ -253,6 +261,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             context.bindSession(BaseContext.getCurrentId(), sessionId);
             // 同一会话的暂停任务必须先恢复，不能另开聊天把原工具请求遗忘。
             agentApprovalService.requireSessionAvailable(sessionId);
+            // 用户先显式初始化课程进度；聊天只读取，不偷偷写入新的课程范围。
+            if (mode == AgentMode.COURSE) {
+                courseLearningRunContext.bind(courseLearningProgressService.load(sessionId), userMessage);
+            }
             log.info("Agent 模式已确定，runId={}，sessionId={}，mode={}", context.getRunId(), sessionId, mode);
             // 专注模式先识别一次用户意图，后续 Hook 和工具共用固定快照。
             GoalIntent goalIntent = mode == AgentMode.FOCUS
@@ -288,6 +300,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             memoryReferenceRegistry.clear();
             sessionGoalContext.clear();
             skillRunContext.clear();
+            if (courseLearningRunContext != null) courseLearningRunContext.clear();
         }
     }
 
@@ -307,6 +320,16 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             skillRunContext.restore(checkpoint.getLoadedSkills());
             AgentMode mode = checkpoint.getMode() == null ? AgentMode.CHAT : checkpoint.getMode();
             context.bindMode(mode);
+            // 恢复原课程快照前重新校验当前访问权限，不能借审批绕过会话归属。
+            if (mode == AgentMode.COURSE) {
+                var snapshot = checkpoint.getCourseProgress();
+                var latest = courseLearningProgressService.load(run.getSessionId());
+                if (snapshot == null || !Objects.equals(snapshot.getSessionId(), run.getSessionId())
+                        || !Objects.equals(snapshot.getCourseId(), latest.getCourseId())) {
+                    throw new IllegalStateException("课程检查点缺少有效课程快照");
+                }
+                courseLearningRunContext.bind(snapshot, checkpoint.getUserMessage());
+            }
             log.info("Agent 恢复原模式，runId={}，sessionId={}，mode={}", runId, run.getSessionId(), mode);
             originalToolResultStore.beginSession(run.getSessionId(), mode);
             // 恢复原编号和当时的目标版本，而不是重新加载索引后从 memory_1 编号。
@@ -358,6 +381,7 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             memoryReferenceRegistry.clear();
             sessionGoalContext.clear();
             skillRunContext.clear();
+            if (courseLearningRunContext != null) courseLearningRunContext.clear();
         }
     }
 
@@ -464,6 +488,11 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
 
     // 统一从当前专注快照生成 HTTP 正式进度；模型回答只负责解释，不负责改写状态。
     private AgentRunResult completedResult(AgentRunContext context, String answer) {
+        if (context.getMode() == AgentMode.COURSE) {
+            // 每次回答都返回同一后端课程事实，页面可以直接更新当前知识点。
+            return AgentRunResult.completedCourse(context.getRunId(), answer,
+                    courseLearningRunContext.require());
+        }
         SessionGoalProgress progress = context.getMode() == AgentMode.FOCUS
                 ? SessionGoalProgress.from(sessionGoalContext.require()) : null;
         log.info("Agent 正式回答附带进度快照，runId={}，mode={}，hasProgress={}",
@@ -605,7 +634,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                         context.getMode() == AgentMode.FOCUS
                                 ? sessionGoalContext.getLearningPlanProgress() : null,
                         context.getMode() == AgentMode.FOCUS
-                                ? sessionGoalContext.require().getCurrentPlan().getLearningPlanStageRef() : null);
+                                ? sessionGoalContext.require().getCurrentPlan().getLearningPlanStageRef() : null,
+                        context.getMode() == AgentMode.COURSE ? courseLearningRunContext.require() : null);
                 FinalAnswerHookResult finalAnswerCheck = correctionFailed
                         ? FinalAnswerHookResult.replaceAnswer(FinalAnswerConsistencyHook.SAFE_ANSWER)
                         : notifyBeforeFinalAnswer(context, reviewRequest);
@@ -742,6 +772,10 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
                     checkpoint.setMode(context.getMode());
                     checkpoint.setSystemPromptBase(systemPromptBase);
                     checkpoint.setLoadedSkills(skillRunContext.snapshot());
+                    // 通用工具审批也可能发生在课程模式，保存范围供恢复继续教学。
+                    if (context.getMode() == AgentMode.COURSE) {
+                        checkpoint.setCourseProgress(courseLearningRunContext.require());
+                    }
                     if (context.getMode() == AgentMode.FOCUS) {
                         checkpoint.setGoalSnapshot(sessionGoalContext.require());
                         checkpoint.setGoalIntent(sessionGoalContext.getGoalIntent());
@@ -1004,6 +1038,8 @@ public class AgentHarnessServiceImpl implements AgentHarnessService {
             appendLearningPlan(prompt, sessionGoalContext.getLearningPlan());
             appendLearningPlanProgress(prompt, sessionGoalContext.getLearningPlanProgress());
         }
+        // 课程和个人计划互斥注入，课程不生成额外短计划或使用旧专注目标。
+        if (mode == AgentMode.COURSE) courseLearningRunContext.appendPrompt(prompt);
         // 索引常驻、正文按需；技能不会发给独立的规划、审查或记忆提取模型。
         skillRunContext.appendPrompt(prompt);
         messages.set(0, LlmMessage.system(prompt.toString()));

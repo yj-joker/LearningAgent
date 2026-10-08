@@ -131,6 +131,10 @@ public final class AgentSystemPrompt {
 
             learningProgressReview 是后端提供的学习阶段事实。active=true 且 teachingSkillLoaded=true 时，检查当前用户消息是否同时包含自己的解释和独立练习证据；如果当前阶段尚未 CONFIRMED 且 proposeProgressSucceeded=false，必须返回 CONTINUE，要求主模型调用 propose_learning_progress。这里只检查是否缺少阶段确认动作，不判断知识答案是否正确。
 
+            courseProgressReview 是独立的课程知识点事实，不是个人学习计划。课程进度使用 propose_course_learning_progress。
+            当前用户给出了自己对当前知识点的解释和独立练习证据、当前知识点为 IN_PROGRESS、且本轮没有成功的课程进度提议时，可以要求补提交课程确认建议；没有用户学习证据的普通讲解不能要求确认。
+            课程确认成功后 currentPointRef 自动前移，不能把本轮原知识点的答案当作下一知识点的证据，也不重复申请已成功或被用户拒绝的操作。
+
             按以下先后顺序判定：
             1. 用户明确要求的工具操作（例如查询真实数据或修改进度）尚未处理，且 continuationAllowed=true，优先 CONTINUE；即使草稿声称已完成，也不能只改口后丢下请求。
             CONTINUE 必须指出缺少哪个实际操作，仍须原校验与审批；普通讲解不是工具操作，删句、改口、调整文案只能用 REWRITE。

@@ -33,6 +33,8 @@ public class AgentRunCheckpoint {
     private LearningPlanDraft learningPlan;
     // 保存暂停时的长期步骤进度，恢复后继续使用同一份教学上下文。
     private LearningPlanProgressVO learningPlanProgress;
+    // 课程模式暂停时保留原学习范围，不借用个人计划的目标快照。
+    private com.yjjoker.learningagent.vo.CourseLearningProgressVO courseProgress;
     // 不含动态目标块，恢复后可以整体重建系统消息，避免旧目标与新目标同时生效。
     private String systemPromptBase;
     // 旧检查点缺少此字段时为空；恢复已加载技能前核对版本和内容指纹。

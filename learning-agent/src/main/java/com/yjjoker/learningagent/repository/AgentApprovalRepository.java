@@ -58,8 +58,15 @@ public interface AgentApprovalRepository {
     int transition(@Param("runId") String runId, @Param("userId") Long userId,
                    @Param("expected") String expected, @Param("next") String next);
 
-    // 完成状态、答案和检查点清理一起提交；保留空 JSON 以兼容现有非空列，不再保留上下文正文。
+    // 完成状态、答案和检查点清理一起提交；只保留模式元数据，不再保留上下文正文。
     // 服务层在同一事务保存聊天消息，保存失败时清理也会回滚，重复恢复只读取 answer。
+    @Update("UPDATE agent_approval_runs SET status='COMPLETED',answer=#{answer}," +
+            "checkpoint_json=JSON_OBJECT('mode',#{mode}),updated_at=CURRENT_TIMESTAMP(6) " +
+            "WHERE run_id=#{runId} AND user_id=#{userId} AND status='RUNNING'")
+    int completeWithMode(@Param("runId") String runId, @Param("userId") Long userId,
+                         @Param("answer") String answer, @Param("mode") String mode);
+
+    // 保留旧测试替身使用的三参数方法；生产代码必须使用上面的带模式方法。
     @Update("UPDATE agent_approval_runs SET status='COMPLETED',answer=#{answer},checkpoint_json=JSON_OBJECT(),updated_at=CURRENT_TIMESTAMP(6) " +
             "WHERE run_id=#{runId} AND user_id=#{userId} AND status='RUNNING'")
     int complete(@Param("runId") String runId, @Param("userId") Long userId, @Param("answer") String answer);

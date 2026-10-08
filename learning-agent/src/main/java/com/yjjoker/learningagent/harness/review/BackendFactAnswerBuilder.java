@@ -3,6 +3,7 @@ package com.yjjoker.learningagent.harness.review;
 import com.yjjoker.learningagent.harness.hook.AgentRunContext;
 import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.tool.ToolExecutionRecord;
+import com.yjjoker.learningagent.vo.CourseLearningProgressVO;
 
 import java.util.List;
 
@@ -17,13 +18,27 @@ public final class BackendFactAnswerBuilder {
 
     // 给出保护原因，并列出已确认的工具状态和当前阶段状态。
     public static String build(AgentRunContext context, SessionGoalProgress progress, String reason) {
+        return build(context, progress, null, reason);
+    }
+
+    // 审查不可用时也展示课程真实状态，不把已提交的课程变更说成未知。
+    public static String build(AgentRunContext context, SessionGoalProgress progress,
+                               CourseLearningProgressVO courseProgress, String reason) {
         StringBuilder answer = new StringBuilder("本轮未能核实模型的最终回答，因此不会展示未经确认的结论。");
         if (reason != null && !reason.isBlank()) {
             answer.append("原因：").append(limit(reason, MAX_FACT_TEXT)).append("。");
         }
         appendToolFacts(answer, context == null ? List.of() : context.getToolExecutions());
         appendProgressFacts(answer, progress);
-        if ((context == null || context.getToolExecutions().isEmpty()) && !hasSteps(progress)) {
+        if (courseProgress != null) {
+            answer.append("课程：").append(limit(courseProgress.getCourseName(), MAX_FACT_TEXT))
+                    .append("；课程状态：").append(courseProgress.getStatus()).append("。知识点状态：");
+            // 只列有界数量的状态，完整课程范围仍通过进度接口读取。
+            courseProgress.getPoints().stream().limit(MAX_VISIBLE_STEPS).forEach(point -> answer
+                    .append(limit(point.getKnowledgePointName(), MAX_FACT_TEXT)).append("：")
+                    .append(point.getStatus()).append("；"));
+        }
+        if ((context == null || context.getToolExecutions().isEmpty()) && !hasSteps(progress) && courseProgress == null) {
             answer.append("本轮没有可展示的工具执行记录或专注进度快照。");
         }
         answer.append("以上状态来自后端记录；未列出的操作不能视为已执行。");

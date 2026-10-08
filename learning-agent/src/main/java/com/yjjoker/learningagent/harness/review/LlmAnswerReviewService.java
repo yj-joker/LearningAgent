@@ -54,7 +54,7 @@ public class LlmAnswerReviewService implements AnswerReviewService {
     public AnswerReviewResult review(AgentRunContext context, AnswerReviewRequest request) {
         long started = System.nanoTime();
         try {
-            if (!context.hasCompleteToolHistory() || request.getProgress() == null) {
+            if (!context.hasCompleteToolHistory() || (request.getProgress() == null && request.getCourseProgress() == null)) {
                 throw new IllegalStateException("审查缺少完整执行事实");
             }
             String input = buildInput(context, request);
@@ -118,6 +118,7 @@ public class LlmAnswerReviewService implements AnswerReviewService {
         // 后端决定是否允许补调用；审查只能建议动作，不能覆盖真实拒绝。
         root.put("continuationAllowed", !context.hasBlockingToolOutcome());
         appendLearningReviewFacts(root, context, request);
+        appendCourseReviewFacts(root, context, request);
         var approvals = root.putArray("userApprovalEvents");
         var tools = root.putArray("toolExecutions");
         for (ToolExecutionRecord record : context.getToolExecutions()) {
@@ -151,10 +152,39 @@ public class LlmAnswerReviewService implements AnswerReviewService {
             }
         }
         // 最后给出执行后的当前状态和待核对草稿，不让输入参数的旧版本冒充最新状态。
-        root.set("databaseProgress", progressFacts(request.getProgress()));
+        if (request.getProgress() != null) root.set("databaseProgress", progressFacts(request.getProgress()));
         appendDialogue(root, request.getDialogue());
         root.put("draftAnswer", request.getDraftAnswer());
         return root.toString();
+    }
+
+    // 课程确认后游标会前移；成功提议是本轮原知识点的操作，不要求用旧答案确认下一知识点。
+    private void appendCourseReviewFacts(ObjectNode root, AgentRunContext context, AnswerReviewRequest request) {
+        var progress = request.getCourseProgress();
+        ObjectNode facts = root.putObject("courseProgressReview");
+        facts.put("active", progress != null);
+        if (progress == null) return;
+        facts.put("courseName", progress.getCourseName());
+        facts.put("completed", progress.isCompleted());
+        facts.put("teachingSkillLoaded", hasSuccessfulTool(context, "load_skill"));
+        facts.put("proposeProgressSucceeded", hasSuccessfulTool(context, "propose_course_learning_progress"));
+        var points = facts.putArray("points");
+        for (var point : progress.getPoints()) {
+            ObjectNode item = points.addObject();
+            item.put("pointRef", "point-" + point.getKnowledgePointId());
+            item.put("name", point.getKnowledgePointName());
+            item.put("status", point.getStatus().name());
+            item.put("version", point.getVersion());
+        }
+        // 仅当前知识点需要正文；其他项使用完整状态索引核对完成声明。
+        progress.getPoints().stream().filter(point -> java.util.Objects.equals(
+                point.getKnowledgePointId(), progress.getCurrentKnowledgePointId())).findFirst().ifPresent(point -> {
+            facts.put("currentPointRef", "point-" + point.getKnowledgePointId());
+            facts.put("currentPointStatus", point.getStatus().name());
+            putExcerpt(facts, "currentPointDescription", point.getKnowledgePointDescription(), 2000);
+        });
+        log.info("课程审查事实已组装，runId={}，pointCount={}，completed={}",
+                context.getRunId(), progress.getPoints().size(), progress.isCompleted());
     }
 
     // 把学习阶段的后端事实单独交给审查模型，避免它把短期任务步骤当成长阶段状态。

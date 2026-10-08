@@ -8,8 +8,10 @@ import com.yjjoker.learningagent.harness.model.AgentRunStatus;
 import com.yjjoker.learningagent.repository.AgentApprovalRepository;
 import com.yjjoker.learningagent.repository.LearningSessionRepository;
 import com.yjjoker.learningagent.projectenum.LearningSessionStatusEnum;
+import com.yjjoker.learningagent.service.CourseLearningProgressService;
 import com.yjjoker.learningagent.utils.BaseContext;
 import com.yjjoker.learningagent.vo.AgentRunResult;
+import com.yjjoker.learningagent.vo.CourseLearningProgressVO;
 import com.yjjoker.learningagent.harness.plan.dto.SessionGoalProgress;
 import com.yjjoker.learningagent.harness.plan.model.SessionGoalSnapshot;
 import com.yjjoker.learningagent.harness.plan.service.SessionGoalService;
@@ -35,6 +37,7 @@ public class AgentApprovalService {
     private final ConversationMemoryService history;
     private final ApprovalNotifier notifier;
     private final SessionGoalService sessionGoals;
+    private final CourseLearningProgressService courseProgresses;
 
     // 生产构造器显式标记，避免兼容测试构造器后 Spring 无法判断注入入口。
     @Autowired
@@ -42,12 +45,14 @@ public class AgentApprovalService {
                                 LearningSessionRepository sessions,
                                 ConversationMemoryService history,
                                 ApprovalNotifier notifier,
-                                SessionGoalService sessionGoals) {
+                                SessionGoalService sessionGoals,
+                                CourseLearningProgressService courseProgresses) {
         this.repository = repository;
         this.sessions = sessions;
         this.history = history;
         this.notifier = notifier;
         this.sessionGoals = sessionGoals;
+        this.courseProgresses = courseProgresses;
     }
 
     // 保留旧测试和扩展代码使用的四参数构造器；生产环境由 Spring 注入带目标服务的构造器。
@@ -55,7 +60,7 @@ public class AgentApprovalService {
                                 LearningSessionRepository sessions,
                                 ConversationMemoryService history,
                                 ApprovalNotifier notifier) {
-        this(repository, sessions, history, notifier, null);
+        this(repository, sessions, history, notifier, null, null);
     }
 
     // 整批预检完成后一次保存；不执行工具，不调用模型，不持锁等待用户。
@@ -192,7 +197,13 @@ public class AgentApprovalService {
         if (agentMode == null) {
             throw new ClientDataErrorException("任务模式不能为空");
         }
-        requireOne(repository.complete(runId, run.getUserId(), answer));
+        int completed = repository.completeWithMode(runId, run.getUserId(), answer,
+                agentMode.name());
+        // 只有没有生产课程服务的旧测试构造器才走兼容方法，生产环境不会丢失模式元数据。
+        if (completed != 1 && courseProgresses == null) {
+            completed = repository.complete(runId, run.getUserId(), answer);
+        }
+        requireOne(completed);
         history.appendMessages(sessionId, agentMode, messages);
         // 历史和完成状态一起提交，前端收到通知后才会读取最终回答。
         notifier.changedAfterCommit(run.getUserId());
@@ -242,8 +253,35 @@ public class AgentApprovalService {
             case RUNNING -> "原任务正在继续执行，请勿重复提交。";
             case FAILED -> "恢复任务已失败，未自动重跑工具，请检查执行日志。";
         };
+        CourseLearningProgressVO courseProgress = courseProgressOf(run);
+        if (courseProgress != null) {
+            return AgentRunResult.stateCourse(run.getRunId(), run.getBatchNumber(), run.getStatus(), answer,
+                    repository.approvals(run.getRunId(), run.getBatchNumber()), courseProgress);
+        }
         return AgentRunResult.state(run.getRunId(), run.getBatchNumber(), run.getStatus(), answer,
                 repository.approvals(run.getRunId(), run.getBatchNumber()), progressOf(run));
+    }
+
+    // 课程等待状态优先展示暂停时的快照，避免审批期间课程事实变化造成页面误导。
+    private CourseLearningProgressVO courseProgressOf(AgentApprovalRun run) {
+        if (run.getCheckpointJson() == null || run.getCheckpointJson().isBlank()) return null;
+        try {
+            AgentRunCheckpoint checkpoint = JSON.readValue(run.getCheckpointJson(), AgentRunCheckpoint.class);
+            if (checkpoint.getMode() != AgentMode.COURSE) {
+                return null;
+            }
+            // 等待审批时使用暂停快照；正文清理后读取当前课程事实，不读取个人计划。
+            if (checkpoint.getCourseProgress() != null) {
+                return checkpoint.getCourseProgress();
+            }
+            if (courseProgresses == null) {
+                return null;
+            }
+            return courseProgresses.load(run.getSessionId());
+        } catch (RuntimeException exception) {
+            log.warn("课程审批快照读取失败，runId={}，errorType={}", run.getRunId(), exception.getClass().getSimpleName());
+            return null;
+        }
     }
 
     // 等待审批时优先读取检查点；检查点清理后再读取当前数据库状态供页面展示。
@@ -251,11 +289,21 @@ public class AgentApprovalService {
         if (run.getCheckpointJson() != null && !run.getCheckpointJson().isBlank()) {
             try {
                 AgentRunCheckpoint checkpoint = JSON.readValue(run.getCheckpointJson(), AgentRunCheckpoint.class);
+                // 课程任务不能回退读取同一会话里的个人专注目标。
+                if (checkpoint.getMode() == AgentMode.COURSE) {
+                    return null;
+                }
                 SessionGoalSnapshot snapshot = checkpoint.getGoalSnapshot();
                 if (snapshot != null) return SessionGoalProgress.from(snapshot);
             } catch (RuntimeException exception) {
                 log.warn("审批进度检查点读取失败，runId={}，errorType={}", run.getRunId(), exception.getClass().getSimpleName());
             }
+        }
+        // 已完成的旧任务只保留空检查点，不能根据会话猜测个人目标。
+        if (run.getStatus() == AgentRunStatus.COMPLETED
+                && (run.getCheckpointJson() == null || run.getCheckpointJson().isBlank()
+                || "{}".equals(run.getCheckpointJson().trim()))) {
+            return null;
         }
         // 写事务中只使用检查点里的进度，不再为页面展示调用可能失败的目标读取。
         // 目标读取异常如果污染当前事务，会把已经保存成功的审批一起回滚。

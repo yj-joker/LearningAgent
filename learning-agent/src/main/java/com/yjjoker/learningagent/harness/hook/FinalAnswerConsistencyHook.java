@@ -19,10 +19,12 @@ public class FinalAnswerConsistencyHook implements AgentHook {
                     + "已经执行的操作不会因审查失败而自动撤销。";
     private final AnswerReviewService reviewService;
 
-    // 普通问答保持原行为；所有专注模式拟回复都审查，不按调用过的工具筛选。
+    // 普通问答保持原行为；专注和课程模式都核对拟回复，不漏掉零工具的完成声明。
     @Override
     public FinalAnswerHookResult beforeFinalAnswer(AgentRunContext context, AnswerReviewRequest request) {
-        if (context.getMode() != AgentMode.FOCUS) return FinalAnswerHookResult.allow();
+        if (context.getMode() != AgentMode.FOCUS && context.getMode() != AgentMode.COURSE) {
+            return FinalAnswerHookResult.allow();
+        }
         AnswerReviewResult result;
         try {
             result = reviewService.review(context, request);
@@ -31,18 +33,21 @@ public class FinalAnswerConsistencyHook implements AgentHook {
             log.warn("审查服务异常，使用保守回答，runId={}，errorType={}",
                     context.getRunId(), exception.getClass().getSimpleName());
             return FinalAnswerHookResult.replaceAnswer(BackendFactAnswerBuilder.build(context,
-                    request == null ? null : request.getProgress(), "审查服务异常"));
+                    request == null ? null : request.getProgress(),
+                    request == null ? null : request.getCourseProgress(), "审查服务异常"));
         }
         if (result == null || result.getAction() == null
                 || result.getAction() == AnswerReviewResult.Action.UNAVAILABLE) {
             return FinalAnswerHookResult.replaceAnswer(BackendFactAnswerBuilder.build(context,
-                    request == null ? null : request.getProgress(), "审查结果不可用"));
+                    request == null ? null : request.getProgress(),
+                    request == null ? null : request.getCourseProgress(), "审查结果不可用"));
         }
         if (result.getAction() == AnswerReviewResult.Action.PASS) return FinalAnswerHookResult.allow();
         if (!context.tryUseAnswerReviewCorrection()) {
             log.warn("回答审查纠正次数已用尽，runId={}，action={}", context.getRunId(), result.getAction());
             return FinalAnswerHookResult.replaceAnswer(BackendFactAnswerBuilder.build(context,
-                    request == null ? null : request.getProgress(), "回答纠正次数已用尽"));
+                    request == null ? null : request.getProgress(),
+                    request == null ? null : request.getCourseProgress(), "回答纠正次数已用尽"));
         }
         // 参数可修正时允许补调用；用户拒绝、权限限制和未知结果仍然阻止执行。
         boolean blocked = context.hasBlockingToolOutcome();

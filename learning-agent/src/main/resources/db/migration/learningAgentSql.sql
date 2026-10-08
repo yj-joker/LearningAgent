@@ -71,6 +71,38 @@ CREATE TABLE IF NOT EXISTS learning_sessions (
   COLLATE = utf8mb4_unicode_ci
     COMMENT = '学习会话表';
 
+-- 课程学习进度：每个知识点一行，当前知识点由最先未确认的记录推导，不依赖模型记忆。
+CREATE TABLE IF NOT EXISTS course_learning_point_progress (
+    session_id BIGINT UNSIGNED NOT NULL COMMENT '学习会话 ID，逻辑外键',
+    course_id BIGINT UNSIGNED NOT NULL COMMENT '课程 ID，逻辑外键',
+    chapter_id BIGINT UNSIGNED NOT NULL COMMENT '章节 ID，逻辑外键',
+    knowledge_point_id BIGINT UNSIGNED NOT NULL COMMENT '知识点 ID，逻辑外键',
+    chapter_sort_order_snapshot INT UNSIGNED NOT NULL COMMENT '初始化时的章节顺序快照',
+    knowledge_point_sort_order_snapshot INT UNSIGNED NOT NULL COMMENT '初始化时的知识点顺序快照',
+    status VARCHAR(20) NOT NULL DEFAULT 'NOT_STARTED' COMMENT '知识点状态',
+    evidence_type VARCHAR(20) NULL COMMENT 'EXPLANATION、EXERCISE 或 BOTH',
+    evidence_summary VARCHAR(2000) NULL COMMENT '已记录的学习证据摘要',
+    assessment_reason VARCHAR(2000) NULL COMMENT '掌握判断理由，仅作为审批说明',
+    course_updated_at_snapshot DATETIME NULL COMMENT '初始化进度时的课程更新时间快照',
+    chapter_title_snapshot VARCHAR(255) NOT NULL COMMENT '初始化进度时的章节标题快照',
+    knowledge_point_name_snapshot VARCHAR(255) NOT NULL COMMENT '初始化进度时的知识点名称快照',
+    knowledge_point_description_snapshot LONGTEXT NULL COMMENT '初始化进度时的完整知识点描述快照',
+    version BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '进度记录乐观锁版本',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (session_id, knowledge_point_id),
+    KEY idx_course_learning_progress_session_order (session_id, chapter_id, knowledge_point_id),
+    KEY idx_course_learning_progress_course (course_id, knowledge_point_id),
+    CONSTRAINT chk_course_learning_progress_status
+        CHECK (status IN ('NOT_STARTED', 'IN_PROGRESS', 'CONFIRMED')),
+    CONSTRAINT chk_course_learning_progress_evidence
+        CHECK (evidence_type IS NULL OR evidence_type IN ('EXPLANATION', 'EXERCISE', 'BOTH')),
+    CONSTRAINT chk_course_learning_progress_version CHECK (version >= 1)
+) ENGINE = InnoDB
+  DEFAULT CHARSET = utf8mb4
+  COLLATE = utf8mb4_unicode_ci
+    COMMENT = '课程知识点学习进度';
+
 -- 任务计划：只保存目标与限制，不复制聊天历史，也不依赖已经产生审批记录。
 CREATE TABLE IF NOT EXISTS agent_task_plans (
     plan_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '独立计划编号，跨多次执行保留',
@@ -310,7 +342,7 @@ CREATE TABLE IF NOT EXISTS agent_approval_runs (
     session_id BIGINT UNSIGNED NOT NULL,
     batch_number INT UNSIGNED NOT NULL COMMENT '每次暂停加一，旧批准不能授权新批次',
     status VARCHAR(32) NOT NULL,
-    checkpoint_json JSON NOT NULL COMMENT '完整消息、待执行请求、引用映射、预算与已执行轨迹',
+    checkpoint_json JSON NOT NULL COMMENT '暂停时保存完整上下文，完成后只保留模式元数据',
     answer MEDIUMTEXT NULL COMMENT '最终答案，重复恢复直接返回',
     active_session_id BIGINT UNSIGNED GENERATED ALWAYS AS
         (CASE WHEN status IN ('WAITING_APPROVAL','APPROVAL_RESOLVED','RUNNING') THEN session_id ELSE NULL END) STORED,
@@ -344,7 +376,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_approvals (
 CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '消息主键',
                                                         session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
-                                                        agent_mode VARCHAR(16) DEFAULT NULL COMMENT '上下文来源模式：CHAT 或 FOCUS；NULL 表示旧记录未分类',
+                                                        agent_mode VARCHAR(16) DEFAULT NULL COMMENT '上下文来源模式：CHAT、FOCUS 或 COURSE；NULL 表示旧记录未分类',
                                                         role VARCHAR(20) NOT NULL COMMENT '消息角色：USER、ASSISTANT、TOOL',
                                                         content LONGTEXT DEFAULT NULL COMMENT '消息正文或工具执行结果',
                                                         context_content LONGTEXT DEFAULT NULL COMMENT '发送给模型的工具结果压缩副本',
@@ -360,7 +392,7 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
                                                         CONSTRAINT chk_learning_session_messages_role
                                                             CHECK (role IN ('USER', 'ASSISTANT', 'TOOL')),
                                                         CONSTRAINT chk_learning_session_messages_mode
-                                                            CHECK (agent_mode IS NULL OR agent_mode IN ('CHAT', 'FOCUS'))
+                                                            CHECK (agent_mode IS NULL OR agent_mode IN ('CHAT', 'FOCUS', 'COURSE'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
@@ -370,7 +402,7 @@ CREATE TABLE IF NOT EXISTS learning_session_messages (
 CREATE TABLE IF NOT EXISTS learning_session_summaries (
                                                         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '摘要主键',
                                                         session_id BIGINT UNSIGNED NOT NULL COMMENT '所属学习会话 ID，逻辑外键',
-                                                        agent_mode VARCHAR(16) NOT NULL COMMENT '摘要覆盖的上下文模式：CHAT 或 FOCUS',
+                                                        agent_mode VARCHAR(16) NOT NULL COMMENT '摘要覆盖的上下文模式：CHAT、FOCUS 或 COURSE',
                                                         summary_content LONGTEXT NOT NULL COMMENT '发送给模型的历史摘要',
                                                         covered_until_message_id BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '摘要覆盖到的消息主键',
                                                         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '摘要生成时间',
@@ -378,7 +410,7 @@ CREATE TABLE IF NOT EXISTS learning_session_summaries (
                                                         PRIMARY KEY (id),
                                                         KEY idx_session_summaries_session_mode_id (session_id, agent_mode, id),
                                                         CONSTRAINT chk_learning_session_summaries_mode
-                                                            CHECK (agent_mode IN ('CHAT', 'FOCUS'))
+                                                            CHECK (agent_mode IN ('CHAT', 'FOCUS', 'COURSE'))
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci
