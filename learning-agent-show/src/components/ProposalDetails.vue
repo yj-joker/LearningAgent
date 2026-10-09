@@ -57,7 +57,7 @@ const translatedFields = new Set(['operation', 'scope', 'status', 'targetStatus'
 const values: Record<string, string> = {
   CREATE: '新增', UPDATE: '修改', DELETE: '删除', USER: '长期记忆', SESSION: '当前会话',
   PENDING: '待确认', APPROVED: '已同意', REJECTED: '已拒绝', STALE: '已失效',
-  ACTIVE: '已生效', DRAFT: '草案', ARCHIVED: '已归档',
+  ACTIVE: '已生效', DRAFT: '未生效', ARCHIVED: '已归档',
   NOT_STARTED: '未开始', IN_PROGRESS: '进行中', CONFIRMED: '已确认掌握',
   REVIEW_REQUIRED: '需要复核', REMOVED: '已移除', COMPLETED: '已完成', BLOCKED: '遇到阻碍',
   CANCELED: '已取消', WAITING_APPROVAL: '等待审批', APPROVAL_RESOLVED: '待继续执行',
