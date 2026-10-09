@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Bot, CheckCircle2, MessageSquareText, Play, Plus, RefreshCw, Search, Target, Trash2 } from 'lucide-vue-next'
+import { Bot, CheckCircle2, Play, RefreshCw, Search, Trash2 } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
-import { completeSession, createSession, deleteLearningSession, listSessions } from '@/api/sessions'
+import { completeSession, deleteLearningSession, listSessions } from '@/api/sessions'
 import { useActivity } from '@/composables/useActivity'
-import { useCourses } from '@/composables/useCourses'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import type { LearningSessionVO } from '@/types/api'
@@ -16,20 +15,15 @@ import type { LearningSessionVO } from '@/types/api'
 const route = useRoute()
 const router = useRouter()
 const { addActivity, removeSessionActivities } = useActivity()
-const { courses: knownCourses } = useCourses()
 const { currentUser } = useAuth()
 const { showToast } = useToast()
 
 const sessions = ref<LearningSessionVO[]>([])
 const loading = ref(false)
 const loadError = ref('')
-const createOpen = ref(false)
-const creating = ref(false)
 const completingId = ref<string | null>(null)
 const deletingSessionId = ref<string | null>(null)
 const deleteTarget = ref<{ id: string; title: string } | null>(null)
-const errors = reactive({ courseId: '', sessionTitle: '' })
-const form = reactive({ courseId: '', sessionTitle: '' })
 const search = ref('')
 const statusFilter = ref('ALL')
 const modeFilter = ref('ALL')
@@ -44,8 +38,7 @@ const filteredSessions = computed(() => sessions.value.filter(item =>
   && (statusFilter.value === 'ALL' || item.sessionStatus === statusFilter.value)
   && (modeFilter.value === 'ALL' || sessionMode(item) === modeFilter.value)
   && `${item.sessionTitle} ${item.courseName ?? ''}`.toLowerCase().includes(search.value.trim().toLowerCase())))
-const selectedCourse = computed(() => knownCourses.value.find(course => course.courseId === form.courseId) ?? null)
-const mutationPending = computed(() => creating.value || Boolean(completingId.value) || Boolean(deletingSessionId.value))
+const mutationPending = computed(() => Boolean(completingId.value) || Boolean(deletingSessionId.value))
 
 // 会话列表以数据库为准；较早的请求不能覆盖刷新结果或新账号的数据。
 async function loadSessions() {
@@ -80,15 +73,9 @@ watch(() => currentUser.value?.token, token => {
   sessions.value = []
   loadError.value = ''
   loading.value = false
-  createOpen.value = false
-  creating.value = false
   completingId.value = null
   deletingSessionId.value = null
   deleteTarget.value = null
-  form.courseId = ''
-  form.sessionTitle = ''
-  errors.courseId = ''
-  errors.sessionTitle = ''
   search.value = ''
   statusFilter.value = 'ALL'
   modeFilter.value = 'ALL'
@@ -97,8 +84,7 @@ watch(() => currentUser.value?.token, token => {
 
 watch(() => route.query.create, value => {
   if (value === '1') {
-    createOpen.value = true
-    void router.replace({ query: {} })
+    void router.replace({ name: 'agent-chat', query: { create: '1' } })
   }
 }, { immediate: true })
 
@@ -146,35 +132,6 @@ function formatTime(item: LearningSessionVO) {
   return Number.isNaN(date.getTime()) ? '时间未记录' : date.toLocaleString('zh-CN')
 }
 
-function validate() {
-  errors.courseId = selectedCourse.value ? '' : '请选择一门课程'
-  errors.sessionTitle = form.sessionTitle.trim() ? '' : '请输入学习目标'
-  return !errors.courseId && !errors.sessionTitle
-}
-
-// 课程仍通过原有创建接口开始；操作动态只供概览使用，不作为会话列表来源。
-async function submitCreate() {
-  if (mutationPending.value || !validate() || !selectedCourse.value || !currentUser.value?.token) return
-  const course = selectedCourse.value
-  const token = currentUser.value.token
-  const version = identityVersion
-  creating.value = true
-  try {
-    const result = await createSession({ courseId: course.courseId, sessionTitle: form.sessionTitle.trim() })
-    if (!isCurrentIdentity(version, token)) return
-    addActivity({ kind: 'session-created', title: result.sessionTitle, description: `课程：${course.courseName}`, status: result.sessionStatus ?? 'ACTIVE', resourceId: String(result.id) })
-    showToast('success', '学习会话已开始', `${result.sessionTitle} 正在进行中`)
-    form.courseId = ''
-    form.sessionTitle = ''
-    createOpen.value = false
-    await loadSessions()
-  } catch (error) {
-    if (isCurrentIdentity(version, token)) showToast('error', '创建失败', error instanceof ApiError ? error.message : '发生未知错误')
-  } finally {
-    if (isCurrentIdentity(version, token)) creating.value = false
-  }
-}
-
 async function finishSession(item: LearningSessionVO) {
   if (mutationPending.value || !currentUser.value?.token) return
   const id = String(item.id)
@@ -192,10 +149,6 @@ async function finishSession(item: LearningSessionVO) {
   } finally {
     if (isCurrentIdentity(version, token)) completingId.value = null
   }
-}
-
-function closeCreateDialog() {
-  if (!creating.value) createOpen.value = false
 }
 
 function closeDeleteDialog() {
@@ -227,7 +180,6 @@ async function confirmDeleteSession() {
   <div class="resource-view">
     <section class="page-heading">
       <div><span class="section-kicker">学习记录</span><h2>全部历史</h2><p class="session-heading-copy">课程学习、独立问答和专注学习的会话记录。</p></div>
-      <button class="button button-primary" :disabled="!knownCourses.length || mutationPending" @click="createOpen = true"><Plus :size="18" /> 开始课程学习</button>
     </section>
 
     <section class="panel session-history-panel" :aria-busy="loading">
@@ -262,17 +214,6 @@ async function confirmDeleteSession() {
       <div v-else class="session-empty-action"><EmptyState title="还没有学习会话" description="开始课程学习，或前往 AI 助教发起自由问答和专注学习。" /><RouterLink class="button button-secondary" :to="{ name: 'agent-chat-standalone' }"><Bot :size="16" /> 前往 AI 助教</RouterLink></div>
     </section>
 
-    <ModalDialog :open="createOpen" title="开始课程学习" description="选择课程并填写本次学习目标。" @close="closeCreateDialog">
-      <form class="form-layout" @submit.prevent="submitCreate">
-        <fieldset class="session-create-fields" :disabled="creating">
-          <div class="session-form-illustration"><span><Target :size="28" /></span><div><strong>本次学习目标</strong><p>目标尽量具体，并能在一次学习中完成。</p></div></div>
-          <div class="form-section"><label class="field-label" for="session-course">选择课程 <b>*</b></label><select id="session-course" v-model="form.courseId" class="form-select" autofocus @change="errors.courseId = ''"><option value="" disabled>请选择课程</option><option v-for="course in knownCourses" :key="course.courseId" :value="course.courseId">{{ course.courseName }}</option></select><span v-if="errors.courseId" class="field-error">{{ errors.courseId }}</span></div>
-          <div class="form-section"><label class="field-label" for="session-title">学习目标 <b>*</b></label><div class="input-with-icon"><MessageSquareText :size="18" /><input id="session-title" v-model="form.sessionTitle" class="form-input" placeholder="例如：理解 synchronized 的锁升级过程" @input="errors.sessionTitle = ''"></div><span v-if="errors.sessionTitle" class="field-error">{{ errors.sessionTitle }}</span></div>
-        </fieldset>
-        <footer class="form-actions"><button type="button" class="button button-secondary" :disabled="creating" @click="closeCreateDialog">取消</button><button class="button button-primary" :disabled="creating">{{ creating ? '创建中…' : '开始学习' }} <ArrowRight v-if="!creating" :size="17" /></button></footer>
-      </form>
-    </ModalDialog>
-
     <ModalDialog :open="Boolean(deleteTarget)" title="删除学习会话" :description="deleteTarget ? `确认删除“${deleteTarget.title}”？` : ''" @close="closeDeleteDialog">
       <div class="delete-chapter-confirm"><span><Trash2 :size="23" /></span><p>删除后，这个会话将不再显示在学习会话列表中。</p></div>
       <footer class="form-actions"><button type="button" class="button button-secondary" :disabled="Boolean(deletingSessionId)" @click="closeDeleteDialog">取消</button><button class="button chapter-delete-button" :disabled="Boolean(deletingSessionId)" @click="confirmDeleteSession">{{ deletingSessionId ? '删除中…' : '确认删除' }}</button></footer>
@@ -304,7 +245,6 @@ async function confirmDeleteSession() {
 .session-record-actions { flex-wrap: wrap; }
 .session-record-actions .button { min-height: 36px; font-size: 12px; }
 .session-record-actions .session-delete-button { width: 36px; height: 36px; padding: 0; color: #b34d4d; margin-left: auto; }
-.session-create-fields { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .session-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 200px; color: #73837b; font-size: 14px; }
 .session-load-error { display: flex; align-items: center; flex-direction: column; padding-bottom: 24px; }
 .spinning { animation: session-spin 1s linear infinite; }

@@ -75,7 +75,7 @@ const router = createRouter({
       path: '/learning-plans',
       name: 'learning-plans',
       component: () => import('@/views/LearningPlanDraftsView.vue'),
-      meta: { title: '学习计划草案', requiresUser: true },
+      meta: { title: '学习计划', requiresUser: true },
     },
     {
       path: '/login',

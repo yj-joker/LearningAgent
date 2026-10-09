@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS `learning_agent`;
 
 -- 用户表
-CREATE TABLE IF NOT EXISTS `users` (
+CREATE TABLE IF NOT EXISTS `user` (
                                        `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户主键',
                                        `username` VARCHAR(64) NOT NULL COMMENT '用户名',
                                        `password` VARCHAR(255) NOT NULL COMMENT '密码哈希值，不保存明文密码',

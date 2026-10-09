@@ -8,17 +8,17 @@ import type {
 
 const DRAFT_BASE = '/learning-agent/learning-plans/drafts'
 
-// 读取当前用户的全部未生效草案。
+// 读取当前用户的全部未生效计划。
 export function listLearningPlanDrafts() {
   return request<LearningPlanDraft[]>(DRAFT_BASE)
 }
 
-// 读取一份草案的完整步骤。
+// 读取一份计划的完整步骤。
 export function getLearningPlanDraft(draftRef: string) {
   return request<LearningPlanDraft>(`${DRAFT_BASE}/${encodeURIComponent(draftRef)}`)
 }
 
-// 手动创建草案；后端固定 source=MANUAL。
+// 手动创建计划；后端固定 source=MANUAL。
 export function createLearningPlanDraft(payload: LearningPlanDraftCreatePayload) {
   return request<LearningPlanDraft>(DRAFT_BASE, {
     method: 'POST',
@@ -26,7 +26,7 @@ export function createLearningPlanDraft(payload: LearningPlanDraftCreatePayload)
   })
 }
 
-// 按 expectedVersion 更新同一份草案，版本冲突由后端拒绝。
+// 按 expectedVersion 更新同一份计划，版本冲突由后端拒绝。
 export function updateLearningPlanDraft(draftRef: string, payload: LearningPlanDraftUpdatePayload) {
   return request<LearningPlanDraft>(`${DRAFT_BASE}/${encodeURIComponent(draftRef)}`, {
     method: 'PUT',
@@ -34,7 +34,7 @@ export function updateLearningPlanDraft(draftRef: string, payload: LearningPlanD
   })
 }
 
-// 用户明确确认后把同一份草案切换为正式计划。
+// 用户明确确认后把同一份计划切换为正式计划。
 export function activateLearningPlanDraft(draftRef: string, expectedVersion: number) {
   return request<LearningPlanDraft>(`${DRAFT_BASE}/${encodeURIComponent(draftRef)}/activate`, {
     method: 'POST',

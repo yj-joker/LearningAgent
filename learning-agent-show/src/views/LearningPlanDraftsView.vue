@@ -70,7 +70,7 @@ function discardAndSwitch() {
   else if (target) openDraft(target)
 }
 
-// 路由确认与切换草案分开保存，取消只终止这次导航，不会误切另一份草案。
+// 路由确认与切换计划分开保存，取消只终止这次导航，不会误切另一份计划。
 function finishLeave(leave: boolean) {
   const resolve = resolvePendingLeave
   resolvePendingLeave = null
@@ -111,7 +111,7 @@ function moveStep(index: number, direction: number) {
   if (step) form.steps.splice(next, 0, step)
 }
 
-// 从后端加载草案列表，重启后也能从数据库恢复页面状态。
+// 从后端加载计划列表，重启后也能从数据库恢复页面状态。
 async function loadDrafts(selectLatest = false) {
   loading.value = true
   errorMessage.value = ''
@@ -124,13 +124,13 @@ async function loadDrafts(selectLatest = false) {
       else if (!current && !dirty.value) resetForm()
     }
   } catch (error) {
-    errorMessage.value = error instanceof ApiError ? error.message : '草案加载失败，请稍后重试'
+    errorMessage.value = error instanceof ApiError ? error.message : '学习计划加载失败，请稍后重试'
   } finally {
     loading.value = false
   }
 }
 
-// 把后端草案复制到编辑表单；编辑过程不会立即改数据库。
+// 把后端计划复制到编辑表单；编辑过程不会立即改数据库。
 function openDraft(draft: LearningPlanDraft) {
   selectedRef.value = draft.draftRef
   form.title = draft.title
@@ -148,7 +148,7 @@ function openDraft(draft: LearningPlanDraft) {
   savedSnapshot.value = JSON.stringify(form)
 }
 
-// 清空表单，开始一份新的未生效草案。
+// 清空表单，开始一份新的未生效计划。
 function resetForm() {
   selectedRef.value = null
   form.title = ''
@@ -168,7 +168,7 @@ function addStep() {
   form.steps.push({ description: '', completionCriteria: '' })
 }
 
-// 删除步骤；至少保留一个步骤，避免保存空草案。
+// 删除步骤；至少保留一个步骤，避免保存空计划。
 function removeStep(index: number) {
   if (form.steps.length <= 1) return
   form.steps.splice(index, 1)
@@ -177,7 +177,7 @@ function removeStep(index: number) {
 // 检查页面输入，后端仍会做相同的长度和归属校验。
 function validate() {
   formError.value = ''
-  if (!form.title.trim()) formError.value = '请填写草案标题'
+  if (!form.title.trim()) formError.value = '请填写计划标题'
   else if (!form.objective.trim()) formError.value = '请填写总体学习目标'
   else if (!form.steps.length || form.steps.some((step) => !step.description.trim() || !step.completionCriteria.trim())) {
     formError.value = '每个步骤都需要填写内容和完成条件'
@@ -185,7 +185,7 @@ function validate() {
   return !formError.value
 }
 
-// 手动创建或更新草案；版本冲突时提示重新读取，避免覆盖 Agent 的修改。
+// 手动创建或更新计划；版本冲突时提示重新读取，避免覆盖 Agent 的修改。
 async function saveDraft() {
   if (saving.value || isArchived.value || leaveOpen.value || pendingSelection.value || !validate()) return
   saving.value = true
@@ -223,7 +223,7 @@ async function saveDraft() {
     drafts.value = [result, ...drafts.value.filter((draft) => draft.draftRef !== result.draftRef)]
     openDraft(result)
   } catch (error) {
-    showToast('error', '草案保存失败', error instanceof ApiError ? error.message : '请刷新后重试')
+    showToast('error', '学习计划保存失败', error instanceof ApiError ? error.message : '请刷新后重试')
     if (error instanceof ApiError && error.status === 409) await loadDrafts()
   } finally {
     saving.value = false
@@ -269,9 +269,9 @@ onBeforeUnmount(() => {
     <section class="page-heading">
       <div>
         <span class="section-kicker">长期学习规划</span>
-        <h2>学习计划草案</h2>
+        <h2>学习计划</h2>
       </div>
-      <button class="button button-primary" type="button" :disabled="saving" @click="requestSelection('NEW')"><Plus :size="17" /> 新建草案</button>
+      <button class="button button-primary" type="button" :disabled="saving" @click="requestSelection('NEW')"><Plus :size="17" /> 新建计划</button>
     </section>
 
     <p v-if="errorMessage" class="learning-plan-error">{{ errorMessage }}</p>
@@ -282,8 +282,8 @@ onBeforeUnmount(() => {
           <div><span class="section-kicker">已保存内容</span><h3>我的学习计划</h3></div>
           <div class="list-header-actions"><span class="count-pill">{{ drafts.length }} 份</span><button class="icon-button" type="button" title="刷新计划列表" aria-label="刷新计划列表" :disabled="loading || saving" @click="loadDrafts()"><RefreshCw :size="15" /></button></div>
         </div>
-        <div class="draft-list-tools"><label class="draft-search"><Search :size="16" /><input v-model="search" aria-label="搜索学习计划" placeholder="搜索标题或学习目标" /></label><select v-model="statusFilter" class="form-select" aria-label="筛选计划状态"><option value="ALL">全部状态</option><option value="DRAFT">未生效草案</option><option value="ACTIVE">已生效计划</option><option value="ARCHIVED">已归档</option></select></div>
-        <div v-if="loading" class="learning-plan-loading">正在读取草案…</div>
+        <div class="draft-list-tools"><label class="draft-search"><Search :size="16" /><input v-model="search" aria-label="搜索学习计划" placeholder="搜索标题或学习目标" /></label><select v-model="statusFilter" class="form-select" aria-label="筛选计划状态"><option value="ALL">全部状态</option><option value="DRAFT">未生效计划</option><option value="ACTIVE">已生效计划</option><option value="ARCHIVED">已归档</option></select></div>
+        <div v-if="loading" class="learning-plan-loading">正在读取学习计划…</div>
         <div v-else-if="filteredDrafts.length" class="learning-plan-items">
           <button
             v-for="draft in filteredDrafts"
@@ -297,15 +297,15 @@ onBeforeUnmount(() => {
             <strong>{{ draft.title }}</strong>
             <p>{{ draft.objective }}</p>
             <span>{{ draft.steps.length }} 个步骤 · v{{ draft.version }}</span>
-            <small><span class="draft-status-dot" :class="draft.status.toLowerCase()">{{ { DRAFT: '草案', ACTIVE: '已生效', ARCHIVED: '已归档' }[draft.status] }}</span> {{ draft.source === 'AGENT' ? 'AI 助教创建' : '手动创建' }}</small>
+            <small><span class="draft-status-dot" :class="draft.status.toLowerCase()">{{ { DRAFT: '未生效', ACTIVE: '已生效', ARCHIVED: '已归档' }[draft.status] }}</span> {{ draft.source === 'AGENT' ? 'AI 助教创建' : '手动创建' }}</small>
           </button>
         </div>
-        <EmptyState v-else :title="drafts.length ? '没有匹配的计划' : '还没有学习计划'" :description="drafts.length ? '暂无符合当前筛选条件的内容' : '暂无已保存的草案'" />
+        <EmptyState v-else :title="drafts.length ? '没有匹配的计划' : '还没有学习计划'" :description="drafts.length ? '暂无符合当前筛选条件的内容' : '暂无已保存的学习计划'" />
       </section>
 
       <section class="panel learning-plan-editor">
         <div class="panel-header">
-          <div><span class="section-kicker">学习计划编辑器</span><h3>{{ isActive ? '正式学习计划' : (isEditing ? '编辑当前草案' : '创建新草案') }}</h3></div>
+          <div><span class="section-kicker">学习计划编辑器</span><h3>{{ isEditing ? '编辑学习计划' : '创建学习计划' }}</h3></div>
           <span class="draft-formal-badge" :class="{ 'is-active': isActive }">{{ isArchived ? '已归档' : isActive ? '已正式生效' : '未正式生效' }}</span>
         </div>
         <form id="learning-plan-draft-form" class="form-layout" @submit.prevent="saveDraft">
@@ -340,9 +340,9 @@ onBeforeUnmount(() => {
     </div>
     <Teleport to="body">
       <footer class="draft-save-bar" aria-label="学习计划保存操作">
-        <span class="learning-plan-version" role="status">{{ isArchived ? '已归档 · 只读' : dirty ? '有未保存的修改' : isEditing ? `已保存 · v${form.expectedVersion}` : '新草案' }}</span>
+        <span class="learning-plan-version" role="status">{{ isArchived ? '已归档 · 只读' : dirty ? '有未保存的修改' : isEditing ? `已保存 · v${form.expectedVersion}` : '新计划' }}</span>
         <button v-if="selectedRef && !isActive && !isArchived" class="button button-secondary" type="button" :disabled="saving || dirty || leaveOpen || Boolean(pendingSelection)" :title="dirty ? '请先保存修改' : '确认正式生效'" @click="activationOpen = true"><Check :size="16" /> 确认生效</button>
-        <button v-if="!isArchived" class="button button-primary" type="submit" form="learning-plan-draft-form" :disabled="saving || !dirty || leaveOpen || Boolean(pendingSelection)"><Save :size="16" /> {{ saving ? '保存中…' : (isActive ? '保存计划' : '保存草案') }}</button>
+        <button v-if="!isArchived" class="button button-primary" type="submit" form="learning-plan-draft-form" :disabled="saving || !dirty || leaveOpen || Boolean(pendingSelection)"><Save :size="16" /> {{ saving ? '保存中…' : '保存计划' }}</button>
       </footer>
     </Teleport>
     <ModalDialog :open="Boolean(pendingSelection)" title="有未保存的修改" description="离开当前计划会丢失本次编辑。" @close="pendingSelection = null"><footer class="form-actions"><button class="button button-secondary" @click="pendingSelection = null">继续编辑</button><button class="button button-primary" @click="discardAndSwitch">放弃修改并切换</button></footer></ModalDialog>

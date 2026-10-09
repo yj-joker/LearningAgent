@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Bot, BookOpenText, Check, MessageSquareText, RefreshCw, Send, ShieldCheck, Sparkles, UserRound, X } from 'lucide-vue-next'
+import { ArrowRight, Bot, BookOpenText, Check, MessageSquareText, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Target, UserRound, X } from 'lucide-vue-next'
+import ModalDialog from '@/components/ModalDialog.vue'
 import ProposalDetails from '@/components/ProposalDetails.vue'
 import ChatContent from '@/components/ChatContent.vue'
 import LearningProgressCard from '@/components/LearningProgressCard.vue'
@@ -9,7 +10,9 @@ import { chatWithAgent, getActiveAgentRun, getAgentRun, decideAgentTool, resumeA
 import { getSessionLearningPlanBinding, listLearningPlanDrafts, updateSessionLearningPlanBinding } from '@/api/learningPlans'
 import type { AgentMode, AgentRunResult, CourseLearningProgress, LearningPlanDraft, LearningSessionVO, SessionGoalProgress, ToolApprovalRequest } from '@/types/api'
 import { ApiError } from '@/api/client'
-import { createStandaloneSession, getCourseLearningProgress, getFocusProgress, getSessionMessages, listSessions, startCourseLearning } from '@/api/sessions'
+import { createSession, createStandaloneSession, getCourseLearningProgress, getFocusProgress, getSessionMessages, listSessions, startCourseLearning } from '@/api/sessions'
+import { useCourses } from '@/composables/useCourses'
+import { useActivity } from '@/composables/useActivity'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import { useApprovalNotifications } from '@/composables/useApprovalNotifications'
@@ -44,6 +47,14 @@ const pageActive = computed(() => route.name === pageRouteName)
 const { currentUser } = useAuth()
 const { showToast } = useToast()
 const { approvalRevision } = useApprovalNotifications()
+const { courses: knownCourses, loading: coursesLoading, error: coursesError, loadCourses } = useCourses()
+const { addActivity } = useActivity()
+const courseCreateOpen = ref(false)
+const creatingCourseSession = ref(false)
+const courseForm = reactive({ courseId: '', sessionTitle: '' })
+const courseErrors = reactive({ courseId: '', sessionTitle: '' })
+const preferredCourseSessionId = ref('')
+let courseCreationVersion = 0
 let runRefreshVersion = 0
 let runRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -129,9 +140,50 @@ const modeSessions = computed<ModeSession[]>(() => {
 
 const selectedSession = computed(() => modeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
 const remainingCharacters = computed(() => MAX_MESSAGE_LENGTH - draft.value.length)
-const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !bindingError.value && !learningPlanBindingSaving.value && !activeRun.value && !(props.mode === 'FOCUS' && learningPlansLoading.value) && remainingCharacters.value >= 0))
+const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !creatingCourseSession.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !bindingError.value && !learningPlanBindingSaving.value && !activeRun.value && !(props.mode === 'FOCUS' && learningPlansLoading.value) && remainingCharacters.value >= 0))
 const runStatusText = computed(() => activeRun.value ? ({ WAITING_APPROVAL: '等待审批', APPROVAL_RESOLVED: '等待继续执行', RUNNING: '任务正在执行', COMPLETED: '任务已完成', FAILED: '任务失败' }[activeRun.value.status]) : sending.value ? '正在思考' : loadingRun.value ? '同步任务中' : '可以开始学习')
-const toolNames: Record<string, string> = { create_memory: '新增记忆', update_memory: '修改记忆', delete_memory: '删除记忆', create_learning_plan_draft: '创建学习计划草案', update_learning_plan_draft: '修改学习计划', activate_learning_plan_draft: '确认学习计划生效', create_session_goal: '创建学习目标', update_task_plan: '更新任务计划', update_task_progress: '更新任务进度', propose_learning_progress: '记录学习进度', propose_course_learning_progress: '记录课程进度', switch_session_goal: '切换学习目标' }
+const toolNames: Record<string, string> = { create_memory: '新增记忆', update_memory: '修改记忆', delete_memory: '删除记忆', create_learning_plan_draft: '创建学习计划', update_learning_plan_draft: '修改学习计划', activate_learning_plan_draft: '确认学习计划生效', create_session_goal: '创建学习目标', update_task_plan: '更新任务计划', update_task_progress: '更新任务进度', propose_learning_progress: '记录学习进度', propose_course_learning_progress: '记录课程进度', switch_session_goal: '切换学习目标' }
+
+function openCourseCreate() {
+  if (props.mode !== 'COURSE' || sending.value || approvalBusy.value || creatingCourseSession.value) return
+  courseCreateOpen.value = true
+}
+
+function closeCourseCreate() {
+  if (!creatingCourseSession.value) courseCreateOpen.value = false
+}
+
+// 创建仅保存会话；课程进度仍在用户发送第一条消息时初始化。
+async function submitCourseCreate() {
+  if (props.mode !== 'COURSE' || creatingCourseSession.value || sending.value || approvalBusy.value) return
+  const course = knownCourses.value.find(item => item.courseId === courseForm.courseId)
+  courseErrors.courseId = course ? '' : '请选择一门课程'
+  courseErrors.sessionTitle = courseForm.sessionTitle.trim() ? '' : '请输入学习目标'
+  const token = currentUser.value?.token
+  if (!course || courseErrors.sessionTitle || !token) return
+  const version = ++courseCreationVersion
+  const isCurrent = () => !disposed && version === courseCreationVersion && token === currentUser.value?.token
+  creatingCourseSession.value = true
+  try {
+    const result = await createSession({ courseId: course.courseId, sessionTitle: courseForm.sessionTitle.trim() })
+    if (!isCurrent()) return
+    // 作废创建前的列表查询，防止旧列表覆盖刚保存的新会话。
+    pageVersion++
+    loadingSessions.value = false
+    loadError.value = ''
+    preferredCourseSessionId.value = String(result.id)
+    sessions.value = [result, ...sessions.value.filter(item => String(item.id) !== String(result.id))]
+    addActivity({ kind: 'session-created', title: result.sessionTitle, description: `课程：${course.courseName}`, status: result.sessionStatus ?? 'ACTIVE', resourceId: String(result.id) })
+    courseCreateOpen.value = false
+    courseForm.courseId = ''
+    courseForm.sessionTitle = ''
+    showToast('success', '学习会话已开始', result.sessionTitle)
+  } catch (error) {
+    if (isCurrent()) showToast('error', '创建失败', error instanceof ApiError ? error.message : '请稍后重试')
+  } finally {
+    if (isCurrent()) creatingCourseSession.value = false
+  }
+}
 
 // 独立会话按模式展示；课程旧会话保留已有问答历史，新的请求仍按 COURSE 执行。
 async function loadConversation(sessionId: string) {
@@ -266,7 +318,7 @@ async function scrollToLatest() {
 }
 
 async function selectSession(sessionId: string) {
-  if (sending.value || approvalBusy.value || sessionId === selectedSessionId.value) return
+  if (sending.value || approvalBusy.value || creatingCourseSession.value || sessionId === selectedSessionId.value) return
   if (!sessionId && props.standalone) {
     await newConversation()
     return
@@ -579,6 +631,14 @@ function handleComposerKeydown(event: KeyboardEvent) {
 
 // 跨标签页退出或换号时，也不能继续展示上一个账号的消息。
 watch(() => currentUser.value?.token, () => {
+  courseCreationVersion++
+  courseCreateOpen.value = false
+  creatingCourseSession.value = false
+  preferredCourseSessionId.value = ''
+  courseForm.courseId = ''
+  courseForm.sessionTitle = ''
+  courseErrors.courseId = ''
+  courseErrors.sessionTitle = ''
   pageVersion++
   historyVersion++
   runRefreshVersion++
@@ -635,10 +695,16 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  [() => route.name, () => route.query.session, modeSessions],
+  [() => route.name, () => route.query.session, modeSessions, preferredCourseSessionId],
   ([routeName, querySession]) => {
     if (routeName !== pageRouteName) return
-    const requestedId = typeof querySession === 'string' ? querySession : ''
+    const queryId = typeof querySession === 'string' ? querySession : ''
+    const requestedId = preferredCourseSessionId.value || queryId
+    // 切页期间创建成功时保留新会话，回到课程学习再同步地址。
+    if (preferredCourseSessionId.value && modeSessions.value.some(item => item.id === requestedId)) {
+      if (queryId !== requestedId) void router.replace({ name: pageRouteName, query: { session: requestedId } })
+      else preferredCourseSessionId.value = ''
+    }
     // 从侧栏返回没有 session 参数时，恢复缓存中的对话及输入内容。
     if (!requestedId && selectedSessionId.value && selectedSession.value) {
       void router.replace({ name: pageRouteName, query: { ...route.query, session: selectedSessionId.value } })
@@ -675,6 +741,7 @@ watch(
 )
 
 onDeactivated(() => {
+  courseCreateOpen.value = false
   clearTimeout(runRefreshTimer)
   layoutObserver?.disconnect()
   window.cancelAnimationFrame(layoutFrame)
@@ -712,6 +779,15 @@ onMounted(async () => {
   void loadSessionList()
   void loadLearningPlans()
 })
+
+// 兼容旧历史页创建链接，统一在课程学习页打开弹窗。
+watch([() => route.name, () => route.query.create], ([name, create]) => {
+  if (name !== pageRouteName || props.mode !== 'COURSE' || create !== '1') return
+  openCourseCreate()
+  const query = { ...route.query }
+  delete query.create
+  void router.replace({ name: pageRouteName, query })
+}, { immediate: true })
 </script>
 
 <template>
@@ -721,7 +797,7 @@ onMounted(async () => {
         <span class="section-kicker"><Sparkles :size="13" /> 智能学习</span>
         <h2>{{ pageTitle }}</h2>
       </div>
-      <div class="agent-heading-actions"><button v-if="standalone" class="button button-primary" type="button" :disabled="sending || approvalBusy" @click="newConversation">新对话</button><RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 全部历史</RouterLink></div>
+      <div class="agent-heading-actions"><button v-if="mode === 'COURSE'" class="button button-primary" type="button" :disabled="sending || approvalBusy || creatingCourseSession" @click="openCourseCreate"><Plus :size="16" /> 开始课程学习</button><button v-else-if="standalone" class="button button-primary" type="button" :disabled="sending || approvalBusy" @click="newConversation">新对话</button><RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 全部历史</RouterLink></div>
     </section>
 
     <p v-if="loadError" class="agent-load-error" role="alert">{{ loadError }} <button class="button button-secondary" type="button" @click="retryLoad">重试</button></p>
@@ -864,12 +940,27 @@ onMounted(async () => {
       <span><MessageSquareText :size="27" /></span>
       <h3>先创建一份课程学习会话</h3>
       <p>选择课程后，助教会按课程知识点继续教学。</p>
-      <RouterLink class="button button-primary" to="/sessions?create=1">开始学习 <ArrowRight :size="16" /></RouterLink>
+      <button class="button button-primary" type="button" :disabled="creatingCourseSession" @click="openCourseCreate">开始学习 <ArrowRight :size="16" /></button>
     </section>
+
+    <ModalDialog :open="courseCreateOpen" title="开始课程学习" description="选择课程并填写本次学习目标。" @close="closeCourseCreate">
+      <form class="form-layout" @submit.prevent="submitCourseCreate">
+        <fieldset class="session-create-fields" :disabled="creatingCourseSession">
+          <div class="session-form-illustration"><span><Target :size="28" /></span><div><strong>本次学习目标</strong><p>目标尽量具体，并能在一次学习中完成。</p></div></div>
+          <div v-if="coursesError" class="agent-load-error" role="alert">{{ coursesError }} <button class="button button-secondary" type="button" :disabled="coursesLoading" @click="loadCourses">重试</button></div>
+          <p v-else-if="coursesLoading" role="status">正在加载课程…</p>
+          <p v-else-if="!knownCourses.length">暂无可选课程，<RouterLink to="/courses">前往课程管理</RouterLink></p>
+          <div class="form-section"><label class="field-label" for="session-course">选择课程 <b>*</b></label><select id="session-course" v-model="courseForm.courseId" class="form-select" autofocus @change="courseErrors.courseId = ''"><option value="" disabled>请选择课程</option><option v-for="course in knownCourses" :key="course.courseId" :value="course.courseId">{{ course.courseName }}</option></select><span v-if="courseErrors.courseId" class="field-error">{{ courseErrors.courseId }}</span></div>
+          <div class="form-section"><label class="field-label" for="session-title">学习目标 <b>*</b></label><div class="input-with-icon"><MessageSquareText :size="18" /><input id="session-title" v-model="courseForm.sessionTitle" class="form-input" placeholder="例如：理解 synchronized 的锁升级过程" @input="courseErrors.sessionTitle = ''"></div><span v-if="courseErrors.sessionTitle" class="field-error">{{ courseErrors.sessionTitle }}</span></div>
+        </fieldset>
+        <footer class="form-actions"><button type="button" class="button button-secondary" :disabled="creatingCourseSession" @click="closeCourseCreate">取消</button><button class="button button-primary" :disabled="creatingCourseSession || coursesLoading || !knownCourses.length">{{ creatingCourseSession ? '创建中…' : '开始学习' }} <ArrowRight v-if="!creatingCourseSession" :size="17" /></button></footer>
+      </form>
+    </ModalDialog>
   </div>
 </template>
 
 <style scoped>
+.session-create-fields { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .agent-chat-layout { height: var(--conversation-height, min(850px, calc(100dvh - 300px))); min-height: 0; grid-template-columns: 230px minmax(0, 1fr); }
 .agent-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .agent-load-error { color: #b34747; font-size: 13px; }
@@ -905,7 +996,7 @@ onMounted(async () => {
 .agent-approval-panel pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .agent-chat-layout { grid-template-columns: 1fr; height: auto; min-height: 0; } .agent-session-list, .agent-session-panel > header { display: none; } .agent-session-select-wrap { display: grid; gap: 6px; padding: 12px; } .agent-session-select-wrap select { min-width: 0; width: 100%; padding: 10px; border: 1px solid #dce3df; border-radius: 6px; } .agent-conversation-panel { height: var(--conversation-height, calc(100dvh - 330px)); min-height: 0; } }
 @media (max-width: 620px) {
-  .agent-chat-heading { flex-direction: row; align-items: center; min-height: 0; padding-bottom: 0; gap: 8px; margin-bottom: 10px; }
+  .agent-chat-heading { flex-direction: row; flex-wrap: wrap; align-items: center; min-height: 0; padding-bottom: 0; gap: 8px; margin-bottom: 10px; }
   .agent-chat-heading h2 { margin-block: 4px 0; font-size: 21px; }
   .agent-chat-heading .section-kicker { font-size: 10px; }
   .agent-heading-actions { gap: 5px; flex-wrap: nowrap; }
