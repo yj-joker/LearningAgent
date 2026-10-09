@@ -25,6 +25,23 @@ public interface CoursesRepository {
             "from courses where id = #{id}")
     Courses findCourseById(@Param("id") Long id);
 
+    // 当前用户课程列表不依赖本地活动记录；按更新时间倒序，编号用于稳定处理同一时间。
+    @Select("select id, user_id as userId, course_name as courseName, " +
+            "difficulty_level as difficultyLevel, publisher_id as publisherId, " +
+            "course_type as courseType, learning_outline as learningOutline, " +
+            "created_at as createdAt, updated_at as updatedAt " +
+            "from courses where user_id = #{userId} order by updated_at desc, id desc")
+    List<Courses> findCoursesByUserId(@Param("userId") Long userId);
+
+    // 编辑直链在 SQL 内同时约束课程和所有者，防止先读取别人正文再做权限检查。
+    @Select("select id, user_id as userId, course_name as courseName, " +
+            "difficulty_level as difficultyLevel, publisher_id as publisherId, " +
+            "course_type as courseType, learning_outline as learningOutline, " +
+            "created_at as createdAt, updated_at as updatedAt " +
+            "from courses where id = #{courseId} and user_id = #{userId}")
+    Courses findCourseByIdAndUserId(@Param("courseId") Long courseId, @Param("userId") Long userId);
+
+    // 批量查询供既有课程权限与知识点流程复用。
     @Select({
             "<script>",
             "select id, user_id as userId, course_name as courseName,",
@@ -38,10 +55,7 @@ public interface CoursesRepository {
             "</script>"
     })
     List<Courses> findCoursesByIds(@Param("ids") Collection<Long> ids);
-    /**
-     * 只有数据库中的旧状态仍为 expectedStatus 时才允许更新。
-     * 两个请求同时读取同一课程状态时，只有一个能更新成功。
-     */
+    // 只有旧状态仍为 expectedStatus 才更新；并发状态变更只有一个请求能成功。
     @Update("update courses set course_type = #{targetStatus}, updated_at = #{updatedAt} " +
             "where id = #{courseId} and course_type = #{expectedStatus}")
     int updateCourseStatus(@Param("courseId") Long courseId,

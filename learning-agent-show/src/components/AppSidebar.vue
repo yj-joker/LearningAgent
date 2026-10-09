@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, Lightbulb, ListTree, LogOut, MessageSquareText, Plus, ScrollText, Target, X } from 'lucide-vue-next'
+import { BookOpenText, Bot, ChevronDown, ChevronLeft, FolderOpen, GraduationCap, LayoutDashboard, LogOut, ScrollText, Target, X } from 'lucide-vue-next'
 import { useAuth } from '@/composables/useAuth'
 
 defineProps<{ open: boolean; collapsed: boolean }>()
@@ -15,18 +15,13 @@ const primaryNavItems = [
 const route = useRoute()
 const router = useRouter()
 const { currentUser, logout } = useAuth()
-const openGroup = ref<'courses' | 'assistant' | null>(null)
-const chaptersExpanded = ref(false)
+const assistantExpanded = ref(false)
 
 const isCourseArea = computed(() => ['/courses', '/chapters', '/knowledge-points'].some((path) => route.path.startsWith(path)))
-const isAssistantArea = computed(() => route.path.startsWith('/ai-assistant') || route.path.startsWith('/sessions') || route.path.startsWith('/learning-plans'))
+const isAssistantArea = computed(() => route.path.startsWith('/ai-assistant'))
 
-function toggleGroup(group: 'courses' | 'assistant') {
-  openGroup.value = openGroup.value === group ? null : group
-}
-
-function toggleChapters() {
-  chaptersExpanded.value = !chaptersExpanded.value
+function toggleAssistant() {
+  assistantExpanded.value = !assistantExpanded.value
 }
 
 function closeNavigation() {
@@ -36,16 +31,7 @@ function closeNavigation() {
 watch(
   () => route.path,
   () => {
-    if (isCourseArea.value) {
-      openGroup.value = 'courses'
-      chaptersExpanded.value = route.path.startsWith('/chapters') || route.path.startsWith('/knowledge-points')
-    } else if (isAssistantArea.value) {
-      openGroup.value = 'assistant'
-      chaptersExpanded.value = false
-    } else {
-      openGroup.value = null
-      chaptersExpanded.value = false
-    }
+    assistantExpanded.value = isAssistantArea.value
   },
   { immediate: true },
 )
@@ -53,11 +39,6 @@ watch(
 function signOut() {
   logout()
   router.push({ name: 'login' })
-}
-
-function openCreateCourse() {
-  closeNavigation()
-  router.push({ name: 'courses', query: { create: '1' } })
 }
 </script>
 
@@ -95,80 +76,26 @@ function openCreateCourse() {
         <span v-if="!collapsed">{{ item.label }}</span>
       </RouterLink>
 
-      <div class="sidebar-nav-group" :class="{ 'is-open': openGroup === 'courses', 'is-active': isCourseArea }">
-        <RouterLink class="sidebar-nav-parent" to="/courses" @click="toggleGroup('courses'); closeNavigation">
-          <BookOpenText :size="19" />
-          <span v-if="!collapsed">课程管理</span>
-          <ChevronDown v-if="!collapsed" class="sidebar-nav-chevron" :class="{ 'is-flipped': openGroup === 'courses' }" :size="15" />
-        </RouterLink>
-        <div v-if="!collapsed && openGroup === 'courses'" class="sidebar-subnav">
-          <div class="sidebar-nav-group sidebar-nav-nested" :class="{ 'is-open': chaptersExpanded, 'is-active': route.path.startsWith('/chapters') || route.path.startsWith('/knowledge-points') }">
-            <RouterLink
-              class="sidebar-nav-parent"
-              :class="{ 'is-module-active': route.path.startsWith('/chapters') || route.path.startsWith('/knowledge-points') }"
-              :to="{ path: '/chapters', query: { from: 'sidebar' } }"
-              @click="toggleChapters(); closeNavigation"
-            >
-              <ListTree :size="17" />
-              <span>章节编排</span>
-              <ChevronDown class="sidebar-nav-chevron" :class="{ 'is-flipped': chaptersExpanded }" :size="14" />
-            </RouterLink>
-            <div v-if="chaptersExpanded" class="sidebar-subnav">
-              <RouterLink
-                :class="{ 'is-module-active': route.path.startsWith('/knowledge-points') }"
-                :to="{ path: '/knowledge-points', query: { from: 'sidebar' } }"
-                @click="closeNavigation"
-              >
-                <Lightbulb :size="16" />
-                <span>知识点管理</span>
-              </RouterLink>
-            </div>
-          </div>
-        </div>
-      </div>
+      <RouterLink to="/courses" :class="{ 'router-link-active': isCourseArea }" @click="closeNavigation"><BookOpenText :size="19" /><span v-if="!collapsed">课程管理</span></RouterLink>
+      <RouterLink to="/learning-plans" @click="closeNavigation"><ScrollText :size="19" /><span v-if="!collapsed">学习计划</span></RouterLink>
 
-      <div class="sidebar-nav-group" :class="{ 'is-open': openGroup === 'assistant', 'is-active': isAssistantArea }">
-        <RouterLink class="sidebar-nav-parent" to="/ai-assistant" @click="toggleGroup('assistant'); closeNavigation">
+      <div class="sidebar-nav-group" :class="{ 'is-open': assistantExpanded, 'is-active': isAssistantArea }">
+        <RouterLink class="sidebar-nav-parent" to="/ai-assistant" @click="toggleAssistant(); closeNavigation()">
           <Bot :size="19" />
           <span v-if="!collapsed">AI 助教</span>
-          <ChevronDown v-if="!collapsed" class="sidebar-nav-chevron" :class="{ 'is-flipped': openGroup === 'assistant' }" :size="15" />
+          <ChevronDown v-if="!collapsed" class="sidebar-nav-chevron" :class="{ 'is-flipped': assistantExpanded }" :size="15" />
         </RouterLink>
-        <div v-if="!collapsed && openGroup === 'assistant'" class="sidebar-subnav">
+        <div v-if="!collapsed && assistantExpanded" class="sidebar-subnav">
           <RouterLink :to="{ name: 'agent-chat' }" @click="closeNavigation"><BookOpenText :size="17" /><span>课程学习</span></RouterLink>
           <RouterLink :to="{ name: 'agent-chat-standalone' }" @click="closeNavigation"><Bot :size="17" /><span>独立问答</span></RouterLink>
           <RouterLink :to="{ name: 'agent-focus' }" @click="closeNavigation"><Target :size="17" /><span>专注学习</span></RouterLink>
-          <RouterLink :to="{ path: '/sessions', query: { from: 'sidebar' } }" @click="closeNavigation">
-            <MessageSquareText :size="17" />
-            <span>学习会话</span>
-          </RouterLink>
-          <RouterLink :to="{ path: '/learning-plans', query: { from: 'sidebar' } }" @click="closeNavigation">
-            <ScrollText :size="17" />
-            <span>学习计划草案</span>
-          </RouterLink>
         </div>
       </div>
     </nav>
 
     <div class="sidebar-spacer" />
-    <div class="sidebar-create-zone" :class="{ 'is-collapsed': collapsed }">
-      <template v-if="!collapsed">
-        <span class="sidebar-zone-emoji sidebar-zone-emoji-lightbulb" aria-hidden="true">💡</span>
-        <span class="sidebar-zone-emoji sidebar-zone-emoji-help" aria-hidden="true">❓️</span>
-        <span class="sidebar-zone-spark sidebar-zone-spark-one" aria-hidden="true" />
-        <span class="sidebar-zone-spark sidebar-zone-spark-two" aria-hidden="true" />
-        <div class="sidebar-visual" aria-hidden="true">
-          <img src="/course-mascot.png" alt="" />
-          <span class="sidebar-visual-ring sidebar-visual-ring-one" />
-          <span class="sidebar-visual-ring sidebar-visual-ring-two" />
-          <span class="sidebar-visual-dot sidebar-visual-dot-one" />
-          <span class="sidebar-visual-dot sidebar-visual-dot-two" />
-        </div>
-        <div class="sidebar-create-copy">
-          <strong>需要帮助？</strong>
-          <span>从第一步开始创建您的专属课程！</span>
-        </div>
-      </template>
-      <button class="sidebar-create-link" type="button" title="创建课程" @click="openCreateCourse"><Plus :size="17" /><span v-if="!collapsed">创建课程</span></button>
+    <div v-if="!collapsed" class="sidebar-mascot" aria-hidden="true">
+      <img src="/course-mascot.png" alt="" />
     </div>
 
     <div class="sidebar-footer">

@@ -2227,7 +2227,6 @@ body::after {
 .brand-row,
 .sidebar-nav,
 .sidebar-spacer,
-.sidebar-create-link,
 .sidebar-footer,
 .sidebar-section-label { position: relative; z-index: 1; }
 
@@ -2242,7 +2241,6 @@ body::after {
 .sidebar-nav a.router-link-active { color: #fff; background: rgba(255, 255, 255, 0.11); box-shadow: none; }
 .sidebar-nav a.router-link-active svg { color: var(--lime); }
 .sidebar-nav a.router-link-active::after { right: auto; left: 0; width: 3px; height: 20px; background: var(--lime); border-radius: 0 3px 3px 0; box-shadow: 0 0 12px rgba(217, 255, 121, 0.6); }
-.sidebar-create-link { display: flex; min-height: 38px; margin: 0 4px 14px; padding: 0 12px; gap: 8px; align-items: center; justify-content: center; color: var(--forest-deep); background: linear-gradient(160deg, #e6ff9c, var(--lime)); border-radius: 11px; font-size: 12px; font-weight: 700; }
 .sidebar-footer { margin: 0; padding: 14px 5px 2px; color: rgba(255, 255, 255, 0.7); border-top: 1px solid rgba(255, 255, 255, 0.08); }
 .sidebar-footer strong { color: #fff; }
 .sidebar-footer small { color: rgba(255, 255, 255, 0.45); }
@@ -2258,7 +2256,6 @@ body::after {
 .sidebar.is-collapsed .brand > span:last-child,
 .sidebar.is-collapsed .sidebar-collapse { display: none; }
 .sidebar.is-collapsed .sidebar-nav a { justify-content: center; padding: 0; }
-.sidebar.is-collapsed .sidebar-create-link { margin-inline: 0; padding: 0; }
 .sidebar.is-collapsed .sidebar-footer { justify-content: center; padding-inline: 0; }
 .sidebar.is-collapsed .sidebar-footer > .logout-button { display: none; }
 
@@ -2527,7 +2524,6 @@ body { background: var(--canvas); }
 .sidebar-nav a { min-height: 43px; padding: 0 12px; gap: 11px; border-radius: 6px; color: #596965; font-size: 13px; }
 .sidebar-nav a.router-link-active { color: var(--forest-deep); background: #e8f2ed; box-shadow: none; }
 .sidebar-nav a.router-link-active::after { background: var(--forest); }
-.sidebar-create-link { display: flex; min-height: 42px; margin: 0 4px 14px; padding: 0 12px; gap: 8px; align-items: center; justify-content: center; color: #fff; background: var(--forest); border-radius: 6px; font-size: 12px; font-weight: 700; }
 .sidebar-footer { margin: 0; padding: 14px 5px 0; border-top: 1px solid var(--line); }
 .sidebar-footer strong { font-size: 11px; }
 .sidebar-footer small { font-size: 9px; }
@@ -3267,7 +3263,6 @@ body {
 .sidebar-nav a.router-link-active { color: #287774; background: #fff; box-shadow: 0 9px 20px -16px rgba(9, 80, 82, .8); }
 .sidebar-nav a.router-link-active svg { color: #319897; }
 .sidebar-nav a.router-link-active::after { display: none; }
-.sidebar-create-link { display: flex; min-height: 38px; margin: 0 4px 14px; padding: 0 12px; gap: 8px; align-items: center; justify-content: center; color: #287774; background: #f8e27c; border-radius: 11px; }
 .sidebar-footer { margin: 0; padding: 14px 5px 2px; color: rgba(255, 255, 255, 0.7); border-top-color: rgba(255, 255, 255, 0.08); }
 .sidebar-footer strong { color: #fff; }
 .sidebar-footer small { color: rgba(255, 255, 255, .62); }
@@ -3282,7 +3277,6 @@ body {
 .sidebar.is-collapsed .brand-row { position: relative; }
 .sidebar.is-collapsed .sidebar-collapse { display: grid; position: absolute; top: 8px; right: 0; }
 .sidebar.is-collapsed .sidebar-nav a { justify-content: center; padding: 0; }
-.sidebar.is-collapsed .sidebar-create-link { margin-inline: 0; padding: 0; }
 .sidebar.is-collapsed .sidebar-footer { justify-content: center; padding-inline: 0; }
 .sidebar.is-collapsed .sidebar-footer > .logout-button { display: none; }
 .topbar { height: 72px; padding: 0 28px; background: rgba(255, 255, 255, .82); border-bottom-color: rgba(49, 152, 151, .2); backdrop-filter: blur(18px) saturate(160%); }
@@ -3509,273 +3503,44 @@ body::before {
   }
 }
 
-/* The create action is a real control (not a decorative link). Keep its
-   hit-area above ambient art and give the click/focus states a clear cue. */
-.sidebar-create-link {
+/* 鸟图只作装饰，限制高度，为展开的助教菜单和用户栏留出空间。 */
+.sidebar-mascot {
   position: relative;
   z-index: 2;
-  border: 0;
-  cursor: pointer;
-  font: inherit;
-  transition: transform var(--motion-base) var(--ease-out),
-    background-color var(--motion-fast) ease-out,
-    box-shadow var(--motion-base) var(--ease-out);
-}
-
-.sidebar-create-link:hover {
-  background: #ffeb98;
-  box-shadow: 0 10px 22px -14px rgba(248, 226, 124, .9);
-  transform: translateY(-1px);
-}
-
-.sidebar-create-link:active { transform: translateY(0) scale(.98); }
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-create-link { transition-duration: .01ms !important; }
-}
-
-/* Framed course-creation guide: the supplied images remain untouched and
-   are layered here as decorative presentation assets. */
-.sidebar-create-zone {
-  position: relative;
-  z-index: 2;
-  min-width: 0;
-  margin: 0 4px 14px;
-  padding: 8px 7px 8px;
-  overflow: hidden;
-  isolation: isolate;
-  background:
-    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, .17), transparent 27%),
-    linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(248, 226, 124, .08));
-  border: 1px solid rgba(248, 226, 124, .36);
-  border-radius: 24px 24px 24px 8px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .14),
-    0 14px 24px -22px rgba(5, 75, 78, .8);
-}
-
-.sidebar-create-zone::before {
-  position: absolute;
-  right: -52px;
-  bottom: -76px;
-  width: 180px;
-  height: 134px;
-  content: '';
-  border: 1px solid rgba(255, 255, 255, .17);
-  border-radius: 50%;
-  transform: rotate(-17deg);
+  width: min(100%, 168px);
+  height: clamp(88px, 20vh, 144px);
+  min-height: 0;
+  flex: 0 1 auto;
+  margin: 0 auto 14px;
   pointer-events: none;
 }
 
-.sidebar-create-zone::after {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  width: 42px;
-  height: 42px;
-  content: '';
-  border: 1px dashed rgba(217, 255, 121, .27);
-  border-radius: 50%;
-  pointer-events: none;
-}
-
-.sidebar-zone-emoji {
-  position: absolute;
-  z-index: 4;
+.sidebar-mascot > img {
   display: block;
-  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
-  font-size: 54px;
-  line-height: 1;
-  white-space: nowrap;
-  pointer-events: none;
-  user-select: none;
-  filter: drop-shadow(0 3px 3px rgba(7, 73, 75, .18));
-}
-
-.sidebar-zone-emoji-lightbulb {
-  top: 3px;
-  left: 0;
-  transform: rotate(-7deg);
-}
-
-.sidebar-zone-emoji-help {
-  top: 3px;
-  right: 0;
-  transform: rotate(30deg);
-  transform-origin: center;
-}
-
-.sidebar-zone-spark {
-  position: absolute;
-  z-index: 3;
-  display: block;
-  width: 7px;
-  height: 7px;
-  border: 1px solid rgba(255, 255, 255, .62);
-  transform: rotate(45deg);
-  pointer-events: none;
-}
-
-.sidebar-zone-spark-one {
-  top: 92px;
-  right: 20px;
-}
-
-.sidebar-zone-spark-two {
-  right: 29px;
-  bottom: 56px;
-  width: 5px;
-  height: 5px;
-  border-color: rgba(217, 255, 121, .7);
-}
-
-.sidebar-visual {
-  position: relative;
-  z-index: 2;
-  min-height: 124px;
-  margin: 31px 0 8px;
-  overflow: hidden;
-  border-radius: 17px 17px 17px 5px;
-}
-
-.sidebar-visual > img {
-  position: absolute;
-  z-index: 1;
-  inset: 0 1px -4px;
-  display: block;
-  width: calc(100% - 2px);
-  height: calc(100% + 4px);
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   object-position: center bottom;
   filter: drop-shadow(0 9px 9px rgba(7, 73, 75, .16));
 }
 
-.sidebar-visual-ring {
-  position: absolute;
-  z-index: 2;
-  display: block;
-  border: 1px solid rgba(217, 255, 121, .3);
-  border-radius: 50%;
-  pointer-events: none;
+.sidebar > .sidebar-footer { flex-shrink: 0; }
+
+@media (max-height: 640px) {
+  .sidebar-mascot { height: 88px; margin-bottom: 8px; }
+  .sidebar-spacer { min-height: 16px; }
 }
 
-.sidebar-visual-ring-one {
-  top: 18px;
-  right: 18px;
-  width: 8px;
-  height: 8px;
-}
-
-.sidebar-visual-ring-two {
-  right: 32px;
-  bottom: 19px;
-  width: 5px;
-  height: 5px;
-  border-color: rgba(255, 255, 255, .35);
-}
-
-.sidebar-visual-dot {
-  position: absolute;
-  z-index: 2;
-  display: block;
-  width: 5px;
-  height: 5px;
-  background: var(--lime);
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(217, 255, 121, .1);
-  pointer-events: none;
-}
-
-.sidebar-visual-dot-one {
-  top: 34px;
-  left: 24px;
-}
-
-.sidebar-visual-dot-two {
-  right: 23px;
-  bottom: 35px;
-  width: 4px;
-  height: 4px;
-  background: rgba(255, 255, 255, .75);
-  box-shadow: none;
-}
-
-.sidebar-create-copy {
-  position: relative;
-  z-index: 3;
-  display: grid;
-  min-width: 0;
-  padding: 0 6px;
-  gap: 4px;
-  color: rgba(255, 255, 255, .78);
-  text-align: center;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.sidebar-create-copy strong {
-  min-width: 0;
-  color: #fff;
-  font-family: inherit;
-  font-size: 15pt;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.sidebar-create-copy span {
-  min-width: 0;
-  color: rgba(255, 255, 255, .72);
-  font-family: inherit;
-  font-size: 14pt;
-  font-weight: 400;
-  line-height: 1.28;
-}
-
-.sidebar-create-zone > .sidebar-create-link {
-  position: relative;
-  z-index: 3;
-  width: min(100%, 168px);
-  min-width: 0;
-  margin: 9px auto 0;
-}
-
-.sidebar-create-zone.is-collapsed {
-  margin: 0 0 14px;
-  padding: 0;
-  overflow: visible;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-
-.sidebar-create-zone.is-collapsed > .sidebar-create-link {
-  width: auto;
-  margin: 0;
-}
-
-@media (max-height: 760px) and (min-width: 1025px) {
-  .sidebar-create-zone {
-    padding-top: 6px;
-    padding-bottom: 6px;
-  }
-
-  .sidebar-zone-emoji {
-    font-size: 50px;
-  }
-
-  .sidebar-visual {
-    min-height: 102px;
-    margin-top: 26px;
-  }
-
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-create-zone,
-  .sidebar-visual,
-  .sidebar-visual > img {
-    transition: none !important;
-  }
+/* 矮桌面优先容纳完整导航和用户栏，压缩留白而不隐藏菜单。 */
+@media (max-height: 640px) and (min-width: 1025px) {
+  .sidebar { padding-block: 12px; }
+  .sidebar .brand-row { padding-bottom: 8px; }
+  .sidebar .sidebar-section-label { margin-top: 12px; margin-bottom: 8px; }
+  .sidebar .sidebar-nav a { min-height: 38px; }
+  .sidebar .sidebar-subnav a { min-height: 34px; }
+  .sidebar-mascot { height: 80px; }
+  .sidebar-spacer { min-height: 12px; }
+  .sidebar .sidebar-footer { flex-shrink: 0; padding-top: 10px; }
 }
 
 /* Polish motion: one composed entrance per surface. It only uses opacity and

@@ -145,24 +145,34 @@ public class SessionGoalService {
         return snapshot(state);
     }
 
-    // 绑定或清除会话的长期计划引用；长期计划不会覆盖短期目标指针。
+    // 首次绑定会话的长期计划；关联后只能重复提交同一计划，原短期目标保持不变。
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public SessionLearningPlanBindingVO bindLearningPlan(Long sessionId, String draftRef,
                                                          long expectedBindingVersion) {
         Long userId = requireAccess(sessionId);
         if (expectedBindingVersion < 0) throw new ClientDataErrorException("关联版本不能小于 0");
+        // 先确保记录存在再锁行，让并发关联按顺序检查已保存的计划。
         repository.ensureFocus(userId, sessionId);
         SessionFocusState state = repository.lockFocus(userId, sessionId)
                 .orElseThrow(() -> new SecurityException("会话目标归属不一致"));
+        // 拒绝旧页面提交的版本，避免覆盖其他请求刚完成的关联。
         if (state.getLearningPlanBindingVersion() != expectedBindingVersion) {
             throw new ClientDataErrorException("会话学习计划关联已变化，请刷新后重试");
         }
         String normalized = draftRef == null || draftRef.isBlank() ? null : draftRef.strip();
+        // 解除后再绑定也会造成改绑，因此一并拒绝；同一计划的重试不会触发写库。
+        if (state.getLearningPlanDraftRef() != null
+                && !Objects.equals(state.getLearningPlanDraftRef(), normalized)) {
+            log.warn("拒绝更换或解除会话学习计划关联，sessionId={}，bindingVersion={}",
+                    sessionId, state.getLearningPlanBindingVersion());
+            throw new ClientDataErrorException("当前会话已关联学习计划，不能更换或解除关联，请新建会话");
+        }
         if (normalized != null) {
             // 绑定前验证计划属于当前用户且已经 ACTIVE。
             learningPlans.findActiveForUser(userId, normalized);
         }
         if (!Objects.equals(state.getLearningPlanDraftRef(), normalized)) {
+            // 首次关联成功才递增版本；事务回滚时不会留下半保存的关联。
             if (repository.updateLearningPlanBinding(userId, sessionId, normalized,
                     state.getLearningPlanBindingVersion()) != 1) {
                 throw changed();
@@ -172,6 +182,7 @@ public class SessionGoalService {
             log.info("专注会话学习计划关联已更新，sessionId={}，draftRef={}，bindingVersion={}",
                     sessionId, normalized, state.getLearningPlanBindingVersion());
         }
+        // 返回数据库确认后的关联，前端据此锁定选择框。
         return bindingView(state);
     }
 

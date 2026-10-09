@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { ArrowDown, ArrowUp, Check, Plus, RefreshCw, Save, Search, Trash2 } from 'lucide-vue-next'
 import { ApiError } from '@/api/client'
@@ -7,6 +7,8 @@ import { activateLearningPlanDraft, createLearningPlanDraft, listLearningPlanDra
 import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { useAuth } from '@/composables/useAuth'
+import { getStoredToken } from '@/utils/authStorage'
 import type {
   LearningPlanDraft,
   LearningPlanDraftCreatePayload,
@@ -19,6 +21,7 @@ interface DraftFormStep extends LearningPlanDraftStepPayload {
 }
 
 const { showToast } = useToast()
+const { currentUser } = useAuth()
 const drafts = ref<LearningPlanDraft[]>([])
 const selectedRef = ref<string | null>(null)
 const loading = ref(false)
@@ -77,12 +80,15 @@ function finishLeave(leave: boolean) {
 
 // 浏览器刷新或关闭只能使用浏览器原生提醒，保存请求未结束时也保留离开提醒。
 function warnBeforeUnload(event: BeforeUnloadEvent) {
+  if (!getStoredToken()) return
   if (!dirty.value && !saving.value) return
   event.preventDefault()
   event.returnValue = ''
 }
 
 onBeforeRouteLeave(() => {
+  // 凭证失效必须回到登录页，计划的未保存确认不能挡住身份退出。
+  if (!getStoredToken()) { finishLeave(true); return true }
   if (saving.value) {
     showToast('info', '正在保存学习计划', '保存完成后再离开页面')
     return false
@@ -94,6 +100,10 @@ onBeforeRouteLeave(() => {
   leaveOpen.value = true
   return new Promise<boolean>((resolve) => { resolvePendingLeave = resolve })
 })
+// 登录失效可能发生在离开确认已经打开时，及时结束这次等待。
+watch(() => currentUser.value?.token, token => {
+  if (!token) { pendingSelection.value = null; finishLeave(true) }
+}, { flush: 'sync' })
 function moveStep(index: number, direction: number) {
   const next = index + direction
   if (next < 0 || next >= form.steps.length) return

@@ -47,7 +47,7 @@ export function getSessionLearningPlanBinding(sessionId: string) {
   return request<SessionLearningPlanBinding>(`/agent/sessions/${encodeURIComponent(sessionId)}/learning-plan`)
 }
 
-// 保存会话关联或清除关联；后端按 bindingVersion 做并发校验。
+// 保存首次关联或重复确认同一计划；后端拒绝更换和解除，并校验 bindingVersion。
 export function updateSessionLearningPlanBinding(sessionId: string, draftRef: string | null,
                                                  expectedBindingVersion: number) {
   return request<SessionLearningPlanBinding>(`/agent/sessions/${encodeURIComponent(sessionId)}/learning-plan`, {

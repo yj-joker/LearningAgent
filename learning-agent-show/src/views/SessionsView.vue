@@ -8,13 +8,15 @@ import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
 import { completeSession, createSession, deleteLearningSession, listSessions } from '@/api/sessions'
 import { useActivity } from '@/composables/useActivity'
+import { useCourses } from '@/composables/useCourses'
 import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import type { LearningSessionVO } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
-const { knownCourses, addActivity, removeSessionActivities } = useActivity()
+const { addActivity, removeSessionActivities } = useActivity()
+const { courses: knownCourses } = useCourses()
 const { currentUser } = useAuth()
 const { showToast } = useToast()
 
@@ -224,7 +226,7 @@ async function confirmDeleteSession() {
 <template>
   <div class="resource-view">
     <section class="page-heading">
-      <div><span class="section-kicker">学习记录</span><h2>学习会话</h2><p class="session-heading-copy">课程学习、自由问答和专注学习的会话记录。</p></div>
+      <div><span class="section-kicker">学习记录</span><h2>全部历史</h2><p class="session-heading-copy">课程学习、独立问答和专注学习的会话记录。</p></div>
       <button class="button button-primary" :disabled="!knownCourses.length || mutationPending" @click="createOpen = true"><Plus :size="18" /> 开始课程学习</button>
     </section>
 

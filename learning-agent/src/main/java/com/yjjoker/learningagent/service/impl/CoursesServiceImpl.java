@@ -28,6 +28,43 @@ import java.util.function.Consumer;
 public class CoursesServiceImpl implements CoursesService {
     private final CoursesRepository coursesRepository;
 
+    // 数据库按登录用户过滤课程，换设备或清空本地活动记录也能恢复自己的课程列表。
+    @Override
+    public List<CoursesVO> findCurrentUserCourses() {
+        Long userId = requireCurrentUser();
+        List<CoursesVO> courses = coursesRepository.findCoursesByUserId(userId).stream()
+                .map(this::toCoursesVO).toList();
+        // 只记录数量和用户编号，不输出课程正文或登录凭据。
+        log.info("加载当前用户课程列表成功，userId={}，courseCount={}", userId, courses.size());
+        return courses;
+    }
+
+    // 编辑详情在查询中绑定用户归属，其他用户的公开课程也不进入自己的编辑区。
+    @Override
+    public CoursesVO findOwnedCourse(Long courseId) {
+        Long userId = requireCurrentUser();
+        if (courseId == null || courseId <= 0) {
+            throw new DataIllegalException("课程 ID 必须大于 0");
+        }
+        Courses course = coursesRepository.findCourseByIdAndUserId(courseId, userId);
+        // 统一错误信息，猜测别人编号时不透露该课程是否存在。
+        if (course == null) {
+            throw new NotFountException("课程不存在或无权查看");
+        }
+        log.info("加载当前用户课程详情成功，userId={}，courseId={}，status={}",
+                userId, courseId, course.getCourseType());
+        return toCoursesVO(course);
+    }
+
+    // 服务调用也要求登录身份，不能接受前端传入用户编号或缺少归属的查询。
+    private Long requireCurrentUser() {
+        Long userId = BaseContext.getCurrentId();
+        if (userId == null || userId <= 0) {
+            throw new ViolationOperationException("请先登录");
+        }
+        return userId;
+    }
+
     //根据id查询课程
     @Override
     public CoursesVO findCourse(Long courseId) {
@@ -135,6 +172,7 @@ public class CoursesServiceImpl implements CoursesService {
         return courses;
     }
 
+    // 批量权限检查先确认所有课程存在，不能悄悄忽略缺失的课程编号。
     private List<Courses> getCoursesByIds(Set<Long> courseIds) {
         if (courseIds == null || courseIds.isEmpty()) {
             return List.of();

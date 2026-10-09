@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { ArrowRight, Bot, BookOpenText, Check, MessageSquareText, RefreshCw, Send, ShieldCheck, Sparkles, UserRound, X } from 'lucide-vue-next'
 import ProposalDetails from '@/components/ProposalDetails.vue'
@@ -32,11 +32,15 @@ interface ModeSession {
 }
 
 const props = defineProps<{ mode: AgentMode; standalone: boolean }>()
+defineOptions({ name: 'AgentChatView' })
 
 const MAX_MESSAGE_LENGTH = 10_000
 
 const route = useRoute()
 const router = useRouter()
+// 缓存页面仍会看到全局路由变化，只让自己的入口切换当前会话。
+const pageRouteName = route.name as string
+const pageActive = computed(() => route.name === pageRouteName)
 const { currentUser } = useAuth()
 const { showToast } = useToast()
 const { approvalRevision } = useApprovalNotifications()
@@ -63,9 +67,16 @@ let progressVersion = 0
 let pageVersion = 0
 let historyVersion = 0
 let disposed = false
-// 当前专注请求可选择一个 ACTIVE 学习计划；空值表示沿用会话绑定。
+// 新对话先选计划，首条消息创建会话后先保存关联，再提交给助教。
 const learningPlanDraftRef = ref('')
+// 与尚未保存的选择分开，只有后端确认过的关联才锁定。
+const boundLearningPlanRef = ref('')
+const bindingError = ref('')
+const initialBindingPending = ref(false)
 const learningPlans = ref<LearningPlanDraft[]>([])
+const learningPlansLoading = ref(false)
+const learningPlansError = ref('')
+let learningPlansVersion = 0
 const learningPlanBindingVersion = ref(0)
 const learningPlanBindingSaving = ref(false)
 const bindingLoading = ref(false)
@@ -85,7 +96,7 @@ let layoutFrame = 0
 function measureConversationHeight() {
   layoutFrame = 0
   const panel = conversationPanel.value
-  if (disposed || !panel) return
+  if (disposed || !pageActive.value || !panel) return
   const viewport = window.visualViewport
   const top = panel.getBoundingClientRect().top + window.scrollY
   const viewportBottom = (viewport?.height ?? window.innerHeight) + (viewport?.offsetTop ?? 0)
@@ -99,7 +110,7 @@ function measureConversationHeight() {
 }
 
 function scheduleConversationMeasure() {
-  if (disposed || layoutFrame) return
+  if (disposed || !pageActive.value || layoutFrame) return
   layoutFrame = window.requestAnimationFrame(measureConversationHeight)
 }
 
@@ -118,7 +129,7 @@ const modeSessions = computed<ModeSession[]>(() => {
 
 const selectedSession = computed(() => modeSessions.value.find((item) => item.id === selectedSessionId.value) ?? null)
 const remainingCharacters = computed(() => MAX_MESSAGE_LENGTH - draft.value.length)
-const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !learningPlanBindingSaving.value && !activeRun.value && remainingCharacters.value >= 0))
+const canSend = computed(() => Boolean((selectedSession.value?.status === 'ACTIVE' || (props.standalone && !selectedSessionId.value)) && draft.value.trim() && !loadError.value && !sending.value && !approvalBusy.value && !loadingSessions.value && !historyLoading.value && !loadingRun.value && !bindingLoading.value && !bindingError.value && !learningPlanBindingSaving.value && !activeRun.value && !(props.mode === 'FOCUS' && learningPlansLoading.value) && remainingCharacters.value >= 0))
 const runStatusText = computed(() => activeRun.value ? ({ WAITING_APPROVAL: '等待审批', APPROVAL_RESOLVED: '等待继续执行', RUNNING: '任务正在执行', COMPLETED: '任务已完成', FAILED: '任务失败' }[activeRun.value.status]) : sending.value ? '正在思考' : loadingRun.value ? '同步任务中' : '可以开始学习')
 const toolNames: Record<string, string> = { create_memory: '新增记忆', update_memory: '修改记忆', delete_memory: '删除记忆', create_learning_plan_draft: '创建学习计划草案', update_learning_plan_draft: '修改学习计划', activate_learning_plan_draft: '确认学习计划生效', create_session_goal: '创建学习目标', update_task_plan: '更新任务计划', update_task_progress: '更新任务进度', propose_learning_progress: '记录学习进度', propose_course_learning_progress: '记录课程进度', switch_session_goal: '切换学习目标' }
 
@@ -262,7 +273,7 @@ async function selectSession(sessionId: string) {
   }
   // 移动选择器和历史侧栏使用同一列表，禁止把其他模式的 ID 带入页面。
   if (!modeSessions.value.some(item => item.id === sessionId)) return
-  await router.replace({ name: route.name as string, query: { session: sessionId } })
+  await router.replace({ name: pageRouteName, query: { session: sessionId } })
 }
 
 function sessionStatusLabel(status: string) {
@@ -290,52 +301,87 @@ async function newConversation() {
   historyLoading.value = false
   loadingRun.value = false
   learningPlanDraftRef.value = ''
+  boundLearningPlanRef.value = ''
+  bindingError.value = ''
+  initialBindingPending.value = false
+  learningPlanBindingVersion.value = 0
   bindingLoading.value = false
-  await router.replace({ name: route.name as string })
+  await router.replace({ name: pageRouteName })
 }
 
 async function switchPage(mode: 'CHAT' | 'FOCUS') {
   if (sending.value || approvalBusy.value || mode === props.mode) return
-  // 切换不携带 session 参数，切回来仍是一份新对话。
+  // 各模式保留自己的对话，显式点击“新对话”才清空当前选择。
   await router.push({ name: mode === 'CHAT' ? 'agent-chat-standalone' : 'agent-focus' })
 }
 
 // 会话切换后读取当前绑定，避免把上一会话的计划误显示到新会话。
 async function loadLearningPlanBinding(sessionId: string) {
+  const token = currentUser.value?.token
   bindingLoading.value = true
-  learningPlanDraftRef.value = ''
-  learningPlanBindingVersion.value = 0
+  bindingError.value = ''
   try {
     const binding = await getSessionLearningPlanBinding(sessionId)
-    if (sessionId === selectedSessionId.value) {
+    if (!disposed && token === currentUser.value?.token && sessionId === selectedSessionId.value) {
       learningPlanDraftRef.value = binding.draftRef ?? ''
+      boundLearningPlanRef.value = binding.draftRef ?? ''
       learningPlanBindingVersion.value = binding.bindingVersion
     }
-  } catch {
-    if (sessionId === selectedSessionId.value) learningPlanDraftRef.value = ''
+  } catch (error) {
+    if (token === currentUser.value?.token && sessionId === selectedSessionId.value) {
+      bindingError.value = error instanceof Error ? error.message : '学习计划关联读取失败'
+    }
   } finally {
-    if (sessionId === selectedSessionId.value) bindingLoading.value = false
+    if (token === currentUser.value?.token && sessionId === selectedSessionId.value) bindingLoading.value = false
   }
 }
 
-// 页面选择立即保存为会话绑定，空选项表示解除关联。
+// 已有会话首次选择后立即保存；尚未创建会话时，允许反复调整选择。
 async function saveLearningPlanBinding() {
   const sessionId = selectedSessionId.value
+  // 尚未创建会话时只保留选择，不能向后端提交一个不存在的编号。
   if (!sessionId || learningPlanBindingSaving.value) return
+  if (boundLearningPlanRef.value) {
+    learningPlanDraftRef.value = boundLearningPlanRef.value
+    return
+  }
+  const token = currentUser.value?.token
   learningPlanBindingSaving.value = true
   try {
     const binding = await updateSessionLearningPlanBinding(
       sessionId, learningPlanDraftRef.value || null, learningPlanBindingVersion.value,
     )
-    if (sessionId !== selectedSessionId.value) return
+    if (disposed || token !== currentUser.value?.token || sessionId !== selectedSessionId.value) return
     learningPlanDraftRef.value = binding.draftRef ?? ''
+    boundLearningPlanRef.value = binding.draftRef ?? ''
     learningPlanBindingVersion.value = binding.bindingVersion
+    initialBindingPending.value = false
     showToast('success', '学习计划关联已保存', binding.title ?? '当前会话不关联长期计划')
   } catch (error) {
+    if (disposed || token !== currentUser.value?.token || sessionId !== selectedSessionId.value) return
     showToast('error', '保存学习计划关联失败', error instanceof Error ? error.message : '请刷新后重试')
     await loadLearningPlanBinding(sessionId)
   } finally {
-    learningPlanBindingSaving.value = false
+    if (token === currentUser.value?.token) learningPlanBindingSaving.value = false
+  }
+}
+
+// 回到专注页时刷新可选计划，不用旧账号或旧请求的结果覆盖当前选择。
+async function loadLearningPlans() {
+  if (props.mode !== 'FOCUS') return
+  const version = ++learningPlansVersion
+  const token = currentUser.value?.token
+  learningPlansLoading.value = true
+  learningPlansError.value = ''
+  try {
+    const plans = await listLearningPlanDrafts()
+    if (!disposed && version === learningPlansVersion && token === currentUser.value?.token) learningPlans.value = plans
+  } catch (error) {
+    if (!disposed && version === learningPlansVersion && token === currentUser.value?.token) {
+      learningPlansError.value = error instanceof Error ? error.message : '学习计划读取失败'
+    }
+  } finally {
+    if (version === learningPlansVersion && token === currentUser.value?.token) learningPlansLoading.value = false
   }
 }
 
@@ -343,6 +389,7 @@ async function sendMessage() {
   let session = selectedSession.value
   const ownerToken = currentUser.value?.token
   const userMessage = draft.value.trim()
+  const selectedPlan = learningPlanDraftRef.value
   if (!userMessage || !canSend.value) return
   if (userMessage.length > MAX_MESSAGE_LENGTH) {
     showToast('error', '内容过长', `每次最多输入 ${MAX_MESSAGE_LENGTH} 个字符`)
@@ -360,12 +407,29 @@ async function sendMessage() {
     if (!session && props.standalone) {
       const created = await createStandaloneSession(userMessage.slice(0, 100), props.mode as 'CHAT' | 'FOCUS')
       if (disposed || ownerToken !== currentUser.value?.token) return
-      await router.replace({ name: route.name as string, query: { session: String(created.id) } })
-      sessions.value = [created, ...sessions.value]
+      // 离开聊天页也能完成创建，但不能把用户从其他页面拉回聊天页。
+      pageVersion++
+      loadingSessions.value = false
       selectedSessionId.value = String(created.id)
+      sessions.value = [created, ...sessions.value]
+      learningPlanDraftRef.value = selectedPlan
+      boundLearningPlanRef.value = ''
+      bindingError.value = ''
+      learningPlanBindingVersion.value = 0
+      initialBindingPending.value = props.mode === 'FOCUS' && Boolean(selectedPlan)
+      if (pageActive.value) await router.replace({ name: pageRouteName, query: { session: String(created.id) } })
       session = selectedSession.value
     }
     if (!session) return
+    if (initialBindingPending.value) {
+      // 关联失败就停止发送，不能悄悄用“无计划”执行首轮；重试复用同一会话。
+      const binding = await updateSessionLearningPlanBinding(session.id, learningPlanDraftRef.value || null, learningPlanBindingVersion.value)
+      if (disposed || ownerToken !== currentUser.value?.token || selectedSessionId.value !== session.id) return
+      learningPlanDraftRef.value = binding.draftRef ?? ''
+      boundLearningPlanRef.value = binding.draftRef ?? ''
+      learningPlanBindingVersion.value = binding.bindingVersion
+      initialBindingPending.value = false
+    }
     // 课程快照初始化幂等；课程页的发送是用户明确开始本次课程学习的动作。
     if (props.mode === 'COURSE') {
       const initialized = await startCourseLearning(session.id)
@@ -397,7 +461,7 @@ async function sendMessage() {
   } finally {
     if (ownerToken === currentUser.value?.token) sending.value = false
     await nextTick()
-    composer.value?.focus()
+    if (pageActive.value) composer.value?.focus()
   }
 }
 
@@ -531,26 +595,37 @@ watch(() => currentUser.value?.token, () => {
   bindingLoading.value = false
   learningPlanBindingSaving.value = false
   learningPlanDraftRef.value = ''
+  boundLearningPlanRef.value = ''
+  bindingError.value = ''
+  initialBindingPending.value = false
+  learningPlansVersion++
+  learningPlans.value = []
+  learningPlansLoading.value = false
+  learningPlansError.value = ''
   learningPlanBindingVersion.value = 0
   loadError.value = ''
-  if (currentUser.value?.token) void loadSessionList()
+  if (currentUser.value?.token) {
+    void loadSessionList()
+    void loadLearningPlans()
+  }
 })
 
 // 通知只安排查询，不自动提交决定或恢复任务。
 watch([approvalRevision, sending, approvalBusy], () => {
   clearTimeout(runRefreshTimer)
-  if (currentUser.value?.token && !sending.value && !approvalBusy.value && !historyLoading.value && selectedSessionId.value) {
+  if (pageActive.value && currentUser.value?.token && !sending.value && !approvalBusy.value && !historyLoading.value && selectedSessionId.value) {
     runRefreshTimer = setTimeout(() => void refreshSessionState(selectedSessionId.value), 120)
   }
 })
 
-// 离开页面后取消排队的刷新，正在返回的旧响应也会失效。
+// 退出账号等真正销毁页面的场景才作废请求；普通切页仅停用布局监听。
 onBeforeUnmount(() => {
   disposed = true
   pageVersion++
   historyVersion++
   runRefreshVersion++
   progressVersion++
+  learningPlansVersion++
   clearTimeout(runRefreshTimer)
   layoutObserver?.disconnect()
   window.cancelAnimationFrame(layoutFrame)
@@ -560,9 +635,15 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  [() => route.query.session, modeSessions],
-  ([querySession]) => {
+  [() => route.name, () => route.query.session, modeSessions],
+  ([routeName, querySession]) => {
+    if (routeName !== pageRouteName) return
     const requestedId = typeof querySession === 'string' ? querySession : ''
+    // 从侧栏返回没有 session 参数时，恢复缓存中的对话及输入内容。
+    if (!requestedId && selectedSessionId.value && selectedSession.value) {
+      void router.replace({ name: pageRouteName, query: { ...route.query, session: selectedSessionId.value } })
+      return
+    }
     const nextId = modeSessions.value.some((item) => item.id === requestedId)
       ? requestedId
       : props.standalone ? '' : modeSessions.value.find(item => item.status === 'ACTIVE')?.id ?? modeSessions.value[0]?.id ?? ''
@@ -577,17 +658,46 @@ watch(
       clearProgress()
       draft.value = ''
       learningPlanDraftRef.value = ''
+      boundLearningPlanRef.value = ''
+      bindingError.value = ''
+      initialBindingPending.value = false
+      learningPlanBindingVersion.value = 0
       bindingLoading.value = false
       if (nextId) {
         // 首次创建时正在发送首条消息，不让空历史的慢响应覆盖正在显示的问题。
         if (!sending.value) void loadConversation(nextId)
-        if (props.mode === 'FOCUS' && selectedSession.value?.status === 'ACTIVE') void loadLearningPlanBinding(nextId)
+        if (!sending.value && props.mode === 'FOCUS' && selectedSession.value?.status === 'ACTIVE') void loadLearningPlanBinding(nextId)
       }
       void scrollToLatest()
     }
   },
   { immediate: true },
 )
+
+onDeactivated(() => {
+  clearTimeout(runRefreshTimer)
+  layoutObserver?.disconnect()
+  window.cancelAnimationFrame(layoutFrame)
+  layoutFrame = 0
+})
+
+let previouslyActivated = false
+onActivated(() => {
+  if (chatView.value) layoutObserver?.observe(chatView.value)
+  if (conversationPanel.value) layoutObserver?.observe(conversationPanel.value)
+  if (chatView.value?.parentElement?.parentElement) layoutObserver?.observe(chatView.value.parentElement.parentElement)
+  scheduleConversationMeasure()
+  void scrollToLatest()
+  if (previouslyActivated && !sending.value && !approvalBusy.value) {
+    void loadSessionList()
+    if (selectedSessionId.value) void refreshSessionState(selectedSessionId.value)
+    if (props.mode === 'FOCUS' && selectedSession.value?.status === 'ACTIVE' && !activeRun.value && !initialBindingPending.value) {
+      void loadLearningPlanBinding(selectedSessionId.value)
+    }
+    void loadLearningPlans()
+  }
+  previouslyActivated = true
+})
 
 onMounted(async () => {
   layoutObserver = new ResizeObserver(scheduleConversationMeasure)
@@ -600,11 +710,7 @@ onMounted(async () => {
   scheduleConversationMeasure()
   composer.value?.focus()
   void loadSessionList()
-  try {
-    learningPlans.value = await listLearningPlanDrafts()
-  } catch {
-    learningPlans.value = []
-  }
+  void loadLearningPlans()
 })
 </script>
 
@@ -615,7 +721,7 @@ onMounted(async () => {
         <span class="section-kicker"><Sparkles :size="13" /> 智能学习</span>
         <h2>{{ pageTitle }}</h2>
       </div>
-      <div class="agent-heading-actions"><button v-if="standalone" class="button button-primary" type="button" :disabled="sending || approvalBusy" @click="newConversation">新对话</button><RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 全部会话</RouterLink></div>
+      <div class="agent-heading-actions"><button v-if="standalone" class="button button-primary" type="button" :disabled="sending || approvalBusy" @click="newConversation">新对话</button><RouterLink class="button button-secondary" to="/sessions"><BookOpenText :size="16" /> 全部历史</RouterLink></div>
     </section>
 
     <p v-if="loadError" class="agent-load-error" role="alert">{{ loadError }} <button class="button button-secondary" type="button" @click="retryLoad">重试</button></p>
@@ -663,15 +769,18 @@ onMounted(async () => {
           </div>
           <div v-if="standalone" class="agent-mode-switch" role="group" aria-label="学习页面"><button v-for="target in (['CHAT', 'FOCUS'] as const)" :key="target" type="button" :aria-pressed="mode === target" :class="{ active: mode === target }" :disabled="sending || approvalBusy" @click="switchPage(target)">{{ target === 'CHAT' ? '问答' : '专注' }}</button></div>
         </header>
-        <div v-if="mode === 'FOCUS' && selectedSessionId && selectedSession?.status === 'ACTIVE'" class="agent-plan-toolbar">
+        <div v-if="mode === 'FOCUS' && (!selectedSessionId || selectedSession?.status === 'ACTIVE')" class="agent-plan-toolbar">
           <label for="learning-plan-select">学习计划</label>
-            <select id="learning-plan-select" v-model="learningPlanDraftRef" :disabled="sending || approvalBusy || loadingRun || Boolean(activeRun) || learningPlanBindingSaving || bindingLoading" @change="saveLearningPlanBinding">
+            <select id="learning-plan-select" v-model="learningPlanDraftRef" :title="boundLearningPlanRef ? '当前会话已关联学习计划，不能更换或解除关联' : undefined" :disabled="Boolean(boundLearningPlanRef) || sending || approvalBusy || loadingRun || Boolean(activeRun) || learningPlanBindingSaving || bindingLoading || Boolean(bindingError) || learningPlansLoading || Boolean(learningPlansError)" @change="saveLearningPlanBinding">
               <option value="">不关联学习计划</option>
               <option v-for="plan in learningPlans.filter(item => item.status === 'ACTIVE')" :key="plan.draftRef" :value="plan.draftRef">
                 {{ plan.title }} · v{{ plan.version }}
               </option>
             </select>
           <RouterLink :to="{ name: 'learning-plans' }">管理计划 <ArrowRight :size="13" /></RouterLink>
+          <span v-if="learningPlansLoading">正在读取计划…</span>
+          <span v-else-if="learningPlansError" role="alert">{{ learningPlansError }} <button type="button" class="button button-secondary" @click="loadLearningPlans">重试</button></span>
+          <span v-if="bindingError" role="alert">{{ bindingError }} <button type="button" class="button button-secondary" @click="loadLearningPlanBinding(selectedSessionId)">重试</button></span>
         </div>
 
         <LearningProgressCard

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, KeepAlive, ref } from 'vue'
 import { RouterView } from 'vue-router'
 import { useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
@@ -43,7 +43,10 @@ const isAdminPage = computed(() => route.path.startsWith('/admin'))
       <main class="page-container">
         <RouterView v-slot="{ Component }">
           <Transition name="page" mode="out-in">
-            <component :is="Component" :key="String(route.name)" />
+            <!-- 只缓存三个聊天页面，让离开页面后的请求继续更新原对话。 -->
+            <KeepAlive include="AgentChatView" :max="3">
+              <component :is="Component" :key="String(route.name)" />
+            </KeepAlive>
           </Transition>
         </RouterView>
       </main>

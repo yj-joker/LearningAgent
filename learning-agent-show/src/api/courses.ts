@@ -13,6 +13,17 @@ function normalizeCourse(course: CourseApiResponse): CourseVO {
   }
 }
 
+// 课程选择与课程编辑都从数据库列表恢复，不依赖当前浏览器的操作记录。
+export async function listCourses() {
+  const courses = await request<CourseApiResponse[]>(COURSE_BASE)
+  return courses.map(normalizeCourse)
+}
+
+export async function getCourse(courseId: ApiId) {
+  const course = await request<CourseApiResponse>(`${COURSE_BASE}/${encodeURIComponent(String(courseId))}`)
+  return normalizeCourse(course)
+}
+
 export async function createCourse(payload: CourseCreatePayload) {
   const course = await request<CourseApiResponse>(`${COURSE_BASE}/createCourse`, {
     method: 'POST',

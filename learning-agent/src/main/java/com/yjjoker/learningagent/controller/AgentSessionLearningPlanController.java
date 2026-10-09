@@ -31,7 +31,7 @@ public class AgentSessionLearningPlanController {
         return Result.success(sessionGoalService.getLearningPlanBinding(sessionId));
     }
 
-    // 绑定 ACTIVE 计划或传空 draftRef 解除绑定；后端验证所有权和关联版本。
+    // 首次绑定 ACTIVE 计划；已有关联不能更换或解除，后端验证所有权和关联版本。
     @PutMapping("/{sessionId}/learning-plan")
     @Operation(summary = "更新会话学习计划绑定")
     public Result<SessionLearningPlanBindingVO> update(

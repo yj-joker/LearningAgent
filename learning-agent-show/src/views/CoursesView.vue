@@ -1,24 +1,27 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { ArrowRight, BookOpenText, ListTree, LockKeyhole, Plus, Send } from 'lucide-vue-next'
+import { ArrowRight, BookOpenText, Pencil, LockKeyhole, Plus, RefreshCw } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { ApiError } from '@/api/client'
-import { createCourse, publishCourse } from '@/api/courses'
+import { createCourse } from '@/api/courses'
 import { useActivity } from '@/composables/useActivity'
+import { useCourses } from '@/composables/useCourses'
+import { useAuth } from '@/composables/useAuth'
 import { useToast } from '@/composables/useToast'
 import type { KnownCourse } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
-const { knownCourses, addActivity } = useActivity()
+const { addActivity } = useActivity()
+const { courses: knownCourses, loading, error: courseError, loadCourses, upsertCourse } = useCourses()
+const { currentUser } = useAuth()
 const { showToast } = useToast()
 
 const createOpen = ref(false)
 const creating = ref(false)
-const publishingCourseId = ref<string | null>(null)
 const errors = reactive<Record<string, string>>({})
 const form = reactive({ courseName: '', difficultyLevel: 3, learningOutline: '' })
 
@@ -43,7 +46,8 @@ function resetForm() {
 }
 
 async function submitCreate() {
-  if (!validate()) return
+  if (creating.value || !validate()) return
+  const token = currentUser.value?.token
   creating.value = true
   try {
     const result = await createCourse({
@@ -53,6 +57,8 @@ async function submitCreate() {
         ? JSON.stringify({ content: form.learningOutline.trim() })
         : null,
     })
+    if (token !== currentUser.value?.token) return
+    upsertCourse(result, token)
     addActivity({
       kind: 'course-created',
       title: result.courseName,
@@ -63,32 +69,16 @@ async function submitCreate() {
     showToast('success', '课程创建成功', `${result.courseName} 已加入你的课程`)
     createOpen.value = false
     resetForm()
+    void router.push({ name: 'course-editor', params: { courseId: String(result.id) } })
   } catch (error) {
+    if (token !== currentUser.value?.token) return
     showToast('error', '创建失败', error instanceof ApiError ? error.message : '发生未知错误')
   } finally {
-    creating.value = false
+    if (token === currentUser.value?.token) creating.value = false
   }
 }
 
-async function submitPublish(course: KnownCourse) {
-  if (course.courseType !== 'PRIVATE' || publishingCourseId.value) return
-  publishingCourseId.value = course.courseId
-  try {
-    const result = await publishCourse(course.courseId)
-    addActivity({
-      kind: 'course-published',
-      title: result.courseName || course.courseName,
-      description: '已提交审核',
-      status: result.courseType,
-      resourceId: course.courseId,
-    })
-    showToast('success', '已提交审核', `${result.courseName || course.courseName} 正在等待管理员处理`)
-  } catch (error) {
-    showToast('error', '提交审核失败', error instanceof ApiError ? error.message : '发生未知错误')
-  } finally {
-    publishingCourseId.value = null
-  }
-}
+watch(() => currentUser.value?.token, () => { createOpen.value = false; creating.value = false; resetForm() })
 
 function statusDescription(course: KnownCourse) {
   if (course.courseType === 'PRIVATE') return '仅自己可见，可以继续编辑章节'
@@ -102,7 +92,6 @@ function statusDescription(course: KnownCourse) {
     <section class="page-heading">
       <div><span class="section-kicker">我的课程</span><h2>课程管理</h2><p>管理课程内容、章节和发布状态。</p></div>
       <div class="page-heading-actions">
-        <RouterLink class="button button-secondary" :to="{ path: '/chapters', query: { from: 'courses' } }"><ListTree :size="17" /> 章节编排</RouterLink>
         <button class="button button-primary" @click="createOpen = true"><Plus :size="18" /> 创建课程</button>
       </div>
     </section>
@@ -110,9 +99,12 @@ function statusDescription(course: KnownCourse) {
     <section class="course-library-panel">
       <header class="resource-section-header">
         <div><h3>课程列表</h3><p>共 {{ knownCourses.length }} 门课程</p></div>
+        <button class="icon-button" :disabled="loading || creating" title="刷新课程" aria-label="刷新课程" @click="loadCourses"><RefreshCw :size="18" :class="{ spin: loading }" /></button>
       </header>
 
-      <div v-if="knownCourses.length" class="course-library-grid">
+      <div v-if="courseError" class="chapter-load-error" role="alert"><div><strong>课程加载失败</strong><p>{{ courseError }}</p></div><button class="button button-secondary" :disabled="loading" @click="loadCourses">重试</button></div>
+      <div v-else-if="loading && !knownCourses.length" class="knowledge-loading" role="status"><RefreshCw :size="22" class="spin" /> 正在加载课程…</div>
+      <div v-else-if="knownCourses.length" class="course-library-grid">
         <article v-for="course in knownCourses" :key="course.courseId" class="course-library-item">
           <header>
             <span class="course-library-icon"><BookOpenText :size="22" /></span>
@@ -124,23 +116,16 @@ function statusDescription(course: KnownCourse) {
             <time>最近更新 {{ new Date(course.updatedAt).toLocaleString('zh-CN') }}</time>
           </div>
           <footer>
-            <RouterLink class="button button-secondary" :to="{ path: `/chapters/${course.courseId}`, query: { from: 'courses' } }"><ListTree :size="16" /> 编辑章节</RouterLink>
-            <button
-              v-if="course.courseType === 'PRIVATE'"
-              class="button button-primary"
-              :disabled="Boolean(publishingCourseId)"
-              @click="submitPublish(course)"
-            >
-              <Send :size="16" /> {{ publishingCourseId === course.courseId ? '提交中…' : '提交审核' }}
-            </button>
+            <RouterLink class="button button-secondary" :to="{ name: 'course-editor', params: { courseId: course.courseId } }"><Pencil :size="16" /> 编辑课程</RouterLink>
           </footer>
         </article>
       </div>
       <EmptyState v-else title="还没有课程" description="创建第一门课程后，就可以继续添加和编排章节。" />
     </section>
 
-    <ModalDialog :open="createOpen" title="创建课程" description="填写课程的基本信息。" width="wide" @close="createOpen = false">
+    <ModalDialog :open="createOpen" title="创建课程" description="填写课程的基本信息。" width="wide" @close="!creating && (createOpen = false)">
       <form class="form-layout" @submit.prevent="submitCreate">
+        <fieldset class="course-create-fields" :disabled="creating">
         <div class="form-section">
           <label class="field-label" for="course-name">课程名称 <b>*</b></label>
           <input id="course-name" v-model="form.courseName" class="form-input" placeholder="例如：Java 并发编程" autofocus @input="errors.courseName = ''">
@@ -164,11 +149,16 @@ function statusDescription(course: KnownCourse) {
           <span v-if="errors.learningOutline" class="field-error">{{ errors.learningOutline }}</span>
         </div>
 
+        </fieldset>
         <footer class="form-actions">
-          <button type="button" class="button button-secondary" @click="createOpen = false">取消</button>
+          <button type="button" class="button button-secondary" :disabled="creating" @click="createOpen = false">取消</button>
           <button class="button button-primary" :disabled="creating">{{ creating ? '创建中…' : '创建课程' }} <ArrowRight v-if="!creating" :size="17" /></button>
         </footer>
       </form>
     </ModalDialog>
   </div>
 </template>
+
+<style scoped>
+.course-create-fields { display: grid; gap: 18px; min-width: 0; border: 0; padding: 0; margin: 0; }
+</style>

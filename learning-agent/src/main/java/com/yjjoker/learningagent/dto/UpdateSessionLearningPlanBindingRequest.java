@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
 
-// 更新会话的长期计划引用；draftRef 为空表示明确取消关联。
+// 提交会话的长期计划引用；空值仅允许未关联会话保持不关联，不能解除已保存的关联。
 @Getter
 @Setter
 public class UpdateSessionLearningPlanBindingRequest {

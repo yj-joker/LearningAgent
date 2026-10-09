@@ -7,11 +7,10 @@ import {
   CheckCircle2,
   Clock3,
   FolderOpen,
-  Lightbulb,
-  ListTree,
   MessageSquareText,
   Plus,
   Play,
+  ScrollText,
 } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
@@ -67,7 +66,7 @@ onBeforeUnmount(() => revealObserver?.disconnect())
         <p>从一门课程开始，继续整理你的学习内容。</p>
       </div>
       <div class="workspace-summary-actions">
-        <RouterLink class="button button-secondary" to="/chapters"><ListTree :size="17" /> 编排章节</RouterLink>
+        <RouterLink class="button button-secondary" to="/courses"><BookOpenText :size="17" /> 编辑课程</RouterLink>
         <RouterLink class="button button-primary" to="/courses?create=1"><Plus :size="17" /> 创建课程</RouterLink>
       </div>
     </section>
@@ -112,11 +111,10 @@ onBeforeUnmount(() => revealObserver?.disconnect())
         <span class="section-kicker">快捷入口</span>
         <h3>继续学习</h3>
         <nav aria-label="快捷入口">
-          <RouterLink to="/courses"><span><BookOpenText :size="18" /></span><div><strong>我的课程</strong><small>查看课程与审核状态</small></div><ArrowRight :size="16" /></RouterLink>
-          <RouterLink to="/chapters"><span><ListTree :size="18" /></span><div><strong>章节编排</strong><small>维护课程章节顺序</small></div><ArrowRight :size="16" /></RouterLink>
-          <RouterLink to="/knowledge-points"><span><Lightbulb :size="18" /></span><div><strong>知识点管理</strong><small>整理章节中的知识内容</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/courses"><span><BookOpenText :size="18" /></span><div><strong>课程编辑</strong><small>统一维护课程、章节和知识点</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/learning-plans"><span><ScrollText :size="18" /></span><div><strong>学习计划</strong><small>制定和调整长期学习安排</small></div><ArrowRight :size="16" /></RouterLink>
           <RouterLink to="/knowledge-bases"><span><FolderOpen :size="18" /></span><div><strong>课程知识库</strong><small>上传和下载课程资料</small></div><ArrowRight :size="16" /></RouterLink>
-          <RouterLink to="/sessions"><span><MessageSquareText :size="18" /></span><div><strong>学习会话</strong><small>开始一次专注学习</small></div><ArrowRight :size="16" /></RouterLink>
+          <RouterLink to="/sessions"><span><MessageSquareText :size="18" /></span><div><strong>全部历史</strong><small>查看课程、问答和专注记录</small></div><ArrowRight :size="16" /></RouterLink>
         </nav>
       </aside>
     </div>

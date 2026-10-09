@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { watch } from 'vue'
 import { useAuth } from '@/composables/useAuth'
+import { getStoredToken } from '@/utils/authStorage'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -17,16 +19,24 @@ const router = createRouter({
       meta: { title: '课程管理', requiresUser: true },
     },
     {
+      path: '/courses/:courseId/edit',
+      name: 'course-editor',
+      component: () => import('@/views/CourseEditorView.vue'),
+      meta: { title: '课程编辑', requiresUser: true },
+    },
+    {
       path: '/chapters/:courseId?',
       name: 'chapters',
-      component: () => import('@/views/ChaptersView.vue'),
-      meta: { title: '章节编排', requiresUser: true },
+      redirect: to => to.params.courseId
+        ? { name: 'course-editor', params: { courseId: to.params.courseId }, query: to.query }
+        : { name: 'courses' },
     },
     {
       path: '/knowledge-points/:courseId?/:chapterId?',
       name: 'knowledge-points',
-      component: () => import('@/views/KnowledgePointsView.vue'),
-      meta: { title: '知识点管理', requiresUser: true },
+      redirect: to => to.params.courseId
+        ? { name: 'course-editor', params: { courseId: to.params.courseId }, query: { ...to.query, chapter: to.params.chapterId || to.query.chapter } }
+        : { name: 'courses' },
     },
     {
       path: '/knowledge-bases',
@@ -38,7 +48,7 @@ const router = createRouter({
       path: '/sessions',
       name: 'sessions',
       component: () => import('@/views/SessionsView.vue'),
-      meta: { title: '学习会话', requiresUser: true },
+      meta: { title: '全部历史', requiresUser: true },
     },
     {
       path: '/ai-assistant',
@@ -101,12 +111,34 @@ const router = createRouter({
   scrollBehavior: () => ({ top: 0 }),
 })
 
-router.afterEach((to) => {
+const { currentUser, isAuthenticated, isAdmin, refreshAuthentication } = useAuth()
+let refreshingRouteAuth = false
+
+function redirectWithoutToken() {
+  const route = router.currentRoute.value
+  if (getStoredToken() || (!route.meta.requiresUser && !route.meta.requiresAdmin)) return
+  // 保留原位置，重新登录后能继续当前课程和章节。
+  void router.replace({ name: route.meta.requiresAdmin ? 'admin-login' : 'login', query: { redirect: route.fullPath } })
+}
+
+// 请求失败和其他标签页退出都能立即触发跳转，无需等待下一次点击导航。
+watch(() => currentUser.value?.token, () => {
+  if (!refreshingRouteAuth) redirectWithoutToken()
+}, { flush: 'sync' })
+
+router.afterEach((to, _from, failure) => {
+  // 被登录跳转取消的旧导航也会走到这里，不能让它再启动一次跳转。
+  if (failure) return
   document.title = `${String(to.meta.title ?? '工作台')} · Learning Agent`
+  redirectWithoutToken()
 })
 
 router.beforeEach((to) => {
-  const { isAuthenticated, isAdmin } = useAuth()
+  // 每次进页面都重读实际 token，避免仅凭旧的内存身份放行。
+  // 此处由当前导航返回登录页，避免同步状态时又启动第二次跳转。
+  refreshingRouteAuth = true
+  try { refreshAuthentication() }
+  finally { refreshingRouteAuth = false }
   if (to.meta.requiresAdmin) {
     if (!isAuthenticated.value) {
       return { name: 'admin-login', query: { redirect: to.fullPath } }

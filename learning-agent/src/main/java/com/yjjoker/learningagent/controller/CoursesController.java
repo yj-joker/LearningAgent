@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/learning-agent/courses")
 @AllArgsConstructor
@@ -23,6 +25,21 @@ import org.springframework.web.bind.annotation.*;
 @Tag(name = "课程接口")
 public class CoursesController {
     private final CoursesService coursesService;
+
+    // 编辑课程列表只返回登录用户自己的课程，身份从现有登录拦截器取得。
+    @GetMapping
+    @Operation(summary = "获取当前用户自己的课程")
+    public Result<List<CoursesVO>> findCurrentUserCourses() {
+        return Result.success(coursesService.findCurrentUserCourses());
+    }
+
+    // 课程编辑直链重新从数据库读取详情，不能靠浏览器缓存判断归属。
+    @GetMapping("/{courseId}")
+    @Operation(summary = "获取当前用户自己的课程详情")
+    public Result<CoursesVO> findOwnedCourse(@Positive(message = "课程 ID 必须大于 0") @PathVariable Long courseId) {
+        return Result.success(coursesService.findOwnedCourse(courseId));
+    }
+
     //创建课程
     @PostMapping("/createCourse")
     @Operation(summary = "创建课程")
