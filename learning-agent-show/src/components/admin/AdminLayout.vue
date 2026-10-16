@@ -21,7 +21,7 @@ function signOut() {
     <aside class="admin-sidebar" :class="{ open: menuOpen }">
       <div class="admin-brand">
         <span><GraduationCap :size="23" /></span>
-        <div><strong>Learning Agent</strong><small>ADMIN CONSOLE</small></div>
+        <div><strong>LearnFlow</strong><small>ADMIN CONSOLE</small></div>
         <button class="admin-sidebar-close" aria-label="关闭菜单" @click="menuOpen = false"><PanelLeftClose :size="18" /></button>
       </div>
 
@@ -43,7 +43,7 @@ function signOut() {
     <section class="admin-main">
       <header class="admin-mobile-header">
         <button aria-label="打开管理端菜单" @click="menuOpen = true"><UsersRound :size="20" /></button>
-        <strong>Learning Agent 管理端</strong>
+        <strong>LearnFlow 管理端</strong>
       </header>
       <main class="admin-content"><slot /></main>
     </section>

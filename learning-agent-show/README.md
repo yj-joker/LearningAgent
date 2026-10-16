@@ -1,4 +1,4 @@
-# Learning Agent Show
+# LearnFlow 前端
 
 基于 `learning-agent` Spring Boot 接口实现的 Vue 3 前端，前后端在独立目录中开发。学习会话列表、历史消息与固定模式需要配套新版后端。
 

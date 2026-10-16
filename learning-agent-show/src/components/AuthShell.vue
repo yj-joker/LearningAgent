@@ -9,7 +9,7 @@ defineProps<{ title: string; eyebrow: string; description: string }>()
     <section class="auth-brand-panel">
       <RouterLink class="brand auth-brand" to="/">
         <span class="brand-mark"><GraduationCap :size="24" :stroke-width="2.2" /></span>
-        <span><strong>Learning Agent</strong><small>LEARNING WORKSPACE</small></span>
+        <span><strong>LearnFlow</strong><small>LEARNING WORKSPACE</small></span>
       </RouterLink>
       <div class="auth-brand-copy">
         <span>学习工作台</span>

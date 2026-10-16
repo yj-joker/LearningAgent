@@ -51,8 +51,8 @@ function signOut() {
       <RouterLink class="brand" to="/" @click="$emit('close')">
         <span class="brand-mark"><GraduationCap :size="25" :stroke-width="2.2" /></span>
         <span>
-          <strong>Learning</strong>
-          <small>AGENT</small>
+          <strong>LearnFlow</strong>
+          <small>LEARNING WORKSPACE</small>
         </span>
       </RouterLink>
       <button class="icon-button sidebar-close" aria-label="关闭菜单" @click="$emit('close')">
@@ -99,7 +99,7 @@ function signOut() {
     </div>
 
     <div class="sidebar-footer">
-      <span class="avatar">{{ currentUser?.username?.slice(0, 2).toUpperCase() || 'LA' }}</span>
+      <span class="avatar">{{ currentUser?.username?.slice(0, 2).toUpperCase() || 'LF' }}</span>
       <span v-if="!collapsed">
         <strong>{{ currentUser?.username || '学习者' }}</strong>
         <small>专注成长的每一天</small>

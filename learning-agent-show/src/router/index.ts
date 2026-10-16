@@ -129,7 +129,7 @@ watch(() => currentUser.value?.token, () => {
 router.afterEach((to, _from, failure) => {
   // 被登录跳转取消的旧导航也会走到这里，不能让它再启动一次跳转。
   if (failure) return
-  document.title = `${String(to.meta.title ?? '工作台')} · Learning Agent`
+  document.title = `${String(to.meta.title ?? '工作台')} · LearnFlow`
   redirectWithoutToken()
 })
 
